@@ -1,37 +1,38 @@
 # Ensemble
 
-Ensemble is a standalone, REST-first platform that exposes reusable intelligence capabilities to applications and AI clients.
+Ensemble is a standalone, REST-first platform for reusable intelligence capabilities. It provides shared memory, knowledge, retrieval, and related capabilities to applications and AI clients.
 
-It does not require Claude, Codex, Cursor, MCP, or any other AI client to run. Those systems are optional consumers.
+Ensemble is the product and implementation boundary. It is not a Claude Code extension and does not depend on Claude, Codex, Cursor, Crush, MCP, or any other client to run.
 
-## Architectural direction
+## Architecture
 
 - One application and one REST server initially, with multiple versioned endpoint groups.
-- REST is the canonical contract for both external consumers and service-to-service communication.
-- Capabilities are independently addressable through REST contracts, even when initially deployed together.
-- Service implementations can be composed and decorated while preserving their REST contracts.
-- Providers are pluggable and may be multiple independent servers (for example, multiple embedding providers).
-- RAG is a platform capability. Retrieval is independently usable; generation is optional and provider-backed.
-- MCP is an optional adapter over Ensemble capabilities. It does not contain duplicate business logic.
-- The initial storage foundation reuses the active POC data: ChromaDB and SQLite. PostgreSQL is not part of this design.
-- The initial deployment stays deliberately simple. Service discovery, federation, service meshes, brokers, and distributed coordination are deferred until needed.
+- REST is the canonical contract for external consumers and internal service-to-service communication.
+- Capabilities are independently addressable through REST contracts, even when co-located in one deployment.
+- Implementations are composed and decorated behind stable contracts.
+- Providers are pluggable. Embedding and reranking implementations can be selected independently of the API contract.
+- Retrieval is independently usable; generation is optional and provider-backed.
+- MCP is an optional adapter over REST capabilities. It contains no duplicate business logic.
+- Storage technology and migration mechanics are implementation decisions, not public API contracts.
 
-## Consumers
+See [Architecture and decisions](docs/architecture.md) and [REST contract conventions](docs/rest-contracts.md).
 
-Claude, Codex, Cursor, Crush, traditional applications, and other clients are consumers of Ensemble, not runtime dependencies.
+## Scope
 
-ensemble-claude is a Claude-specific integration built on Ensemble.
+This repository contains the Ensemble platform only.
+
+Client-specific integrations belong in separate consumer repositories (for example, ensemble-claude, ensemble-codex, ensemble-cursor, and ensemble-crush). The broader FlossWare ecosystem is not part of this repository's scope.
+
+The historical claude-ensemble and poc-claude-ensemble repositories are reference material for capability discovery, behavior, and contract compatibility. They are not runtime dependencies or the target implementation.
 
 ## Initial capability areas
 
-The existing POC and related work provide candidate capabilities to consolidate into Ensemble, including memory, graph, knowledge, retrieval, embeddings, reranking, chunking, tokenization, ingestion, indexing, and ranking. Their contracts and implementations will be assessed and consolidated; this list is not a claim that all are already implemented in this repository.
+Capabilities to assess and consolidate include memory, knowledge and document management, ingestion, extraction, chunking, tokenization, embeddings, lexical and vector retrieval, graph relationships, ranking, reranking, and source tracking.
 
-Messaging is explicitly out of the initial scope.
-
-## Documentation
-
-- [Architecture and decisions](docs/architecture.md)
+This list describes the intended capability surface, not a claim that these capabilities are already implemented.
 
 ## Status
 
-Architecture-first foundation. Existing POC ingestion is active; preserve it and its data while storage ownership and migration are assessed. Do not interrupt ingestion or create a parallel storage system as part of the initial architecture work.
+Architecture and contract foundation. Implementation follows after the initial contracts and capability migration map are established.
+
+Existing POC services and data must remain undisturbed during this work. Ensemble must not couple itself to POC process internals, database files, or persistence directories. Any required data migration will use an explicitly designed, supported interface or export/import process.
