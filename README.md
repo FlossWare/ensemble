@@ -13,15 +13,15 @@ Ensemble is the product and implementation boundary. It is not a Claude Code ext
 - Providers are pluggable. Embedding and reranking implementations can be selected independently of the API contract.
 - Retrieval is independently usable; generation is optional and provider-backed.
 - MCP is an optional adapter over REST capabilities. It contains no duplicate business logic.
-- Storage technology and migration mechanics are implementation decisions, not public API contracts.
+- Ensemble uses SQLite for its own persistence. Alternative persistence implementations and shared infrastructure belong to FlossWare proper.
 
-See [Architecture and decisions](docs/architecture.md), [REST contract conventions](docs/rest-contracts.md), and [current implementation status](docs/implementation-status.md).
+See [Architecture and decisions](docs/architecture.md), [REST contract conventions](docs/rest-contracts.md), [POC capability parity](docs/poc-parity.md), and [current implementation status](docs/implementation-status.md).
 
 ## Current implementation
 
-The Python application provides health/readiness, durable document ingestion, chunking, optional embeddings, lexical/vector retrieval, and reciprocal-rank fusion through one FastAPI application.
+The Python application provides health/readiness, durable document ingestion, deterministic character-window chunking, optional embeddings, lexical/vector retrieval, and reciprocal-rank fusion through one FastAPI application.
 
-SQLite is the default local database. PostgreSQL is supported for a shared deployment. The storage adapter is private to the implementation; REST contracts expose neither database choice nor schema. Database schema changes are managed with Alembic migrations.
+SQLite is the only persistence implementation in this repository. The storage adapter is private to the implementation; REST contracts expose neither database choice nor schema. Database schema changes are managed with Alembic migrations.
 
 ## Run locally
 
@@ -35,11 +35,11 @@ alembic upgrade head
 uvicorn ensemble.api:app --host 127.0.0.1 --port 8090
 ```
 
-The default database is .ensemble/ensemble.db. Override it with ENSEMBLE_DATABASE_URL, for example:
+The default database is .ensemble/ensemble.db. Override its SQLite URL with ENSEMBLE_DATABASE_URL, for example:
 
 ```bash
-ENSEMBLE_DATABASE_URL='postgresql+asyncpg://ensemble:secret@localhost/ensemble' alembic upgrade head
-ENSEMBLE_DATABASE_URL='postgresql+asyncpg://ensemble:secret@localhost/ensemble' uvicorn ensemble.api:app --host 127.0.0.1 --port 8090
+ENSEMBLE_DATABASE_URL='sqlite+aiosqlite:////var/lib/ensemble/ensemble.db' alembic upgrade head
+ENSEMBLE_DATABASE_URL='sqlite+aiosqlite:////var/lib/ensemble/ensemble.db' uvicorn ensemble.api:app --host 127.0.0.1 --port 8090
 ```
 
 The API refuses to start against an unmigrated or incomplete database. Apply migrations as a deployment step before starting the application.
