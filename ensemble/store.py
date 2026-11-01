@@ -16,6 +16,31 @@ from sqlalchemy.engine import make_url
 from .models import Chunk, Document
 
 
+metadata = MetaData()
+documents = Table(
+    "ensemble_documents",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("source_id", String(1024), nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("title", String(2048), nullable=False),
+    Column("content", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("is_current", Boolean, nullable=False, default=True),
+    UniqueConstraint("source_id", "revision", name="uq_ensemble_document_source_revision"),
+)
+chunks = Table(
+    "ensemble_chunks",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("document_id", String(36), ForeignKey("ensemble_documents.id", ondelete="CASCADE"), nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("embedding", JSON, nullable=False),
+    UniqueConstraint("document_id", "ordinal", name="uq_ensemble_chunk_document_ordinal"),
+)
+
+
 @dataclass(frozen=True)
 class IndexedChunk:
     document: Document
@@ -84,29 +109,9 @@ class SqlDocumentStore:
             self.database_url,
             pool_pre_ping=True,
         )
-        self.metadata = MetaData()
-        self.documents = Table(
-            "ensemble_documents",
-            self.metadata,
-            Column("id", String(36), primary_key=True),
-            Column("source_id", String(1024), nullable=False),
-            Column("revision", Integer, nullable=False),
-            Column("title", String(2048), nullable=False),
-            Column("content", Text, nullable=False),
-            Column("created_at", DateTime(timezone=True), nullable=False),
-            Column("is_current", Boolean, nullable=False, default=True),
-            UniqueConstraint("source_id", "revision", name="uq_ensemble_document_source_revision"),
-        )
-        self.chunks = Table(
-            "ensemble_chunks",
-            self.metadata,
-            Column("id", String(36), primary_key=True),
-            Column("document_id", String(36), ForeignKey("ensemble_documents.id", ondelete="CASCADE"), nullable=False),
-            Column("ordinal", Integer, nullable=False),
-            Column("content", Text, nullable=False),
-            Column("embedding", JSON, nullable=False),
-            UniqueConstraint("document_id", "ordinal", name="uq_ensemble_chunk_document_ordinal"),
-        )
+        self.metadata = metadata
+        self.documents = documents
+        self.chunks = chunks
 
     async def initialize(self) -> None:
         async with self.engine.begin() as connection:
