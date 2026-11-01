@@ -14,6 +14,8 @@ from .services import DocumentService, SearchService
 from .store import DocumentStore, InMemoryDocumentStore, SqlDocumentStore
 from .vector_store import SqliteVectorStore, VectorStore
 from .vector_memory import InMemoryVectorStore
+from .index_store import IndexStore, SqliteIndexStore
+from .index_memory import InMemoryIndexStore
 from .tokenization import PROFILES as TOKENIZATION_PROFILES, TokenizationError, describe_profiles, tokenize
 from .extraction import extract
 from .intent import RULES as INTENT_RULES, classify
@@ -43,6 +45,7 @@ def create_app(
     reranker: Reranker | None = None,
     embedding_provider: EmbeddingProvider | None = None,
     vector_store: VectorStore | None = None,
+    index_store: IndexStore | None = None,
 ) -> FastAPI:
     document_store = store or SqlDocumentStore(database_url)
     embeddings = embedding_provider or configured_embedding_provider()
@@ -51,14 +54,20 @@ def create_app(
         InMemoryVectorStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteVectorStore(database_url)
     )
+    active_index_store = index_store or (
+        InMemoryIndexStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteIndexStore(database_url)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         try:
             await document_store.initialize()
             await active_vector_store.initialize()
+            await active_index_store.initialize()
             yield
         finally:
+            await active_index_store.close()
             await active_vector_store.close()
             await document_store.close()
 
@@ -75,6 +84,7 @@ def create_app(
     app.state.embedding_provider = embeddings
     app.state.reranker = active_reranker
     app.state.vector_store = active_vector_store
+    app.state.index_store = active_index_store
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -103,7 +113,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "tokenization", "extraction", "intent", "ranking", "reranking"],
+            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "tokenization", "extraction", "intent", "ranking", "reranking"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
@@ -145,6 +155,59 @@ def create_app(
             "dimensions": dimensions,
             "embeddings": vectors,
         }
+
+    @app.get("/api/v1/index/health", tags=["index"])
+    async def index_health():
+        return {"ok": True, "service": "index"}
+
+    @app.get("/api/v1/index/ready", tags=["index"])
+    async def index_ready():
+        try:
+            await active_index_store.list_sources(1)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="index persistence unavailable") from exc
+        return {"ok": True, "ready": True}
+
+    @app.post("/api/v1/index/revisions", tags=["index"])
+    async def index_revision(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        sequence = payload.get("revision_sequence")
+        revision_id = payload.get("revision_id")
+        profiles = payload.get("profiles")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
+        if not isinstance(revision_id, str) or not revision_id or len(revision_id) > 512:
+            raise HTTPException(status_code=400, detail="revision_id must be a non-empty string of at most 512 characters")
+        if not isinstance(profiles, dict) or not profiles:
+            raise HTTPException(status_code=400, detail="profiles must be a non-empty object")
+        result = await active_index_store.record_revision(source_id, sequence, revision_id, profiles)
+        return {"ok": True, **result}
+
+    @app.post("/api/v1/index/tombstones", tags=["index"])
+    async def index_tombstone(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        sequence = payload.get("revision_sequence")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
+        result = await active_index_store.record_tombstone(source_id, sequence)
+        return {"ok": True, **result}
+
+    @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
+    async def index_source(source_id: str):
+        source = await active_index_store.get_source(source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="unknown source")
+        return {"ok": True, "source": source}
+
+    @app.get("/api/v1/index/manifest", tags=["index"])
+    async def index_manifest(limit: int = 100):
+        if not 1 <= limit <= 500:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+        return {"ok": True, "sources": await active_index_store.list_sources(limit)}
 
     @app.get("/api/v1/vector/health", tags=["vector"])
     async def vector_health():
