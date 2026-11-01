@@ -938,7 +938,7 @@ def create_app(
     @app.post("/api/v1/memory/chunk", tags=["memory"])
     async def memory_chunk(payload: dict[str, Any]):
         try:
-            result = await active_memory_store.chunk(payload.get("name"), payload.get("size", 500))
+            result = await active_memory_store.chunk(payload.get("name"), payload.get("size", 2000))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "chunks": result}
