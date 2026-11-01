@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chunk as chunk_text, describe_profiles as describe_chunk_profiles
 from .embeddings import EmbeddingProvider, MAX_BODY_BYTES as MAX_EMBED_BODY_BYTES, configured_embedding_provider, validate_embedding_request
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
@@ -23,6 +23,7 @@ from .extraction import extract
 from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
 from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_reranker, validate_rerank_request
+from .scraping import ScrapeError, preview_uri
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -550,6 +551,34 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "results": results}
+
+    @app.get("/control", response_class=HTMLResponse, include_in_schema=False)
+    async def control_panel():
+        from pathlib import Path
+        return HTMLResponse(Path(__file__).with_name("control_panel.html").read_text(encoding="utf-8"))
+
+    @app.post("/api/v1/scrape/preview", tags=["scraping"])
+    async def scrape_preview(payload: dict[str, Any]):
+        try:
+            return await preview_uri(payload.get("uri"))
+        except ScrapeError as exc:
+            raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+
+    @app.post("/api/v1/scrape/ingest", status_code=201, tags=["scraping"])
+    async def scrape_and_ingest(payload: dict[str, Any]):
+        try:
+            preview = await preview_uri(payload.get("uri"))
+            document = DocumentIn(source_id=preview["final_uri"], revision=payload.get("revision", 1), title=preview["title"], content=preview["text"])
+            result = await documents.ingest(document)
+            return {"ok": True, "source": preview, "document": result}
+        except ScrapeError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="scrape ingestion failed") from exc
+
+    @app.post("/api/v1/documents", response_model=DocumentOut, status_code=201, tags=["documents"])
 
     @app.post("/api/v1/documents", response_model=DocumentOut, status_code=201, tags=["documents"])
     async def ingest_document(request: DocumentIn):
