@@ -649,7 +649,7 @@ def create_app(
             "crossover_rate": payload.get("crossover_rate", 0.8),
             "mutation_rate": payload.get("mutation_rate", 0.1),
             "tournament_k": payload.get("tournament_k", 3),
-            "seed": payload.get("seed", secrets.randbits(32)),
+            "seed": payload.get("seed") if payload.get("seed") is not None else secrets.randbits(32),
         }
         try:
             GAConfig(**config)
