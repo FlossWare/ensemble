@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from sqlalchemy import (
-    Column, DateTime, ForeignKey, Index, Integer, JSON, MetaData, String, Table,
-    Text, UniqueConstraint, delete, insert, select, update,
+    Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON, MetaData, String, Table,
+    Text, UniqueConstraint, delete, func, insert, select, update,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -52,7 +52,7 @@ memory_sources = Table(
     Column("scope", String(4096), nullable=False),
     Column("sha256", String(64), nullable=False),
     Column("metadata", JSON, nullable=False),
-    Column("stale", Integer, nullable=False, default=0),
+    Column("stale", Boolean, nullable=False, default=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 Index("ix_ensemble_memory_sources_scope_stale", memory_sources.c.scope, memory_sources.c.stale)
@@ -322,7 +322,7 @@ class SqliteMemoryStore:
     async def knowledge_status(self) -> dict[str, Any]:
         async with self.engine.connect() as connection:
             count = await connection.scalar(
-                select(entries.c.id.count()).select_from(memory_sources.join(
+                select(func.count()).select_from(memory_sources.join(
                     memories, memory_sources.c.document_name == memories.c.name
                 )).where(memory_sources.c.source == "claude-code", memory_sources.c.stale.is_(False))
             )
