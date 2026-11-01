@@ -121,6 +121,7 @@ def create_app(
             await active_graph_store.initialize()
             await active_memory_store.initialize()
             await active_ga_store.initialize()
+            await active_ga_store.recover_interrupted_runs()
             await active_thompson_store.initialize()
             await active_learning_store.initialize()
             yield
