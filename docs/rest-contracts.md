@@ -1,6 +1,6 @@
 # REST Contract Conventions
 
-**Status:** Initial conventions for Ensemble API design. Endpoint schemas will be specified in OpenAPI as each capability is designed.
+**Status:** Initial conventions. The running FastAPI application currently publishes its OpenAPI schema at `/openapi.json`; the schemas will be promoted to a reviewed, version-controlled OpenAPI artifact as the API stabilizes.
 
 ## 1. Base path and media type
 
@@ -47,25 +47,33 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 - Make long-running work explicit rather than holding requests open indefinitely.
 - Expose health/readiness separately from business operations.
 
-## 7. Initial endpoint groups
+## 7. Initial implemented endpoints
 
-These are candidate endpoint groups for the first OpenAPI specification, not a claim that they are implemented:
+| Method | Path | Purpose |
+|---|---|---|
+| GET | /health | Liveness |
+| GET | /ready | Current application readiness |
+| POST | /api/v1/documents | Register a document, chunk it, optionally embed it, and store it |
+| POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |
+
+The current document and search implementation is an initial vertical slice, not the final complete capability surface. FastAPI publishes the current machine-readable schema at `/openapi.json`.
+
+## 8. Planned endpoint groups
+
+These are candidate groups, not a claim that they are implemented:
 
 | Group | Initial purpose |
 |---|---|
-| /health | Liveness and readiness |
-| /capabilities | Discover enabled Ensemble capabilities and contract versions |
-| /documents | Register, inspect, and manage source documents |
+| /capabilities | Discover enabled capabilities and contract versions |
 | /ingestion | Submit and inspect ingestion work |
 | /embeddings | Generate embeddings through configured providers |
-| /search | Retrieve authorized candidates across configured retrieval channels |
 | /rerank | Rerank an explicitly supplied authorized candidate set |
 | /memory | Store and recall scoped memories |
 | /graph | Inspect and traverse authorized relationships |
 
-Endpoint schemas and ownership boundaries must be specified before implementation. Do not create every endpoint merely because it appears in this candidate list.
+Do not create every endpoint merely because it appears in this candidate list.
 
-## 8. Search and reranking security
+## 9. Search and reranking security
 
 - Authorized scope is resolved server-side.
 - Every retrieval channel enforces that scope.
@@ -75,7 +83,7 @@ Endpoint schemas and ownership boundaries must be specified before implementatio
 - Results are revalidated before being returned.
 - Cache keys and cached values are scoped so one caller cannot retrieve another partition's results.
 
-## 9. Decorator compatibility
+## 10. Decorator compatibility
 
 Decorators wrap capability implementations or REST clients while preserving the same request/response contract. Cross-cutting behavior must not require consumers to call a different API.
 
