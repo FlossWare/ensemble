@@ -86,9 +86,54 @@ The UI is served by the same Ensemble application and uses the same REST contrac
 - SQLite only in this repository. Shared infrastructure and alternate persistence implementations are owned by FlossWare proper.
 - No mandatory generation model or MCP dependency.
 
+## Source and regression-test inventory
+
+The POC source and matching service test files have now been located and inspected at the contract/test-name level. The listed test files contain 271 top-level test cases in total (counted from test method declarations). This is an inventory count, not evidence that the POC suite was executed during this task.
+
+| Capability | POC source | POC tests | Test cases identified |
+|---|---|---|---:|
+| Embedding | services/embeddings/embedding_service.py; services/embeddings/embed_lib.py | services/embeddings/test_embedding_service.py | 24 |
+| Vector | services/embeddings/vector_service.py; services/embeddings/vector_store.py | services/embeddings/test_vector_service.py | 26 |
+| Lexical | services/embeddings/lexical_service.py | services/embeddings/test_lexical_service.py | 45 |
+| Hybrid | services/embeddings/hybrid_service.py | services/embeddings/test_hybrid_service.py | 49 |
+| Reranking | services/embeddings/reranking_service.py | services/embeddings/test_reranking_service.py | 9 |
+| Chunking | services/chunking/chunking_service.py | services/chunking/test_chunking_service.py | 14 |
+| Tokenization | services/tokenization/tokenization_service.py | services/tokenization/test_tokenization_service.py | 13 |
+| Index | services/index/index_service.py | services/index/test_index_service.py | 15 |
+| Extraction | services/extraction/extraction_service.py | services/extraction/test_extraction_service.py | 7 |
+| Intent | services/intent/intent_service.py | services/intent/test_intent_service.py | 6 |
+| Ranking | services/ranking/ranking_service.py | services/ranking/test_ranking_service.py | 8 |
+| Knowledge | services/knowledge/knowledge_service.py | services/knowledge/test_knowledge_service.py | 7 |
+| Memory | services/memory/memory_service.py | services/memory/test_memory_service.py | 48 |
+
+Additional shared implementation dependencies identified:
+- services/execution/context.py: versioned execution-context/result contracts and bounded serialization.
+- services/shared/runtime_config.py: shared runtime, memory, log, learning and socket path configuration.
+- services/embeddings/turn_outcomes.py: transcript outcome ledger and Thompson REST integration helper. The POC README explicitly says transcript Thompson outcome recording is not yet built.
+- services/embeddings/migrate_lexical_tokenization.py: guarded, resumable FTS5 migration to tokenization-service analysis.
+- services/embeddings/build_knowledge_chunks.py: resumable REST-driven knowledge ingest, chunk, embed and vector-write pipeline.
+- services/embeddings/vector_store.py: persistent ChromaDB collection configuration and model/dimension compatibility checks.
+
+Important behavior surfaced by the tests and source:
+- Embedding: model/runtime provenance; CPU/GPU fail-closed selection; shape, normalization and semantic similarity; strict request validation; serialized model access.
+- Vector: exact cosine/dot-product ordering; persistent reload; deterministic upsert replacement; model/collection compatibility; dimensions and finite-value validation; bounded batches; loopback-only binding.
+- Lexical: FTS5/BM25, Porter stemming, analyzed term persistence, incremental idempotent ingest, deduplication, source metadata, and fail-closed dependency on tokenization.
+- Hybrid: partial-success retrieval and degraded dependency reporting; RRF; transcript JSONL parsing with offset-based resume; path and symlink containment; prompt/event deduplication; ingestion progress; knowledge provenance; bounded caching and no caching of partial/failing results.
+- Reranking: aligned scores, stable results, real cross-encoder relevance, bounded/validated requests, serialized model access and readiness failure when the model is absent.
+- Chunking: stable IDs, profile-version isolation, exact Unicode offsets, overlap coverage, Markdown heading provenance and message clipping.
+- Tokenization: Unicode case folding, minimum token length, compound identifier whole/component terms, UUID handling and exact offsets.
+- Index: monotonic revision high-water mark, duplicate/conflict/superseded decisions, profile-version conflict detection, tombstone permanence and persistence across restart.
+- Extraction: exact identifier spelling and offsets, confidence/exactness distinction, uncertain name candidates and non-overlapping spans.
+- Intent: explicit labels, matched-rule evidence, zero-confidence no-evidence result and deterministic bounded confidence.
+- Ranking: RRF contributions, order independence, duplicate suppression, stable key tie-breaking and input/output bounds.
+- Knowledge: Index-gated revision publication, provenance, current-record lookup, tombstones, and explicit failure when Index is unavailable.
+- Memory: this is substantially more than key/value memory. The service includes append-once durable event records, stable event IDs and payload digests, fsync/retry behavior, semantic search/index warming, incremental file change detection, exact-identifier prioritization, execution-aware prior-context retrieval, schema-versioned execution context, readiness independent of liveness, bounded warmup/retry behavior, private runtime/socket permissions, and path/name validation. Preserve these behaviors or document deliberate replacements.
+
+The POC README also identifies worker/arbiter quality monitoring as not yet built. It is not a parity obligation for an unimplemented POC service. Keep it as a separate future consideration rather than silently inventing scope.
+
 ## Work status
 
-This is the initial catalog-level inventory, not a completed source audit. The README establishes the 13-service inventory and several contract/behavior details. Individual implementation files have been located for the core services, but their full tests, edge cases, helper modules, dependency graph, and runtime interactions still require systematic inspection.
+The catalog, all 13 primary service source files, and all 13 corresponding test files have been located. The test declarations and major behaviors have been inventoried above. A deeper line-by-line audit of helper modules, cross-service runtime interactions, exact request/response schemas, persistence edge cases, and security behavior remains in progress.
 
 Before implementing each capability, complete a source audit recording:
 1. POC source files and tests.
