@@ -18,7 +18,9 @@ if environment_url:
     config.set_main_option("sqlalchemy.url", environment_url.replace("%", "%%"))
 
 database_url = make_url(config.get_main_option("sqlalchemy.url"))
-if database_url.get_backend_name() == "sqlite" and database_url.database not in (None, "", ":memory:"):
+if database_url.get_backend_name() != "sqlite":
+    raise RuntimeError("Ensemble migrations support SQLite only; alternative persistence implementations belong to FlossWare proper.")
+if database_url.database not in (None, "", ":memory:"):
     Path(database_url.database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
 
 if config.config_file_name is not None:
