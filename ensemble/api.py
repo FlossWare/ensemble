@@ -58,6 +58,7 @@ def create_app(
     vector_store: VectorStore | None = None,
     index_store: IndexStore | None = None,
     knowledge_store: KnowledgeStore | None = None,
+    graph_store: GraphStore | None = None,
 ) -> FastAPI:
     document_store = store or SqlDocumentStore(database_url)
     embeddings = embedding_provider or configured_embedding_provider()
@@ -74,6 +75,10 @@ def create_app(
         InMemoryKnowledgeStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteKnowledgeStore(database_url)
     )
+    active_graph_store = graph_store or (
+        InMemoryGraphStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteGraphStore(database_url)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -82,8 +87,10 @@ def create_app(
             await active_vector_store.initialize()
             await active_index_store.initialize()
             await active_knowledge_store.initialize()
+            await active_graph_store.initialize()
             yield
         finally:
+            await active_graph_store.close()
             await active_knowledge_store.close()
             await active_index_store.close()
             await active_vector_store.close()
@@ -103,7 +110,8 @@ def create_app(
     app.state.reranker = active_reranker
     app.state.vector_store = active_vector_store
     app.state.index_store = active_index_store
-    app.state.knowledge_store = active_knowledge_store\n    app.state.graph_store = active_graph_store
+    app.state.knowledge_store = active_knowledge_store
+    app.state.graph_store = active_graph_store\n    app.state.graph_store = active_graph_store
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
