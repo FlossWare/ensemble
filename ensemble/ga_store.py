@@ -44,6 +44,7 @@ class GAStore(Protocol):
     async def get_run(self, run_id: str) -> dict[str, Any] | None: ...
     async def list_runs(self, limit: int = 50) -> list[dict[str, Any]]: ...
     async def update_run(self, run_id: str, **values: Any) -> None: ...
+    async def recover_interrupted_runs(self) -> int: ...
     async def promote(self, run_id: str, system: str, candidate: dict[str, Any], reason: str, approved_by: str) -> dict[str, Any]: ...
 
 
@@ -63,6 +64,21 @@ class SqliteGAStore:
 
     async def close(self) -> None:
         await self.engine.dispose()
+
+    async def recover_interrupted_runs(self) -> int:
+        """Mark nonterminal runs interrupted by a previous process lifetime."""
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            result = await connection.execute(
+                update(ga_runs)
+                .where(ga_runs.c.status.in_(("pending", "running")))
+                .values(
+                    status="failed",
+                    error="GA run interrupted by Ensemble process restart; rerun explicitly",
+                    completed_at=now,
+                )
+            )
+        return int(result.rowcount or 0)
 
     async def create_run(self, config: dict[str, Any]) -> dict[str, Any]:
         run_id, now = str(uuid4()), datetime.now(timezone.utc)
@@ -118,6 +134,19 @@ class InMemoryGAStore:
 
     async def close(self) -> None:
         return None
+
+    async def recover_interrupted_runs(self) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        interrupted = 0
+        for row in self.runs.values():
+            if row["status"] in {"pending", "running"}:
+                row.update({
+                    "status": "failed",
+                    "error": "GA run interrupted by Ensemble process restart; rerun explicitly",
+                    "completed_at": now,
+                })
+                interrupted += 1
+        return interrupted
 
     async def create_run(self, config: dict[str, Any]) -> dict[str, Any]:
         run_id, now = str(uuid4()), datetime.now(timezone.utc).isoformat()
