@@ -86,7 +86,7 @@ def test_reingest_replaces_chunk_content_for_same_revision(tmp_path):
         second = client.post("/api/v1/documents", json=replacement).json()
         assert second["id"] == first["id"]
 
-        old_hits = client.post("/api/v1/search", json={"query": "obsolete terminology"}).json()
+        old_hits = client.post("/api/v1/search", json={"query": "obsolete"}).json()
         new_hits = client.post("/api/v1/search", json={"query": "current terminology"}).json()
         assert old_hits == []
         assert len(new_hits) == 1
