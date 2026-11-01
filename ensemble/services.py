@@ -21,7 +21,7 @@ class DocumentService:
         texts = self.chunker.split(request.content)
         if not texts:
             raise ValueError("document content contains no usable text")
-        vectors = await self.embeddings.embed(texts) if self.embeddings.available else [[] for _ in texts]
+        vectors = await self.embeddings.embed(texts, mode="document") if self.embeddings.available else [[] for _ in texts]
         if len(vectors) != len(texts):
             raise RuntimeError("embedding provider returned an unexpected vector count")
         chunks = [
@@ -62,7 +62,7 @@ class SearchService:
         }
         vector_scores: dict = {}
         if self.embeddings.available:
-            query_vector = (await self.embeddings.embed([query]))[0]
+            query_vector = (await self.embeddings.embed([query], mode="query"))[0]
             vector_scores = {
                 item.chunk.id: score
                 for item in indexed
