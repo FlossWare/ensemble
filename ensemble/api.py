@@ -638,6 +638,12 @@ def create_app(
                 event_id=task_id, model=outcome["model"],
                 success=outcome["rating"] >= 3, cost=outcome["cost"], tokens=outcome["tokens"],
             )
+            thompson_state = await active_thompson_store.get_state()
+            await active_memory_store.append(
+                "thompson-state",
+                {"event_type": "thompson.state", "source": "learning-service", "task_id": task_id, "state": thompson_state},
+                event_id="thompson-state-" + hashlib.sha256(task_id.encode("utf-8")).hexdigest(),
+            )
             await active_learning_store.complete_outcome(task_id, True, True)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -648,7 +654,8 @@ def create_app(
             ) from exc
         return {
             "ok": True, "memory": memory_result["status"] in {"stored", "duplicate"},
-            "thompson": True, "checkpoint_advanced": True, "request_id": request_id,
+            "thompson": True, "thompson_state_memory": True,
+            "checkpoint_advanced": True, "request_id": request_id,
         }
 
     async def record_learning_artifact(payload: dict[str, Any]):
