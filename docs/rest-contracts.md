@@ -63,6 +63,12 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/extraction/extract | Exact identifiers and uncertain entity candidates |
 | GET | /api/v1/intent/health, /ready | Intent capability status and labels |
 | POST | /api/v1/intent/classify | Evidence-backed intent classification |
+| GET | /api/v1/vector/health, /collections | Vector storage status and collection inventory |
+| POST | /api/v1/vector/collections/{name}/existing | Find existing record IDs |
+| POST | /api/v1/vector/collections/{name}/upsert | Idempotently insert or replace vectors and metadata |
+| POST | /api/v1/vector/collections/{name}/metadata | Update metadata for existing vector records |
+| POST | /api/v1/vector/collections/{name}/delete-superseded | Delete older content hashes for a source URL |
+| POST | /api/v1/vector/collections/{name}/query | Exact dot-product nearest-vector search |
 | GET | /api/v1/ranking/health, /ready | Ranking capability status |
 | GET | /api/v1/reranking/health, /ready | Local cross-encoder model readiness and provenance |
 | POST | /api/v1/reranking/rerank | Score a bounded candidate list with the configured cross-encoder |
