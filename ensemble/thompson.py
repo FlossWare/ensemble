@@ -28,10 +28,19 @@ def select_model(
         return "haiku"
     candidates = {
         name: stats for name, stats in sorted(models.items())
-        if stats.get("avg_cost", 0.0) <= max_cost or stats.get("calls", 0) == 0
+        if (
+            (stats.get("avg_cost", stats.get("total_cost", 0.0) / stats.get("calls", 1)) <= max_cost)
+            or stats.get("calls", 0) == 0
+        )
     }
     if not candidates:
-        name = min(models, key=lambda item: (models[item].get("avg_cost", 0.0), item))
+        name = min(
+            models,
+            key=lambda item: (
+                models[item].get("avg_cost", models[item].get("total_cost", 0.0) / max(1, models[item].get("calls", 0))),
+                item,
+            ),
+        )
         candidates = {name: models[name]}
     sampler = rng or random.Random()
     selected, best = None, -1.0
