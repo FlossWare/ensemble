@@ -42,5 +42,19 @@
 <p>Approval is recorded for export only. Ensemble does not apply candidate parameters to live consumers.</p>
 </div>
 </section>
+<section id="thompson-panel">
+<h2>Thompson Router</h2>
+<p>Model-level Beta posteriors and cost-aware selection. Task-specific capability filtering is not implemented in the POC contract yet.</p>
+<form id="thompson-select-form">
+<label for="thompson-task">Task type</label>
+<input id="thompson-task" type="text" value="unknown">
+<label for="thompson-max-cost">Maximum cost per call (optional)</label>
+<input id="thompson-max-cost" type="number" min="0" step="any" placeholder="No limit">
+<button type="submit">Select model</button>
+</form>
+<p id="thompson-selection">No selection requested.</p>
+<button id="thompson-refresh" type="button">Refresh model statistics</button>
+<div id="thompson-state"></div>
+</section>
 <script src="/control.js"></script>
 </body></html>
