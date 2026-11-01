@@ -47,3 +47,39 @@ def test_capability_rest_contracts_are_exposed_and_used(tmp_path):
         )
         assert indexed.status_code == 200
         assert indexed.json()[0]["document"]["source_id"] == "rest-boundary"
+
+
+
+def test_vector_search_capability_returns_nearest_candidates(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'vector.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    with TestClient(create_app(database_url=database_url)) as client:
+        first = client.post("/api/v1/capabilities/index/documents", json={
+            "source_id": "vector-first",
+            "revision": 1,
+            "title": "First vector",
+            "content": "first vector document",
+            "chunks": ["first vector document"],
+            "embeddings": [[1.0, 0.0]],
+        })
+        second = client.post("/api/v1/capabilities/index/documents", json={
+            "source_id": "vector-second",
+            "revision": 1,
+            "title": "Second vector",
+            "content": "second vector document",
+            "chunks": ["second vector document"],
+            "embeddings": [[0.0, 1.0]],
+        })
+        assert first.status_code == 201
+        assert second.status_code == 201
+
+        nearest = client.post("/api/v1/capabilities/index/vector-search", json={
+            "embedding": [0.9, 0.1],
+            "limit": 1,
+        })
+        assert nearest.status_code == 200
+        assert len(nearest.json()) == 1
+        assert nearest.json()[0]["document"]["source_id"] == "vector-first"

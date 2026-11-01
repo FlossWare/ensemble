@@ -147,11 +147,22 @@ class CapabilityClient:
             },
         )
 
+    async def vector_candidates(self, embedding: list[float], limit: int) -> list[IndexedChunk]:
+        rows = await self._request(
+            "POST", "/api/v1/capabilities/index/vector-search",
+            json={"embedding": embedding, "limit": limit},
+        )
+        return self._decode_indexed(rows)
+
     async def indexed_chunks(self, query: str, limit: int) -> list[IndexedChunk]:
         rows = await self._request(
             "POST", "/api/v1/capabilities/index/search-candidates",
             json={"query": query, "limit": limit},
         )
+        return self._decode_indexed(rows)
+
+    @staticmethod
+    def _decode_indexed(rows: list[dict]) -> list[IndexedChunk]:
         result: list[IndexedChunk] = []
         for row in rows:
             raw_document, raw_chunk = row["document"], row["chunk"]

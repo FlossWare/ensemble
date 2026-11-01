@@ -32,7 +32,7 @@ Ingestion is idempotent for a source identifier and revision. Re-ingesting that 
 
 ## Planned capabilities
 
-Memory, graph, reranking, tokenization, extraction, and ingestion jobs remain planned. Specify and test each contract before implementing it. Index candidate retrieval is bounded (maximum 1,000 candidates) and uses database-side lexical matching. Vector similarity is currently calculated only over that lexical candidate set, so semantic-only matches can be missed. A dedicated vector index and independent vector candidate retrieval remain required before unbounded corpus growth.
+Memory, graph, reranking, tokenization, extraction, and ingestion jobs remain planned. Specify and test each contract before implementing it. Index candidate retrieval is bounded (maximum 1,000 candidates) and uses database-side lexical matching. PostgreSQL uses a pgvector HNSW index for independent vector candidates; SQLite uses an exhaustive local fallback. PostgreSQL migration requires `ENSEMBLE_EMBEDDING_DIMENSIONS` to match the embedding model. Both candidate channels are independently bounded.
 
 ## Security requirements
 

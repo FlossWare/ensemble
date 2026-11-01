@@ -32,7 +32,7 @@ Decorators are not the sole security boundary. Authorization must also be enforc
 
 ## Retrieval
 
-The current search path asks the index capability for a bounded candidate set using database-side lexical matching, then combines lexical ranking, optional cosine similarity over those candidates, and reciprocal-rank fusion. Embeddings are stored as portable JSON and vector scores are computed in application memory. This bounds per-query work but is not semantic vector retrieval across the full corpus and is not a scalable vector index. Reranking, graph expansion, and authorization-aware candidate filtering are not yet implemented. Generation remains optional and provider-backed.
+The current search path asks the index capability for a bounded candidate set using database-side lexical matching, then combines lexical ranking, optional cosine similarity over those candidates, and reciprocal-rank fusion. Embeddings are retained as portable JSON and also written to a native pgvector column on PostgreSQL. PostgreSQL uses an HNSW cosine index for independent vector candidate retrieval; SQLite uses an exhaustive local fallback. Lexical and vector candidates are independently bounded and fused. PostgreSQL deployments must set `ENSEMBLE_EMBEDDING_DIMENSIONS` to match the configured embedding model before applying migrations. Reranking, graph expansion, and authorization-aware candidate filtering are not yet implemented. Generation remains optional and provider-backed.
 
 ## Storage and migration
 

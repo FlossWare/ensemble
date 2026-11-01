@@ -97,12 +97,18 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
     async def search_documents(request: SearchIn):
         try:
             candidate_limit = min(max(request.limit * 20, 100), 1000)
-            indexed = await client.indexed_chunks(request.query, candidate_limit)
-            if not indexed:
-                return []
+            lexical = await client.indexed_chunks(request.query, candidate_limit)
             query_vectors = await client.embed([request.query])
             query_vector = query_vectors[0] if query_vectors else []
-            return search_indexed(indexed, request.query, request.limit, query_vector)
+            vector = (
+                await client.vector_candidates(query_vector, candidate_limit)
+                if query_vector else []
+            )
+            candidates = {item.chunk.id: item for item in lexical}
+            candidates.update({item.chunk.id: item for item in vector})
+            return search_indexed(
+                list(candidates.values()), request.query, request.limit, query_vector
+            )
         except httpx.HTTPStatusError as exc:
             raise HTTPException(status_code=502, detail="search capability request failed") from exc
         except ValueError as exc:

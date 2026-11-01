@@ -8,12 +8,24 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON, MetaData,
-    String, Table, Text, UniqueConstraint, delete, func, insert, inspect, select, text, update,
+    String, Table, Text, UniqueConstraint, TypeDecorator, delete, func, insert,
+    inspect, select, text, update,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
+from pgvector.sqlalchemy import Vector
 
 from .models import Chunk, Document
+
+
+class EmbeddingVector(TypeDecorator):
+    impl = JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(Vector())
+        return dialect.type_descriptor(JSON())
 
 
 metadata = MetaData()
@@ -37,6 +49,7 @@ chunks = Table(
     Column("ordinal", Integer, nullable=False),
     Column("content", Text, nullable=False),
     Column("embedding", JSON, nullable=False),
+    Column("embedding_vector", EmbeddingVector(), nullable=True),
     UniqueConstraint("document_id", "ordinal", name="uq_ensemble_chunk_document_ordinal"),
 )
 Index("ix_ensemble_documents_current_source", documents.c.source_id, documents.c.is_current)
@@ -55,6 +68,7 @@ class DocumentStore(Protocol):
     async def check_ready(self) -> None: ...
     async def save(self, document: Document, chunks: list[Chunk]) -> Document: ...
     async def all_chunks(self, query: str | None = None, limit: int | None = None) -> list[IndexedChunk]: ...
+    async def vector_candidates(self, vector: list[float], limit: int) -> list[IndexedChunk]: ...
 
 
 class InMemoryDocumentStore:
@@ -90,8 +104,8 @@ class InMemoryDocumentStore:
             current = latest.get(document.source_id)
             if current is None or document.revision > current.revision:
                 latest[document.source_id] = document
-        result: list[IndexedChunk] = []
         terms = {term.casefold() for term in (query or "").split() if term}
+        result: list[IndexedChunk] = []
         for document in latest.values():
             for chunk in self._chunks.get(document.id, []):
                 if terms and not any(term in chunk.content.casefold() for term in terms):
@@ -100,9 +114,15 @@ class InMemoryDocumentStore:
         result.sort(key=lambda item: (item.document.source_id, item.chunk.ordinal))
         return result[:limit] if limit is not None else result
 
+    async def vector_candidates(self, vector: list[float], limit: int) -> list[IndexedChunk]:
+        candidates = await self.all_chunks()
+        return sorted(
+            candidates, key=lambda item: _cosine_distance(vector, item.chunk.embedding)
+        )[:limit]
+
 
 class SqlDocumentStore:
-    """Durable SQL store. SQLite is the local default; PostgreSQL is supported."""
+    """Durable SQL store. SQLite is the local default; PostgreSQL uses pgvector."""
 
     def __init__(self, database_url: str | None = None):
         self.database_url = database_url or os.getenv(
@@ -112,11 +132,7 @@ class SqlDocumentStore:
         url = make_url(self.database_url)
         if url.get_backend_name() == "sqlite" and url.database not in (None, "", ":memory:"):
             Path(url.database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
-
-        self.engine: AsyncEngine = create_async_engine(
-            self.database_url,
-            pool_pre_ping=True,
-        )
+        self.engine: AsyncEngine = create_async_engine(self.database_url, pool_pre_ping=True)
         self.metadata = metadata
         self.documents = documents
         self.chunks = chunks
@@ -137,7 +153,7 @@ class SqlDocumentStore:
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0001_initial":
+        if revision != "0002_vector_index":
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )
@@ -159,8 +175,6 @@ class SqlDocumentStore:
             raise RuntimeError(f"Unsupported database backend: {backend}")
 
         async with self.engine.begin() as connection:
-            # The unique source/revision constraint plus ON CONFLICT makes retries
-            # and concurrent submissions converge on one stable document identity.
             statement = dialect_insert(self.documents).values(
                 id=str(document.id),
                 source_id=document.source_id,
@@ -169,9 +183,7 @@ class SqlDocumentStore:
                 content=document.content,
                 created_at=document.created_at,
                 is_current=False,
-            ).on_conflict_do_nothing(
-                index_elements=["source_id", "revision"]
-            )
+            ).on_conflict_do_nothing(index_elements=["source_id", "revision"])
             await connection.execute(statement)
 
             existing = (
@@ -195,7 +207,6 @@ class SqlDocumentStore:
                 .where(self.documents.c.source_id == document.source_id)
                 .values(is_current=False)
             )
-
             latest_revision = await connection.scalar(
                 select(func.max(self.documents.c.revision)).where(
                     self.documents.c.source_id == document.source_id
@@ -209,7 +220,6 @@ class SqlDocumentStore:
                 )
                 .values(is_current=True)
             )
-
             await connection.execute(
                 delete(self.chunks).where(self.chunks.c.document_id == str(document.id))
             )
@@ -221,13 +231,29 @@ class SqlDocumentStore:
                         "ordinal": chunk.ordinal,
                         "content": chunk.content,
                         "embedding": chunk.embedding,
+                        "embedding_vector": chunk.embedding or None,
                     }
                     for chunk in chunks
                 ])
         return document
 
-    async def all_chunks(self, query: str | None = None, limit: int | None = None) -> list[IndexedChunk]:
-        statement = (
+    def _indexed_rows(self, rows) -> list[IndexedChunk]:
+        result: list[IndexedChunk] = []
+        for row in rows:
+            document = Document(
+                row["source_id"], row["revision"], row["title"], row["document_content"]
+            )
+            document.id = UUID(row["document_id"])
+            document.created_at = row["created_at"]
+            chunk = Chunk(
+                document.id, row["ordinal"], row["chunk_content"], row["embedding"]
+            )
+            chunk.id = UUID(row["chunk_id"])
+            result.append(IndexedChunk(document, chunk))
+        return result
+
+    def _chunk_select(self):
+        return (
             select(
                 self.documents.c.id.label("document_id"),
                 self.documents.c.source_id,
@@ -242,7 +268,11 @@ class SqlDocumentStore:
             )
             .join(self.chunks, self.documents.c.id == self.chunks.c.document_id)
             .where(self.documents.c.is_current.is_(True))
-            .order_by(self.documents.c.source_id, self.chunks.c.ordinal)
+        )
+
+    async def all_chunks(self, query: str | None = None, limit: int | None = None) -> list[IndexedChunk]:
+        statement = self._chunk_select().order_by(
+            self.documents.c.source_id, self.chunks.c.ordinal
         )
         if query and query.strip():
             from sqlalchemy import or_
@@ -254,17 +284,33 @@ class SqlDocumentStore:
             statement = statement.limit(limit)
         async with self.engine.connect() as connection:
             rows = (await connection.execute(statement)).mappings().all()
+        return self._indexed_rows(rows)
 
-        result: list[IndexedChunk] = []
-        for row in rows:
-            document = Document(
-                row["source_id"], row["revision"], row["title"], row["document_content"]
+    async def vector_candidates(self, vector: list[float], limit: int) -> list[IndexedChunk]:
+        if not vector:
+            return []
+        if self.engine.url.get_backend_name() == "postgresql":
+            statement = (
+                self._chunk_select()
+                .where(self.chunks.c.embedding_vector.is_not(None))
+                .order_by(self.chunks.c.embedding_vector.cosine_distance(vector))
+                .limit(limit)
             )
-            document.id = UUID(row["document_id"])
-            document.created_at = row["created_at"]
-            chunk = Chunk(
-                document.id, row["ordinal"], row["chunk_content"], row["embedding"]
-            )
-            chunk.id = UUID(row["chunk_id"])
-            result.append(IndexedChunk(document, chunk))
-        return result
+            async with self.engine.connect() as connection:
+                rows = (await connection.execute(statement)).mappings().all()
+            return self._indexed_rows(rows)
+        candidates = await self.all_chunks()
+        return sorted(
+            candidates, key=lambda item: _cosine_distance(vector, item.chunk.embedding)
+        )[:limit]
+
+
+def _cosine_distance(left: list[float], right: list[float]) -> float:
+    if len(left) != len(right) or not left:
+        return 1.0
+    dot = sum(a * b for a, b in zip(left, right))
+    left_norm = sum(value * value for value in left) ** 0.5
+    right_norm = sum(value * value for value in right) ** 0.5
+    if not left_norm or not right_norm:
+        return 1.0
+    return 1.0 - dot / (left_norm * right_norm)

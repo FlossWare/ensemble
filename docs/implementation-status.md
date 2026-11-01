@@ -30,7 +30,7 @@ Implemented:
 - Deterministic character-window chunking with overlap.
 - Optional OpenAI-compatible embedding provider.
 - Database-side lexical candidate retrieval with a bounded candidate set (maximum 1,000).
-- Optional cosine similarity over lexical candidates and reciprocal-rank fusion.
+- Independent lexical and vector candidate retrieval with reciprocal-rank fusion.\n- PostgreSQL pgvector HNSW cosine index; SQLite exhaustive vector fallback for local development.
 - Document and chunk provenance in search responses.
 
 Known limitations:
