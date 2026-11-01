@@ -1,0 +1,22 @@
+[Unit]
+Description=FlossWare Ensemble REST platform
+After=network.target
+
+[Service]
+Type=simple
+User=ensemble
+Group=ensemble
+WorkingDirectory=/opt/ensemble/app
+EnvironmentFile=/etc/ensemble/ensemble.env
+ExecStart=/opt/ensemble/venv/bin/python -m ensemble
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ensemble
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
