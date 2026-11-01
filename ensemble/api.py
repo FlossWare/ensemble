@@ -11,7 +11,9 @@ from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chu
 from .embeddings import EmbeddingProvider, MAX_BODY_BYTES as MAX_EMBED_BODY_BYTES, configured_embedding_provider, validate_embedding_request
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
-from .store import DocumentStore, SqlDocumentStore
+from .store import DocumentStore, InMemoryDocumentStore, SqlDocumentStore
+from .vector_store import SqliteVectorStore, VectorStore
+from .vector_memory import InMemoryVectorStore
 from .tokenization import PROFILES as TOKENIZATION_PROFILES, TokenizationError, describe_profiles, tokenize
 from .extraction import extract
 from .intent import RULES as INTENT_RULES, classify
@@ -40,17 +42,24 @@ def create_app(
     store: DocumentStore | None = None,
     reranker: Reranker | None = None,
     embedding_provider: EmbeddingProvider | None = None,
+    vector_store: VectorStore | None = None,
 ) -> FastAPI:
     document_store = store or SqlDocumentStore(database_url)
     embeddings = embedding_provider or configured_embedding_provider()
     active_reranker = reranker or configured_reranker()
+    active_vector_store = vector_store or (
+        InMemoryVectorStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteVectorStore(database_url)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         try:
             await document_store.initialize()
+            await active_vector_store.initialize()
             yield
         finally:
+            await active_vector_store.close()
             await document_store.close()
 
     app = FastAPI(
@@ -65,6 +74,7 @@ def create_app(
     app.state.store = document_store
     app.state.embedding_provider = embeddings
     app.state.reranker = active_reranker
+    app.state.vector_store = active_vector_store
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -93,7 +103,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "chunking", "embeddings", "tokenization", "extraction", "intent", "ranking", "reranking"],
+            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "tokenization", "extraction", "intent", "ranking", "reranking"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
@@ -135,6 +145,116 @@ def create_app(
             "dimensions": dimensions,
             "embeddings": vectors,
         }
+
+    @app.get("/api/v1/vector/health", tags=["vector"])
+    async def vector_health():
+        try:
+            await active_vector_store.list_collections()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="vector storage unavailable") from exc
+        return {"ok": True, "service": "vector", "backend": "sqlite"}
+
+    @app.get("/api/v1/vector/collections", tags=["vector"])
+    async def vector_collections():
+        return {"ok": True, "collections": await active_vector_store.list_collections()}
+
+    @app.post("/api/v1/vector/collections/{name}/existing", tags=["vector"])
+    async def vector_existing(name: str, payload: dict[str, Any]):
+        ids = payload.get("ids", [])
+        if not isinstance(ids, list) or len(ids) > 1000 or any(
+            not isinstance(item, str) or not item or len(item) > 512 for item in ids
+        ):
+            raise HTTPException(status_code=400, detail="ids must be a list of at most 1000 non-empty strings")
+        return {"ok": True, "found": await active_vector_store.existing(name, ids)}
+
+    @app.post("/api/v1/vector/collections/{name}/upsert", tags=["vector"])
+    async def vector_upsert(name: str, payload: dict[str, Any]):
+        ids, vectors = payload.get("ids"), payload.get("embeddings")
+        documents_payload, metadatas = payload.get("documents"), payload.get("metadatas")
+        if not isinstance(ids, list) or not isinstance(vectors, list) or not isinstance(documents_payload, list):
+            raise HTTPException(status_code=400, detail="ids, embeddings, and documents must be lists")
+        if not ids or len(ids) != len(vectors) or len(ids) != len(documents_payload):
+            raise HTTPException(status_code=400, detail="ids, embeddings, and documents must be non-empty and equal length")
+        if len(ids) > 256:
+            raise HTTPException(status_code=413, detail="at most 256 records per upsert")
+        if len(set(ids)) != len(ids) or any(not isinstance(item, str) or not item or len(item) > 512 for item in ids):
+            raise HTTPException(status_code=400, detail="ids must be unique non-empty strings of at most 512 characters")
+        status = embeddings.status()
+        model = payload.get("model") or status.get("model")
+        dimensions = payload.get("dimensions") or status.get("dimensions")
+        if not isinstance(model, str) or not model or len(model) > 512:
+            raise HTTPException(status_code=400, detail="model must be supplied or configured")
+        if isinstance(dimensions, bool) or not isinstance(dimensions, int) or not 1 <= dimensions <= 8192:
+            raise HTTPException(status_code=400, detail="dimensions must be an integer from 1 to 8192")
+        if not isinstance(metadatas, list) or len(metadatas) != len(ids):
+            raise HTTPException(status_code=400, detail="metadatas must match ids in length")
+        items = []
+        for record_id, vector, document, metadata in zip(ids, vectors, documents_payload, metadatas):
+            if not isinstance(document, str) or not document:
+                raise HTTPException(status_code=400, detail="documents must be non-empty strings")
+            if not isinstance(metadata, dict) or not metadata:
+                raise HTTPException(status_code=400, detail="each record needs a non-empty metadata object")
+            if not isinstance(vector, list) or len(vector) != dimensions:
+                raise HTTPException(status_code=400, detail=f"each embedding must have {dimensions} dimensions")
+            try:
+                vector = [float(value) for value in vector]
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="embedding values must be numeric") from exc
+            import math
+            if any(not math.isfinite(value) for value in vector):
+                raise HTTPException(status_code=400, detail="embedding values must be finite")
+            items.append({"id": record_id, "embedding": vector, "document": document, "metadata": metadata})
+        try:
+            count = await active_vector_store.upsert(name, model, dimensions, items)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "upserted": count}
+
+    @app.post("/api/v1/vector/collections/{name}/metadata", tags=["vector"])
+    async def vector_metadata(name: str, payload: dict[str, Any]):
+        ids, metadatas = payload.get("ids"), payload.get("metadatas")
+        if not isinstance(ids, list) or not isinstance(metadatas, list) or not ids or len(ids) != len(metadatas) or len(ids) > 256:
+            raise HTTPException(status_code=400, detail="ids and metadatas must be non-empty lists of equal length, at most 256")
+        if any(not isinstance(item, str) or not item for item in ids) or any(not isinstance(item, dict) for item in metadatas):
+            raise HTTPException(status_code=400, detail="ids must be strings and metadatas must be objects")
+        updated = await active_vector_store.update_metadata(name, [
+            {"id": record_id, "metadata": metadata} for record_id, metadata in zip(ids, metadatas)
+        ])
+        return {"ok": True, "updated": updated}
+
+    @app.post("/api/v1/vector/collections/{name}/delete-superseded", tags=["vector"])
+    async def vector_delete_superseded(name: str, payload: dict[str, Any]):
+        url, digest = payload.get("url"), payload.get("keep_sha256")
+        if not isinstance(url, str) or not url or len(url) > 2048:
+            raise HTTPException(status_code=400, detail="url must be a non-empty string of at most 2048 characters")
+        if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise HTTPException(status_code=400, detail="keep_sha256 must be a lowercase hex SHA-256")
+        deleted = await active_vector_store.delete_superseded(name, url, digest)
+        return {"ok": True, "deleted": deleted}
+
+    @app.post("/api/v1/vector/collections/{name}/query", tags=["vector"])
+    async def vector_query(name: str, payload: dict[str, Any]):
+        vector, top_k = payload.get("embedding"), payload.get("top_k", 10)
+        if not isinstance(top_k, int) or isinstance(top_k, bool) or not 1 <= top_k <= 200:
+            raise HTTPException(status_code=400, detail="top_k must be an integer from 1 to 200")
+        if not isinstance(vector, list):
+            raise HTTPException(status_code=400, detail="embedding must be a list")
+        status = embeddings.status()
+        dimensions = payload.get("dimensions") or status.get("dimensions")
+        if not isinstance(dimensions, int) or isinstance(dimensions, bool) or len(vector) != dimensions:
+            # Existing collections define the authoritative dimension when no provider is configured.
+            collection = next((item for item in await active_vector_store.list_collections() if item["name"] == name), None)
+            dimensions = collection["dimensions"] if collection else dimensions
+        if not isinstance(dimensions, int) or len(vector) != dimensions:
+            raise HTTPException(status_code=400, detail="embedding dimension does not match collection")
+        try:
+            vector = [float(value) for value in vector]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="embedding values must be numeric") from exc
+        import math
+        if any(not math.isfinite(value) for value in vector):
+            raise HTTPException(status_code=400, detail="embedding values must be finite")
+        return {"ok": True, "results": await active_vector_store.query(name, vector, top_k)}
 
     @app.get("/api/v1/chunking/health", tags=["chunking"])
     async def chunking_health():
