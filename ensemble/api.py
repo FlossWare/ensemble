@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chunk as chunk_text, describe_profiles as describe_chunk_profiles
-from .embeddings import configured_embedding_provider
+from .embeddings import MAX_TEXTS as MAX_EMBED_TEXTS, MAX_TEXT_CHARS as MAX_EMBED_TEXT_CHARS, configured_embedding_provider
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
 from .store import DocumentStore, SqlDocumentStore
@@ -92,7 +92,51 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "chunking", "tokenization", "extraction", "intent", "ranking", "reranking"],
+            "capabilities": ["documents", "search", "chunking", "embeddings", "tokenization", "extraction", "intent", "ranking", "reranking"],
+        }
+
+    @app.get("/api/v1/embeddings/health", tags=["embeddings"])
+    async def embeddings_health():
+        status = embeddings.status()
+        return JSONResponse(status_code=200 if embeddings.available else 503, content=status)
+
+    @app.get("/api/v1/embeddings/model", tags=["embeddings"])
+    async def embeddings_model():
+        status = embeddings.status()
+        return JSONResponse(status_code=200 if embeddings.available else 503, content=status)
+
+    @app.post("/api/v1/embeddings/embed", tags=["embeddings"])
+    async def embed_texts(payload: dict[str, Any]):
+        texts = payload.get("texts")
+        mode = payload.get("mode", "document")
+        if not isinstance(texts, list) or not texts or len(texts) > MAX_EMBED_TEXTS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"texts must be a list of 1 to {MAX_EMBED_TEXTS} strings",
+            )
+        if mode not in {"document", "query"}:
+            raise HTTPException(status_code=400, detail="mode must be document or query")
+        for item in texts:
+            if not isinstance(item, str) or len(item) > MAX_EMBED_TEXT_CHARS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"each text must be a string of at most {MAX_EMBED_TEXT_CHARS} characters",
+                )
+        if not embeddings.available:
+            raise HTTPException(status_code=503, detail=embeddings.status().get("error", "embedding provider unavailable"))
+        try:
+            vectors = await embeddings.embed(texts, mode=mode)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="embedding provider failed") from exc
+        status = embeddings.status()
+        dimensions = status.get("dimensions")
+        if dimensions is None and vectors:
+            dimensions = len(vectors[0])
+        return {
+            "ok": True,
+            "model": status.get("model"),
+            "dimensions": dimensions,
+            "embeddings": vectors,
         }
 
     @app.get("/api/v1/chunking/health", tags=["chunking"])
