@@ -18,7 +18,9 @@ async function request(path,payload){
 form.addEventListener("submit",async event=>{
  event.preventDefault();ready=false;ingest.disabled=true;status.textContent="Fetching preview…";
  try{
-  const result=await request("/api/v1/scrape/preview",{uri:uri.value.trim()});
+  const requestedUri=uri.value.trim();
+  const result=await request("/api/v1/scrape/preview",{uri:requestedUri});
+  if(uri.value.trim()!==requestedUri){status.textContent="URI changed. Fetch a fresh preview.";return;}
   title.textContent=result.title;
   metadata.textContent=result.final_uri+" | "+result.characters+" characters | "+result.media_type;
   body.textContent=result.text;
