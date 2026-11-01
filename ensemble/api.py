@@ -659,7 +659,7 @@ def create_app(
             memory_result = await active_memory_store.append(
                 "learning-artifacts",
                 {"event_type": "learning.artifact", "source": "learning-service", "artifact": artifact},
-                event_id=f"learning-artifact:{artifact_type}:{run_id}",
+                event_id="learning-artifact-" + hashlib.sha256(f"{artifact_type}:{run_id}".encode("utf-8")).hexdigest(),
             )
         except (KeyError, TypeError) as exc:
             raise HTTPException(status_code=400, detail="artifact must contain artifact_type and payload.run_id") from exc
