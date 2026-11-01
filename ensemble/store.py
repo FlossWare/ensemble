@@ -116,7 +116,30 @@ class SqlDocumentStore:
         await self.engine.dispose()
 
     async def save(self, document: Document, chunks: list[Chunk]) -> Document:
+        backend = self.engine.url.get_backend_name()
+        if backend == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert as dialect_insert
+        elif backend == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert as dialect_insert
+        else:
+            raise RuntimeError(f"Unsupported database backend: {backend}")
+
         async with self.engine.begin() as connection:
+            # The unique source/revision constraint plus ON CONFLICT makes retries
+            # and concurrent submissions converge on one stable document identity.
+            statement = dialect_insert(self.documents).values(
+                id=str(document.id),
+                source_id=document.source_id,
+                revision=document.revision,
+                title=document.title,
+                content=document.content,
+                created_at=document.created_at,
+                is_current=False,
+            ).on_conflict_do_nothing(
+                index_elements=["source_id", "revision"]
+            )
+            await connection.execute(statement)
+
             existing = (
                 await connection.execute(
                     select(self.documents).where(
@@ -124,34 +147,20 @@ class SqlDocumentStore:
                         self.documents.c.revision == document.revision,
                     )
                 )
-            ).mappings().first()
+            ).mappings().one()
+            document.id = UUID(existing["id"])
+            document.created_at = existing["created_at"]
 
-            if existing is not None:
-                document.id = UUID(existing["id"])
-                document.created_at = existing["created_at"]
-
+            await connection.execute(
+                update(self.documents)
+                .where(self.documents.c.id == str(document.id))
+                .values(title=document.title, content=document.content, is_current=False)
+            )
             await connection.execute(
                 update(self.documents)
                 .where(self.documents.c.source_id == document.source_id)
                 .values(is_current=False)
             )
-
-            if existing is None:
-                await connection.execute(insert(self.documents).values(
-                    id=str(document.id),
-                    source_id=document.source_id,
-                    revision=document.revision,
-                    title=document.title,
-                    content=document.content,
-                    created_at=document.created_at,
-                    is_current=False,
-                ))
-            else:
-                await connection.execute(
-                    update(self.documents)
-                    .where(self.documents.c.id == str(document.id))
-                    .values(title=document.title, content=document.content, is_current=False)
-                )
 
             latest_revision = await connection.scalar(
                 select(func.max(self.documents.c.revision)).where(
