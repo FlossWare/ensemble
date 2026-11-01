@@ -31,12 +31,16 @@ The POC README declares 13 services. All 13 are in scope.
 | Reranking | services/embeddings, port 8774, rerank | Cross-encoder candidate reranking, model metadata, bounded inputs, aligned scores, health/readiness | Optional local CrossEncoder provider and REST route added; model/runtime and hybrid-pipeline integration pending; tests authored, CI not yet verified | Adapt |
 | Chunking | services/chunking, port 8775, profiles/chunk | Versioned deterministic profiles: window, Markdown, message; stable chunk IDs and source offsets/provenance | All three profile algorithms and REST routes added; document-ingestion integration remains outstanding; tests authored, CI not yet verified | Adapt |
 | Tokenization | services/tokenization, port 8776, profiles/tokenize | Versioned deterministic analyzers, compound identifier handling, exact offsets, consistent index/query analysis | lexical-v1 pure logic and REST routes added; parity tests authored, CI not yet verified | Adapt |
-| Index | services/index, port 8777, revisions/tombstones/sources/manifest | Source manifest, monotonic revision sequencing, profile provenance, duplicate/conflict/superseded decisions, tombstones, bounded manifest | Some document revision behavior exists; separate manifest, sequence semantics and tombstones absent | Adapt |
+| Index | services/index, port 8777, revisions/tombstones/sources/manifest | Source manifest, monotonic revision sequencing, profile provenance, duplicate/conflict/superseded decisions, tombstones, bounded manifest | SQLite manifest, revision decisions, permanent tombstones, source lookup and bounded manifest routes implemented; Knowledge integration pending; tests authored, CI not yet verified | Adapt |
 | Extraction | services/extraction, port 8778, extract | Exact identifier extraction and uncertain entity candidates with evidence, offsets and confidence | POC rule set and REST routes added; parity tests authored, CI not yet verified | Adapt |
 | Intent | services/intent, port 8779, classify | Explainable intent labels, confidence, matched evidence and per-label scores | POC rule set and REST routes added; parity tests authored, CI not yet verified | Adapt |
 | Ranking | services/ranking, port 8780, rank | Deterministic reciprocal-rank fusion with per-list score contributions and stable tie-breaking | POC-compatible fusion logic and REST routes added; parity tests authored, CI not yet verified | Adapt |
 | Knowledge | services/knowledge, port 8781, records/tombstone | Sourced records, origin/locator provenance, revision checks through Index, idempotency and deletion | Document ingestion exists; knowledge record lifecycle and provenance contract absent | Adapt |
 | Memory | services/memory, port 8767, memory operations and session-events ledger | Durable episodic memory, session event ledger, concurrent access, path/scope validation, recall and memory lifecycle | Not implemented as POC-equivalent memory capability | Replace |
+
+## Index implementation
+
+Ensemble implements the POC's source-manifest decision model in SQLite: accepted, duplicate, conflict, superseded, and tombstoned revision outcomes; profile-version snapshots; permanent tombstones; source lookup; and bounded manifest listing. The index is a distinct capability and is not yet wired into Knowledge publication or document ingestion. Alembic migration `0003_source_index` owns its schema.
 
 ## Vector storage implementation
 
