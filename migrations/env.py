@@ -22,6 +22,9 @@ from ensemble.config import resolve_database_url
 
 config = context.config
 configured_url = os.getenv("ENSEMBLE_DATABASE_URL")
+ini_url = config.get_main_option("sqlalchemy.url")
+if configured_url is None and ini_url != "sqlite+aiosqlite:///./.ensemble/ensemble.db":
+    configured_url = ini_url
 resolved_url = resolve_database_url(configured_url)
 config.set_main_option("sqlalchemy.url", resolved_url.replace("%", "%%"))
 
