@@ -34,6 +34,8 @@ def test_learning_outcome_is_idempotent_and_updates_memory_and_thompson_once():
             "/api/v1/memory/entries", json={"name": "learning-outcomes"}
         ).json()["entries"]
         assert len(memory_entries) == 1
+        snapshots = http.post("/api/v1/memory/entries", json={"name": "thompson-state"}).json()["entries"]
+        assert len(snapshots) == 1
         thompson = http.get("/api/v1/thompson/state").json()["state"]["models"]["sonnet"]
         assert thompson["calls"] == 1
         assert thompson["successes"] == 1
