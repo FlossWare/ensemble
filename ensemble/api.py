@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chunk as chunk_text, describe_profiles as describe_chunk_profiles
-from .embeddings import MAX_TEXTS as MAX_EMBED_TEXTS, MAX_TEXT_CHARS as MAX_EMBED_TEXT_CHARS, configured_embedding_provider
+from .embeddings import EmbeddingProvider, MAX_TEXTS as MAX_EMBED_TEXTS, MAX_TEXT_CHARS as MAX_EMBED_TEXT_CHARS, configured_embedding_provider
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
 from .store import DocumentStore, SqlDocumentStore
@@ -39,9 +39,10 @@ def create_app(
     database_url: str | None = None,
     store: DocumentStore | None = None,
     reranker: Reranker | None = None,
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> FastAPI:
     document_store = store or SqlDocumentStore(database_url)
-    embeddings = configured_embedding_provider()
+    embeddings = embedding_provider or configured_embedding_provider()
     active_reranker = reranker or configured_reranker()
 
     @asynccontextmanager
