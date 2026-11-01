@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
+import math
 import httpx
 from typing import Protocol, Any
 
@@ -11,6 +13,21 @@ MODEL_REVISION = "e9b6763023c676ca8431644204f50c2b100d9aab"
 DIMENSIONS = 768
 MAX_TEXTS = 64
 MAX_TEXT_CHARS = 65_536
+MAX_BODY_BYTES = 1_048_576
+
+
+""def validate_embedding_request(texts: Any, mode: Any) -> None:
+    if mode not in {"document", "query"}:
+        raise ValueError("mode must be 'document' or 'query'")
+    if not isinstance(texts, list) or not texts:
+        raise ValueError("texts must be a non-empty list")
+    if len(texts) > MAX_TEXTS:
+        raise OverflowError(f"at most {MAX_TEXTS} texts per request")
+    for text in texts:
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("every text must be a non-empty string")
+        if len(text) > MAX_TEXT_CHARS:
+            raise OverflowError(f"each text is limited to {MAX_TEXT_CHARS} characters")
 
 
 class EmbeddingProvider(Protocol):
@@ -103,6 +120,7 @@ class NomicEmbeddingProvider:
             from .nomic_embed_lib import Embedder
             embedder = Embedder()
         self.embedder = embedder
+        self._lock = threading.Lock()
 
     @property
     def available(self) -> bool:
@@ -126,13 +144,20 @@ class NomicEmbeddingProvider:
         }
 
     async def embed(self, texts: list[str], mode: str = "document") -> list[list[float]]:
-        if mode not in {"document", "query"}:
-            raise ValueError("mode must be document or query")
-        if not texts:
-            return []
+        validate_embedding_request(texts, mode)
         encoder = self.embedder.embed_documents if mode == "document" else self.embedder.embed_queries
-        vectors = await asyncio.to_thread(encoder, texts)
-        return vectors.tolist()
+        def encode():
+            with self._lock:
+                return encoder(texts)
+        vectors = await asyncio.to_thread(encode)
+        result = vectors.tolist()
+        if len(result) != len(texts):
+            raise RuntimeError("embedding provider returned an unexpected vector count")
+        if any(len(vector) != DIMENSIONS for vector in result):
+            raise RuntimeError(f"embedding provider must return {DIMENSIONS}-dimension vectors")
+        if any(not math.isfinite(value) for vector in result for value in vector):
+            raise RuntimeError("embedding provider returned non-finite vector values")
+        return result
 
 
 def configured_embedding_provider() -> EmbeddingProvider:
