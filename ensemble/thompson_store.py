@@ -121,8 +121,6 @@ class InMemoryThompsonStore:
         models = {}
         for name, stats in sorted(self.models.items()):
             item = dict(stats)
-            item["success_rate"] = item["successes"] / item["calls"] if item["calls"] else 0.5
-            item["avg_cost"] = item["total_cost"] / item["calls"] if item["calls"] else 0.0
             models[name] = item
         return {"last_updated": datetime.now(timezone.utc).isoformat(), "models": models}
 
