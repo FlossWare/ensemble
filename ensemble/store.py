@@ -100,7 +100,7 @@ class InMemoryDocumentStore:
 
 
 class SqlDocumentStore:
-    """Durable SQL store. SQLite is the local default; PostgreSQL is supported."""
+    """Durable SQLite store. Alternative persistence implementations belong to FlossWare proper."""
 
     def __init__(self, database_url: str | None = None):
         self.database_url = database_url or os.getenv(
@@ -108,7 +108,9 @@ class SqlDocumentStore:
             "sqlite+aiosqlite:///./.ensemble/ensemble.db",
         )
         url = make_url(self.database_url)
-        if url.get_backend_name() == "sqlite" and url.database not in (None, "", ":memory:"):
+        if url.get_backend_name() != "sqlite":
+            raise ValueError("Ensemble supports SQLite persistence only; alternative persistence implementations belong to FlossWare proper.")
+        if url.database not in (None, "", ":memory:"):
             Path(url.database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
 
         self.engine: AsyncEngine = create_async_engine(
@@ -148,13 +150,7 @@ class SqlDocumentStore:
             await connection.execute(select(1))
 
     async def save(self, document: Document, chunks: list[Chunk]) -> Document:
-        backend = self.engine.url.get_backend_name()
-        if backend == "sqlite":
-            from sqlalchemy.dialects.sqlite import insert as dialect_insert
-        elif backend == "postgresql":
-            from sqlalchemy.dialects.postgresql import insert as dialect_insert
-        else:
-            raise RuntimeError(f"Unsupported database backend: {backend}")
+        from sqlalchemy.dialects.sqlite import insert as dialect_insert
 
         async with self.engine.begin() as connection:
             # The unique source/revision constraint plus ON CONFLICT makes retries
