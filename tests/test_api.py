@@ -133,3 +133,119 @@ def test_reingest_is_idempotent_and_latest_revision_is_searchable(tmp_path):
         still_current = client.post("/api/v1/search", json={"query": "indexing behavior"}).json()
         assert len(still_current) == 1
         assert still_current[0]["revision"] == 2
+
+
+
+def test_vector_collection_upsert_query_and_existing_ids(tmp_path):
+    with _client(tmp_path) as client:
+        payload = {
+            "model": "test-embedding-model",
+            "dimensions": 3,
+            "ids": ["doc-a", "doc-b"],
+            "embeddings": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            "documents": ["alpha document", "beta document"],
+            "metadatas": [
+                {"url": "https://example.test/a", "content_sha256": "a" * 64},
+                {"url": "https://example.test/b", "content_sha256": "b" * 64},
+            ],
+        }
+        upsert = client.post("/api/v1/vector/collections/knowledge/upsert", json=payload)
+        assert upsert.status_code == 200
+        assert upsert.json()["upserted"] == 2
+
+        existing = client.post(
+            "/api/v1/vector/collections/knowledge/existing",
+            json={"ids": ["doc-b", "missing", "doc-a"]},
+        )
+        assert existing.json()["found"] == ["doc-b", "doc-a"]
+
+        query = client.post(
+            "/api/v1/vector/collections/knowledge/query",
+            json={"embedding": [0.0, 1.0, 0.0], "top_k": 2},
+        )
+        assert query.status_code == 200
+        assert [item["id"] for item in query.json()["results"]] == ["doc-b", "doc-a"]
+        assert query.json()["results"][0]["score"] == 1.0
+
+
+def test_vector_upsert_is_idempotent_and_model_mismatch_fails(tmp_path):
+    with _client(tmp_path) as client:
+        base = {
+            "model": "model-a", "dimensions": 2,
+            "ids": ["same-id"], "embeddings": [[1.0, 0.0]],
+            "documents": ["original"], "metadatas": [{"version": 1}],
+        }
+        assert client.post("/api/v1/vector/collections/c/upsert", json=base).status_code == 200
+        replacement = {**base, "documents": ["replacement"], "metadatas": [{"version": 2}]}
+        assert client.post("/api/v1/vector/collections/c/upsert", json=replacement).json()["upserted"] == 1
+        result = client.post(
+            "/api/v1/vector/collections/c/query",
+            json={"embedding": [1.0, 0.0]},
+        ).json()["results"]
+        assert len(result) == 1
+        assert result[0]["document"] == "replacement"
+
+        mismatch = {**base, "model": "model-b"}
+        assert client.post("/api/v1/vector/collections/c/upsert", json=mismatch).status_code == 409
+
+
+def test_vector_metadata_and_delete_superseded(tmp_path):
+    with _client(tmp_path) as client:
+        payload = {
+            "model": "model-a", "dimensions": 2,
+            "ids": ["old", "current"], "embeddings": [[1.0, 0.0], [0.0, 1.0]],
+            "documents": ["old", "current"],
+            "metadatas": [
+                {"url": "https://example.test/source", "content_sha256": "a" * 64},
+                {"url": "https://example.test/source", "content_sha256": "b" * 64},
+            ],
+        }
+        client.post("/api/v1/vector/collections/c/upsert", json=payload)
+        updated = client.post(
+            "/api/v1/vector/collections/c/metadata",
+            json={"ids": ["current", "missing"], "metadatas": [{"tag": "new"}, {"tag": "none"}]},
+        )
+        assert updated.json()["updated"] == 1
+        deleted = client.post(
+            "/api/v1/vector/collections/c/delete-superseded",
+            json={"url": "https://example.test/source", "keep_sha256": "b" * 64},
+        )
+        assert deleted.json()["deleted"] == 1
+        found = client.post(
+            "/api/v1/vector/collections/c/existing",
+            json={"ids": ["old", "current"]},
+        ).json()["found"]
+        assert found == ["current"]
+
+
+def test_vector_collection_persists_across_restart(tmp_path):
+    payload = {
+        "model": "model-a", "dimensions": 2,
+        "ids": ["persistent"], "embeddings": [[0.5, 0.5]],
+        "documents": ["persisted vector"], "metadatas": [{"source": "test"}],
+    }
+    with _client(tmp_path) as client:
+        assert client.post("/api/v1/vector/collections/c/upsert", json=payload).status_code == 200
+
+    with _client(tmp_path) as client:
+        result = client.post(
+            "/api/v1/vector/collections/c/query",
+            json={"embedding": [0.5, 0.5]},
+        ).json()["results"]
+        assert result[0]["id"] == "persistent"
+
+
+def test_vector_contract_rejects_invalid_vectors(tmp_path):
+    with _client(tmp_path) as client:
+        invalid = {
+            "model": "model-a", "dimensions": 2,
+            "ids": ["bad"], "embeddings": [[float("nan"), 0.0]],
+            "documents": ["bad"], "metadatas": [{"source": "test"}],
+        }
+        response = client.post("/api/v1/vector/collections/c/upsert", json=invalid)
+        assert response.status_code == 400
+        response = client.post(
+            "/api/v1/vector/collections/c/query",
+            json={"embedding": [1.0], "top_k": 1},
+        )
+        assert response.status_code == 400
