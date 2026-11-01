@@ -49,5 +49,5 @@ def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch
         index = asyncio.run(index_store.get_source("https://example.org/guide"))
         knowledge = asyncio.run(knowledge_store.get("https://example.org/guide"))
         assert index["high_sequence"] == 1
-        assert knowledge["provenance"]["origin"] == "web"
+        assert knowledge["origin"] == "web"
         assert knowledge["content"] == "A useful guide about Ensemble."
