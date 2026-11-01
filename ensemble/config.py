@@ -39,8 +39,10 @@ def resolve_database_url(database_url: str | None = None) -> str:
     if url.get_backend_name() != "sqlite":
         raise ValueError("Ensemble supports SQLite persistence only")
     if url.database not in (None, "", ":memory:"):
-        Path(url.database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
-    return url_text
+        database_path = Path(url.database).expanduser().resolve()
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        url = url.set(database=str(database_path))
+    return url.render_as_string(hide_password=False)
 
 
 def settings_from_env(database_url: str | None = None) -> Settings:
