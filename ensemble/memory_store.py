@@ -680,14 +680,10 @@ class InMemoryMemoryStore:
             item.pop("_index", None)
         return matches[:limit]
 
-    async def chunk(self, name: str, size: int = 500) -> list[dict[str, Any]]:
+    async def chunk(self, name: str, size: int = 2000) -> list[dict[str, Any]]:
         content = await self.read(name)
         if content is None:
             return []
         if isinstance(size, bool) or not isinstance(size, int) or not 1 <= size <= 10000:
             raise ValueError("size must be an integer between 1 and 10000")
-        return [
-            {"ordinal": offset // size, "start": offset, "end": min(offset + size, len(content)),
-             "content": content[offset:offset + size]}
-            for offset in range(0, len(content), size)
-        ]
+        return _chunk_markdown(content, size)
