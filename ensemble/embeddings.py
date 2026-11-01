@@ -16,7 +16,7 @@ MAX_TEXT_CHARS = 65_536
 MAX_BODY_BYTES = 1_048_576
 
 
-""def validate_embedding_request(texts: Any, mode: Any) -> None:
+def validate_embedding_request(texts: Any, mode: Any) -> None:
     if mode not in {"document", "query"}:
         raise ValueError("mode must be 'document' or 'query'")
     if not isinstance(texts, list) or not texts:
