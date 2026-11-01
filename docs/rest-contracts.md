@@ -63,6 +63,10 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/extraction/extract | Exact identifiers and uncertain entity candidates |
 | GET | /api/v1/intent/health, /ready | Intent capability status and labels |
 | POST | /api/v1/intent/classify | Evidence-backed intent classification |
+| GET | /api/v1/knowledge/health, /ready | Knowledge capability status and Index dependency readiness |
+| POST | /api/v1/knowledge/records | Publish a sourced record only after Index accepts or confirms its revision |
+| GET | /api/v1/knowledge/records/{source_id} | Read the current sourced record and provenance |
+| POST | /api/v1/knowledge/records/{source_id}/tombstone | Tombstone a sourced record through Index |
 | GET | /api/v1/index/health, /ready | Index capability status |
 | POST | /api/v1/index/revisions | Record a revision and return accepted/duplicate/conflict/superseded/tombstoned decision |
 | POST | /api/v1/index/tombstones | Permanently tombstone a source at a revision sequence |
