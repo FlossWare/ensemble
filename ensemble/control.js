@@ -161,3 +161,61 @@ gaForm.addEventListener("submit",async event=>{
 });
 gaRefresh.addEventListener("click",refreshGaRuns);
 refreshGaRuns();
+
+const thompsonForm=document.getElementById("thompson-select-form");
+const thompsonTask=document.getElementById("thompson-task");
+const thompsonMaxCost=document.getElementById("thompson-max-cost");
+const thompsonSelection=document.getElementById("thompson-selection");
+const thompsonRefresh=document.getElementById("thompson-refresh");
+const thompsonState=document.getElementById("thompson-state");
+async function refreshThompson(){
+ thompsonRefresh.disabled=true;
+ try{
+  const response=await fetch("/api/v1/thompson/state");
+  const payload=await response.json();
+  if(!response.ok)throw new Error(JSON.stringify(payload.detail||payload));
+  const models=payload.state.models||{};
+  thompsonState.replaceChildren();
+  const table=document.createElement("table");
+  const head=document.createElement("tr");
+  for(const label of ["Model","Successes","Failures","Calls","Avg cost","Total cost","Tokens","Action"]){
+   const cell=document.createElement("th");cell.textContent=label;head.append(cell);
+  }
+  table.append(head);
+  for(const [name,stats] of Object.entries(models)){
+   const row=document.createElement("tr");
+   const values=[name,stats.successes,stats.failures,stats.calls,
+    stats.calls?(stats.total_cost/stats.calls).toFixed(6):"0",
+    Number(stats.total_cost).toFixed(6),stats.total_tokens];
+   for(const value of values){const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);}
+   const action=document.createElement("td");
+   const reset=document.createElement("button");reset.type="button";reset.textContent="Reset";
+   reset.addEventListener("click",async()=>{
+    if(!window.confirm("Reset Thompson history for "+name+"?"))return;
+    reset.disabled=true;
+    try{
+     const result=await fetch("/api/v1/thompson/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:name})});
+     const data=await result.json();if(!result.ok)throw new Error(JSON.stringify(data.detail||data));
+     await refreshThompson();
+    }catch(error){thompsonSelection.textContent="Reset failed: "+error.message;reset.disabled=false;}
+   });
+   action.append(reset);row.append(action);table.append(row);
+  }
+  thompsonState.append(table);
+  if(!Object.keys(models).length)thompsonState.textContent="No model outcomes recorded yet. Selection falls back to haiku.";
+ }catch(error){thompsonState.textContent="Could not load Thompson state: "+error.message;}
+ finally{thompsonRefresh.disabled=false;}
+}
+thompsonForm.addEventListener("submit",async event=>{
+ event.preventDefault();
+ const payload={task_type:thompsonTask.value.trim()||"unknown"};
+ if(thompsonMaxCost.value.trim()!=="")payload.max_cost=Number(thompsonMaxCost.value);
+ thompsonSelection.textContent="Selecting model…";
+ try{
+  const result=await fetch("/api/v1/thompson/select",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  const data=await result.json();if(!result.ok)throw new Error(JSON.stringify(data.detail||data));
+  thompsonSelection.textContent="Selected "+data.model+" (request "+data.request_id+")";
+ }catch(error){thompsonSelection.textContent="Selection failed: "+error.message;}
+});
+thompsonRefresh.addEventListener("click",refreshThompson);
+refreshThompson();
