@@ -319,10 +319,10 @@ class GeneticAlgorithm:
 
     def _validate_config(self) -> None:
         c = self.config
-        if isinstance(c.population_size, bool) or not isinstance(c.population_size, int) or c.population_size < len(SYSTEMS) * c.tournament_k:
-            raise ValueError(f"population_size must be at least {len(SYSTEMS) * c.tournament_k}")
-        if isinstance(c.generations, bool) or not isinstance(c.generations, int) or not 1 <= c.generations <= 100:
-            raise ValueError("generations must be between 1 and 100")
+        if isinstance(c.population_size, bool) or not isinstance(c.population_size, int) or not len(SYSTEMS) * c.tournament_k <= c.population_size <= 200:
+            raise ValueError(f"population_size must be between {len(SYSTEMS) * c.tournament_k} and 200")
+        if isinstance(c.generations, bool) or not isinstance(c.generations, int) or not 1 <= c.generations <= 50:
+            raise ValueError("generations must be between 1 and 50")
         if not 1 <= c.tournament_k <= 10:
             raise ValueError("tournament_k must be between 1 and 10")
         for name, value in (("crossover_rate", c.crossover_rate), ("mutation_rate", c.mutation_rate)):
