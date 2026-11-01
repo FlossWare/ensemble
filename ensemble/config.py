@@ -43,7 +43,7 @@ def resolve_database_url(database_url: str | None = None) -> str:
     return url_text
 
 
-def settings_from_env() -> Settings:
+def settings_from_env(database_url: str | None = None) -> Settings:
     host = os.getenv("ENSEMBLE_HOST", DEFAULT_HOST).strip()
     if not host:
         raise ValueError("ENSEMBLE_HOST must not be empty")
@@ -59,5 +59,5 @@ def settings_from_env() -> Settings:
         host=host,
         port=port,
         persistence_root=root,
-        database_url=resolve_database_url(),
+        database_url=resolve_database_url(database_url),
     )
