@@ -26,7 +26,8 @@ PostgreSQL and other alternative persistence implementations are not part of Ens
 Implemented:
 - FastAPI application with generated OpenAPI documentation at /docs.
 - Durable SQLite document and chunk storage.
-- Deterministic character-window chunking with overlap.
+- Deterministic character-window chunking in the initial document-ingestion path.
+- Standalone versioned window-v1, markdown-v1, and message-v1 chunk profiles with stable IDs, source offsets, and heading provenance.
 - Optional OpenAI-compatible embedding provider.
 - Versioned lexical-v1 tokenization with deterministic compound identifier handling and source offsets.
 - Exact identifier/entity extraction with uncertainty and confidence metadata.
@@ -46,8 +47,8 @@ Implemented on the parity branch (regression tests authored; execution still req
 
 Not yet implemented:
 - The remaining POC capability surface listed in [POC capability parity](poc-parity.md).
+- Integration of the new versioned chunk profiles into document ingestion and persisted chunk provenance.
 - Additional tokenization/analyzer profiles beyond lexical-v1.
-- Versioned chunk profiles (Markdown and message profiles).
 - Dedicated scalable vector index and vector-store operations.
 - Cross-encoder reranking.
 - Full POC hybrid-search orchestration and degraded-dependency behavior.
