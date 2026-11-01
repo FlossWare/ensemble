@@ -107,11 +107,12 @@ def test_memory_context_retrieval_prioritizes_parent_and_search_is_bounded():
 
 def test_memory_chunking_and_name_validation():
     with client() as http:
-        http.post("/api/v1/memory/write", json={"name": "chunked", "content": "abcdefghij"})
+        http.post("/api/v1/memory/write", json={"name": "chunked", "content": "# Intro\\nalpha\\n# Second\\nbeta\\n"})
         chunks = http.post(
-            "/api/v1/memory/chunk", json={"name": "chunked", "size": 4}
+            "/api/v1/memory/chunk", json={"name": "chunked", "size": 2000}
         ).json()["chunks"]
-        assert [item["content"] for item in chunks] == ["abcd", "efgh", "ij"]
+        assert [item["header"] for item in chunks] == ["Intro", "Second"]
+        assert [item["content"] for item in chunks] == ["# Intro\\nalpha\\n", "# Second\\nbeta\\n"]
 
         invalid = http.post(
             "/api/v1/memory/write",
