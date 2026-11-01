@@ -39,3 +39,35 @@ def test_ga_runs_and_candidate_approvals_survive_store_restart(tmp_path):
         await reopened.close()
 
     asyncio.run(exercise())
+
+
+
+def test_interrupted_ga_runs_are_failed_after_store_restart(tmp_path):
+    database = tmp_path / "ga-recovery.sqlite"
+    url = f"sqlite+aiosqlite:///{database}"
+
+    async def exercise():
+        store = SqliteGAStore(url)
+        async with store.engine.begin() as connection:
+            await connection.run_sync(ga_metadata.create_all)
+        pending = await store.create_run({"seed": 1})
+        running = await store.create_run({"seed": 2})
+        completed = await store.create_run({"seed": 3})
+        await store.update_run(running["id"], status="running")
+        await store.update_run(completed["id"], status="completed", result={"ok": True})
+        await store.close()
+
+        reopened = SqliteGAStore(url)
+        recovered = await reopened.recover_interrupted_runs()
+        assert recovered == 2
+        assert (await reopened.get_run(pending["id"]))["status"] == "failed"
+        interrupted = await reopened.get_run(running["id"])
+        assert interrupted["status"] == "failed"
+        assert "process restart" in interrupted["error"]
+        restored_completed = await reopened.get_run(completed["id"])
+        assert restored_completed["status"] == "completed"
+        assert restored_completed["result"] == {"ok": True}
+        assert await reopened.recover_interrupted_runs() == 0
+        await reopened.close()
+
+    asyncio.run(exercise())
