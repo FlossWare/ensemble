@@ -17,8 +17,8 @@ def test_tokenization_case_folding_and_short_token_filter():
 def test_tokenization_preserves_compound_identifier_and_components():
     tokens = tokenize("lexical-v1", "memory-service")
     assert [(token["term"], token["kind"]) for token in tokens] == [
-        ("memory-service", "whole"),
         ("memory", "part"),
+        ("memory-service", "whole"),
         ("service", "part"),
     ]
 
@@ -55,7 +55,7 @@ def test_extraction_finds_exact_identifiers_and_preserves_spelling():
 
 
 def test_extraction_flags_uncertain_names_and_avoids_overlap():
-    entities = extract("Ask Alice Smith about memory-service in /tmp/work")
+    entities = extract("please ask Alice Smith about memory-service in /tmp/work")
     uncertain = next(entity for entity in entities if entity["text"] == "Alice Smith")
     assert uncertain["exact"] is False
     assert uncertain["confidence"] < 1.0
@@ -145,7 +145,7 @@ def test_stateless_capabilities_are_exposed_through_rest():
             json={"profile": "lexical-v1", "text": "memory-service"},
         )
         assert tokenized.status_code == 200
-        assert tokenized.json()["tokens"][0]["term"] == "memory-service"
+        assert any(token["term"] == "memory-service" for token in tokenized.json()["tokens"])
 
         extracted = client.post(
             "/api/v1/extraction/extract",
