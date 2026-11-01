@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from sqlalchemy import Column, DateTime, Float, Integer, MetaData, String, Table, insert, select, update
+from sqlalchemy import Column, DateTime, Float, Integer, MetaData, String, Table, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -58,34 +58,29 @@ class SqliteThompsonStore:
         for row in rows:
             item = dict(row)
             item["last_updated"] = item["last_updated"].isoformat()
-            item["success_rate"] = item["successes"] / item["calls"] if item["calls"] else 0.5
-            item["avg_cost"] = item["total_cost"] / item["calls"] if item["calls"] else 0.0
             models[item["model_name"]] = item
-        return {"last_updated": datetime.now(timezone.utc).isoformat(), "models": models}
+        last_updated = max((item["last_updated"] for item in models.values()), default=datetime.now(timezone.utc).isoformat())
+        return {"last_updated": last_updated, "models": models}
 
     async def record_outcome(self, model: str, success: bool, cost: float, tokens: int) -> bool:
         _validate_outcome(model, success, cost, tokens)
         now = datetime.now(timezone.utc)
         async with self.engine.begin() as connection:
-            existing = (await connection.execute(
-                select(thompson_models).where(thompson_models.c.model_name == model)
-            )).mappings().first()
-            values = {
-                "model_name": model,
-                "successes": (existing["successes"] if existing else 0) + int(success),
-                "failures": (existing["failures"] if existing else 0) + int(not success),
-                "total_cost": (existing["total_cost"] if existing else 0.0) + float(cost),
-                "total_tokens": (existing["total_tokens"] if existing else 0) + tokens,
-                "calls": (existing["calls"] if existing else 0) + 1,
-                "last_updated": now,
-            }
-            await connection.execute(
-                sqlite_insert(thompson_models).values(**values)
-                .on_conflict_do_update(
-                    index_elements=[thompson_models.c.model_name],
-                    set_={key: value for key, value in values.items() if key != "model_name"},
-                )
+            statement = sqlite_insert(thompson_models).values(
+                model_name=model, successes=int(success), failures=int(not success),
+                total_cost=float(cost), total_tokens=tokens, calls=1, last_updated=now,
             )
+            await connection.execute(statement.on_conflict_do_update(
+                index_elements=[thompson_models.c.model_name],
+                set_={
+                    "successes": thompson_models.c.successes + int(success),
+                    "failures": thompson_models.c.failures + int(not success),
+                    "total_cost": thompson_models.c.total_cost + float(cost),
+                    "total_tokens": thompson_models.c.total_tokens + tokens,
+                    "calls": thompson_models.c.calls + 1,
+                    "last_updated": now,
+                },
+            ))
         return True
 
     async def reset(self, model: str) -> bool:
