@@ -1,13 +1,30 @@
 from __future__ import annotations
 
-import os
-from fastapi import FastAPI, HTTPException
+from uuid import uuid4
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from .chunking import Chunker
 from .embeddings import configured_embedding_provider
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
 from .store import InMemoryDocumentStore
+
+
+def _problem(request: Request, status: int, title: str, detail: str, code: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status,
+        media_type="application/problem+json",
+        content={
+            "type": "about:blank",
+            "title": title,
+            "status": status,
+            "detail": detail,
+            "instance": request.url.path,
+            "code": code,
+            "correlationId": str(uuid4()),
+        },
+    )
 
 
 def create_app() -> FastAPI:
@@ -23,6 +40,19 @@ def create_app() -> FastAPI:
 
     app.state.store = store
     app.state.embedding_provider = embeddings
+
+    @app.exception_handler(HTTPException)
+    async def http_problem(request: Request, exc: HTTPException):
+        title = "Client Error" if exc.status_code < 500 else "Server Error"
+        detail = exc.detail if isinstance(exc.detail, str) else title
+        return _problem(request, exc.status_code, title, detail, "http-error")
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_problem(request: Request, exc: RequestValidationError):
+        return _problem(
+            request, 422, "Unprocessable Content",
+            "Request validation failed", "request-validation-failed"
+        )
 
     @app.get("/health", tags=["operations"])
     async def health():
