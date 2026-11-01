@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
@@ -15,6 +16,7 @@ from .tokenization import PROFILES as TOKENIZATION_PROFILES, TokenizationError, 
 from .extraction import extract
 from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
+from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_reranker, validate_rerank_request
 
 
 def _problem(request: Request, status: int, title: str, detail: str, code: str) -> JSONResponse:
@@ -36,9 +38,11 @@ def _problem(request: Request, status: int, title: str, detail: str, code: str) 
 def create_app(
     database_url: str | None = None,
     store: DocumentStore | None = None,
+    reranker: Reranker | None = None,
 ) -> FastAPI:
     document_store = store or SqlDocumentStore(database_url)
     embeddings = configured_embedding_provider()
+    active_reranker = reranker or configured_reranker()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -59,6 +63,7 @@ def create_app(
 
     app.state.store = document_store
     app.state.embedding_provider = embeddings
+    app.state.reranker = active_reranker
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -87,7 +92,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "chunking", "tokenization", "extraction", "intent", "ranking"],
+            "capabilities": ["documents", "search", "chunking", "tokenization", "extraction", "intent", "ranking", "reranking"],
         }
 
     @app.get("/api/v1/chunking/health", tags=["chunking"])
@@ -180,6 +185,29 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, **result}
+
+    @app.get("/api/v1/reranking/health", tags=["reranking"])
+    async def reranking_health():
+        status = active_reranker.status()
+        return JSONResponse(status_code=200 if active_reranker.available else 503, content=status)
+
+    @app.get("/api/v1/reranking/ready", tags=["reranking"])
+    async def reranking_ready():
+        status = active_reranker.status()
+        return JSONResponse(status_code=200 if active_reranker.available else 503, content=status)
+
+    @app.post("/api/v1/reranking/rerank", tags=["reranking"])
+    async def rerank_candidates(payload: dict[str, Any]):
+        query, documents = payload.get("query"), payload.get("documents")
+        try:
+            validate_rerank_request(query, documents)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            scores = await asyncio.to_thread(active_reranker.score, query, documents)
+        except RerankingUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {"ok": True, "model": RERANK_MODEL_ID, "scores": scores}
 
     @app.get("/api/v1/ranking/health", tags=["ranking"])
     async def ranking_health():
