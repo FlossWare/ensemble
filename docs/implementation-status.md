@@ -62,7 +62,7 @@ Not yet implemented:
 - Generalize the Index-to-Knowledge publication pipeline to all document ingestion paths; the URI scraper currently uses it.
 - Broader learned/entity extraction beyond the POC's rule-based identifier extraction.
 - Any future model-backed intent providers, which are not part of the current POC behavior.
-- Durable episodic memory/session-event ledger and remaining POC adjunct modules (Learning, Thompson, and scrape-ledger) pending separate scope decisions.
+- Durable episodic memory/session-event ledger and POC adjunct capabilities Learning, Thompson, GA Tuning, and scrape-ledger. GA Tuning is now explicitly in parity scope; its optimizer, five evaluator families, parameter/result schemas, scheduled execution, artifacts, and dashboard/control workflows are not implemented yet.
 - Complete Control Center beyond the initial URI-ingestion workbench: service/model configuration, retrieval explorer, document/index management, job history, metrics, and maintenance controls.
 - Multi-page bounded crawling, robots.txt policy, DNS-to-connection pinning, durable ingestion jobs, retries, and scheduled source refresh.
 - Authentication, partition enforcement, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging.
