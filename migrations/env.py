@@ -18,6 +18,7 @@ from ensemble.memory_store import memory_metadata
 from ensemble.ga_store import ga_metadata
 from ensemble.thompson_store import thompson_metadata
 from ensemble.learning_store import learning_metadata
+from ensemble.config import resolve_database_url
 
 config = context.config
 configured_url = os.getenv("ENSEMBLE_DATABASE_URL")
