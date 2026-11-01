@@ -58,7 +58,7 @@ Not yet implemented:
 - Integration of Index revision decisions into Knowledge publication and document ingestion.
 - Broader learned/entity extraction beyond the POC's rule-based identifier extraction.
 - Any future model-backed intent providers, which are not part of the current POC behavior.
-- Sourced knowledge records and durable episodic memory/session-event ledger.
+- Durable episodic memory/session-event ledger.
 - Control Center web interface and operational controls.
 - Authentication, partition enforcement, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging.
 
