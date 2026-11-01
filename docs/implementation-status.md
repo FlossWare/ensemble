@@ -47,6 +47,7 @@ Implemented on the parity branch (GitHub Actions has verified the latest complet
 - POC-compatible explainable reciprocal-rank fusion capability and REST endpoints.
 - POC vector collection REST operations and durable SQLite collection/record storage; ANN indexing remains intentionally absent.
 - POC graph node/edge mutation, deterministic identities, typed queries, bounded directional traversal, and SQLite persistence.
+- Initial SQLite-backed episodic Memory capability on the same REST listener: named memory read/write, append, append-once with payload-digest conflict detection, entries, list, lexical keyword search, context-aware recall, and deterministic chunking. Migration `0006_memory` persists memory documents and session-event records.
 - POC-compatible reranking REST endpoint and optional local cross-encoder provider (local model installation/runtime verification pending).
 - Browser Control Center served by the same REST application at /control, with a URI preview and explicit ingest workflow.
 - Bounded public-URI fetching, HTML/plain-text extraction, local/private destination rejection, redirect limits, response-size limits, and preview-only operation.
@@ -62,7 +63,7 @@ Not yet implemented:
 - Generalize the Index-to-Knowledge publication pipeline to all document ingestion paths; the URI scraper currently uses it.
 - Broader learned/entity extraction beyond the POC's rule-based identifier extraction.
 - Any future model-backed intent providers, which are not part of the current POC behavior.
-- Durable episodic memory/session-event ledger and POC adjunct capabilities Learning, Thompson, GA Tuning, and scrape-ledger. GA Tuning is now explicitly in parity scope; its optimizer, five evaluator families, parameter/result schemas, scheduled execution, artifacts, and dashboard/control workflows are not implemented yet.
+- Remaining POC Memory parity: semantic and hybrid search, embedding-backed memory indexing, Markdown ingestion and reconciliation, knowledge status, search-index warm-up/readiness semantics, and full session-event compatibility. Learning, Thompson, GA Tuning, and scrape-ledger remain unimplemented. GA Tuning is explicitly in parity scope; its optimizer, five evaluator families, parameter/result schemas, scheduled execution, artifacts, and dashboard/control workflows are not implemented yet.
 - Complete Control Center beyond the initial URI-ingestion workbench: service/model configuration, retrieval explorer, document/index management, job history, metrics, and maintenance controls.
 - Multi-page bounded crawling, robots.txt policy, DNS-to-connection pinning, durable ingestion jobs, retries, and scheduled source refresh.
 - Authentication, partition enforcement, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging.
