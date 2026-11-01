@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from .chunking import Chunker
+from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chunk as chunk_text, describe_profiles as describe_chunk_profiles
 from .embeddings import configured_embedding_provider
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
@@ -87,7 +87,37 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "tokenization", "extraction", "intent", "ranking"],
+            "capabilities": ["documents", "search", "chunking", "tokenization", "extraction", "intent", "ranking"],
+        }
+
+    @app.get("/api/v1/chunking/health", tags=["chunking"])
+    async def chunking_health():
+        return {"ok": True, "service": "chunking"}
+
+    @app.get("/api/v1/chunking/ready", tags=["chunking"])
+    async def chunking_ready():
+        return {"ok": True, "ready": True, "profiles": sorted(CHUNKING_PROFILES)}
+
+    @app.get("/api/v1/chunking/profiles", tags=["chunking"])
+    async def chunking_profiles():
+        return {"ok": True, "profiles": describe_chunk_profiles()}
+
+    @app.post("/api/v1/chunking/chunk", tags=["chunking"])
+    async def chunk_document(payload: dict[str, Any]):
+        profile = payload.get("profile")
+        try:
+            chunks = chunk_text(
+                profile,
+                payload.get("source_id"),
+                payload.get("text"),
+                payload.get("media_type", "text/plain"),
+            )
+        except ChunkingError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        return {
+            "ok": True,
+            "profile": {"name": profile, "version": CHUNKING_PROFILES[profile]["version"]},
+            "chunks": chunks,
         }
 
     @app.get("/api/v1/tokenization/health", tags=["tokenization"])
