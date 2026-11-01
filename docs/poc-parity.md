@@ -80,6 +80,7 @@ The POC capability set must be inspectable and operable from a real browser UI, 
 | Memory and Knowledge | Inspect scoped records/events, provenance, revisions, recall results and lifecycle operations |
 | Models and Providers | Inspect embedding/reranking model IDs, revisions, dimensions, runtime/device/precision, configured providers and failures |
 | Configuration | View and safely change supported chunking, tokenization, retrieval, ranking, provider and timeout settings |
+| GA Tuning | Configure and launch bounded runs, inspect fitness history and candidate parameters, compare candidates, and explicitly approve export without automatic live application |
 | Operations | Trigger permitted ingestion/reindex/maintenance operations, inspect jobs/results, confirm destructive actions |
 | Diagnostics | Structured logs, correlation IDs, dependency failures, latency breakdowns, persistence health and exportable diagnostics |
 
