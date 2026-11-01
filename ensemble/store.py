@@ -8,7 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Integer, JSON, MetaData,
-    String, Table, Text, UniqueConstraint, delete, func, insert, select, update,
+    String, Table, Text, UniqueConstraint, delete, func, insert, inspect, select, update,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -114,8 +114,19 @@ class SqlDocumentStore:
         self.chunks = chunks
 
     async def initialize(self) -> None:
-        async with self.engine.begin() as connection:
-            await connection.run_sync(self.metadata.create_all)
+        async with self.engine.connect() as connection:
+            tables = await connection.run_sync(
+                lambda sync_connection: inspect(sync_connection).get_table_names()
+            )
+        if "alembic_version" not in tables:
+            raise RuntimeError(
+                "Ensemble database schema is not initialized; run 'alembic upgrade head'"
+            )
+        missing = {"ensemble_documents", "ensemble_chunks"} - set(tables)
+        if missing:
+            raise RuntimeError(
+                "Ensemble database schema is incomplete; run 'alembic upgrade head'"
+            )
 
     async def close(self) -> None:
         await self.engine.dispose()
