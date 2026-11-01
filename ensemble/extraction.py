@@ -11,7 +11,7 @@ CONFIDENCE_EXACT = 1.0
 CONFIDENCE_UNCERTAIN = 0.4
 
 PATTERNS = [
-    ("url", re.compile(r"https?://[^\s<>\\"')]+"), True),
+    ("url", re.compile(r"""https?://[^\s<>"')]+"""), True),
     ("uuid", re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"), True),
     ("issue_key", re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d{1,7}\b"), True),
     ("path", re.compile(r"(?<![\w/])(?:~|\.{1,2})?/[\w.\-/]+|(?<![\w/])[\w.\-]+(?:/[\w.\-]+)+"), True),
