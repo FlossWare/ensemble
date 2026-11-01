@@ -35,8 +35,12 @@ The POC README declares 13 services. All 13 are in scope.
 | Extraction | services/extraction, port 8778, extract | Exact identifier extraction and uncertain entity candidates with evidence, offsets and confidence | POC rule set and REST routes added; parity tests authored, CI not yet verified | Adapt |
 | Intent | services/intent, port 8779, classify | Explainable intent labels, confidence, matched evidence and per-label scores | POC rule set and REST routes added; parity tests authored, CI not yet verified | Adapt |
 | Ranking | services/ranking, port 8780, rank | Deterministic reciprocal-rank fusion with per-list score contributions and stable tie-breaking | POC-compatible fusion logic and REST routes added; parity tests authored, CI not yet verified | Adapt |
-| Knowledge | services/knowledge, port 8781, records/tombstone | Sourced records, origin/locator provenance, revision checks through Index, idempotency and deletion | Document ingestion exists; knowledge record lifecycle and provenance contract absent | Adapt |
+| Knowledge | services/knowledge, port 8781, records/tombstone | Sourced records, origin/locator provenance, revision checks through Index, idempotency and deletion | SQLite sourced-record storage, SHA-256 content digest, Index-gated revision decisions, provenance, tombstones and REST routes implemented; tests authored, CI not yet verified | Adapt |
 | Memory | services/memory, port 8767, memory operations and session-events ledger | Durable episodic memory, session event ledger, concurrent access, path/scope validation, recall and memory lifecycle | Not implemented as POC-equivalent memory capability | Replace |
+
+## Knowledge implementation
+
+Ensemble stores the canonical sourced record, content SHA-256, origin/locator provenance and profile snapshot in SQLite. Every publication consults the Index capability first; only accepted or duplicate revisions are stored. Tombstones are recorded in Index before the knowledge record is marked deleted, and future revisions remain blocked. This preserves the POC's cross-capability decision flow without making the POC service or database a runtime dependency. Alembic migration `0004_knowledge_records` owns the record schema.
 
 ## Index implementation
 
