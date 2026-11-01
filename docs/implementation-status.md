@@ -33,6 +33,7 @@ Implemented:
 - Exact identifier/entity extraction with uncertainty and confidence metadata.
 - Explainable rule-based intent classification with evidence and per-label scores.
 - Deterministic reciprocal-rank fusion with per-list contributions and tie-breaking.
+- Optional local cross-encoder reranking provider with pinned model identity, bounded inputs, serialized scoring, and fail-closed readiness.
 - Lexical retrieval and reciprocal-rank fusion.
 - Vector similarity over stored chunk embeddings when embeddings are enabled.
 - Document and chunk provenance in search responses.
@@ -44,13 +45,14 @@ Implemented on the parity branch (regression tests authored; execution still req
 - POC-compatible identifier extraction capability and REST endpoints.
 - POC-compatible rule-based intent classification capability and REST endpoints.
 - POC-compatible explainable reciprocal-rank fusion capability and REST endpoints.
+- POC-compatible reranking REST endpoint and optional local cross-encoder provider (model installation/runtime verification pending).
 
 Not yet implemented:
 - The remaining POC capability surface listed in [POC capability parity](poc-parity.md).
 - Integration of the new versioned chunk profiles into document ingestion and persisted chunk provenance.
 - Additional tokenization/analyzer profiles beyond lexical-v1.
 - Dedicated scalable vector index and vector-store operations.
-- Cross-encoder reranking.
+- Integration of reranking into the hybrid retrieval pipeline.
 - Full POC hybrid-search orchestration and degraded-dependency behavior.
 - Source manifest, revision sequencing, and tombstones as a distinct index capability.
 - Broader learned/entity extraction beyond the POC's rule-based identifier extraction.
