@@ -803,6 +803,54 @@ def create_app(
             "message": "Candidate approved for export only; no live configuration was changed.",
         }
 
+
+    @app.post("/api/v1/memory/search-semantic", tags=["memory"])
+    async def memory_search_semantic(payload: dict[str, Any]):
+        try:
+            top_k = payload.get("top_k", payload.get("limit", 10))
+            result = await active_memory_store.search_semantic(
+                payload.get("query", ""), top_k, payload.get("source")
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "results": result}
+
+    @app.post("/api/v1/memory/search-hybrid", tags=["memory"])
+    async def memory_search_hybrid(payload: dict[str, Any]):
+        try:
+            top_k = payload.get("top_k", payload.get("limit", 10))
+            result = await active_memory_store.search_hybrid(payload.get("query", ""), top_k)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "results": result}
+
+    @app.post("/api/v1/memory/ingest", tags=["memory"])
+    async def memory_ingest(payload: dict[str, Any]):
+        try:
+            result = await active_memory_store.ingest_claude_markdown(
+                payload.get("path", ""), payload.get("content", ""),
+                payload.get("sha256", ""), payload.get("metadata", {}),
+            )
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, **result}
+
+    @app.post("/api/v1/memory/reconcile", tags=["memory"])
+    async def memory_reconcile(payload: dict[str, Any]):
+        try:
+            result = await active_memory_store.reconcile_claude_markdown(
+                payload.get("source", ""), payload.get("scope", ""), payload.get("paths", [])
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, **result}
+
+    @app.get("/api/v1/memory/knowledge/status", tags=["memory"])
+    async def memory_knowledge_status():
+        return {"ok": True, **(await active_memory_store.knowledge_status())}
+
     @app.get("/api/v1/memory/health", tags=["memory"])
     async def memory_health():
         return {"ok": True, "service": "memory", "backend": "sqlite"}
