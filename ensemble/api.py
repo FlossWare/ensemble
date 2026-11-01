@@ -776,10 +776,17 @@ def create_app(
         if not isinstance(task_type, str):
             raise HTTPException(status_code=400, detail="task_type must be a string")
         try:
-            await active_thompson_store.record_outcome(
-                payload.get("model"), payload.get("success", False),
-                payload.get("cost", 0.0), payload.get("tokens", 0),
-            )
+            event_id = payload.get("event_id")
+            if event_id is not None:
+                await active_thompson_store.record_outcome_once(
+                    event_id, payload.get("model"), payload.get("success", False),
+                    payload.get("cost", 0.0), payload.get("tokens", 0),
+                )
+            else:
+                await active_thompson_store.record_outcome(
+                    payload.get("model"), payload.get("success", False),
+                    payload.get("cost", 0.0), payload.get("tokens", 0),
+                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "request_id": payload.get("request_id") or str(uuid4())}
