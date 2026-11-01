@@ -16,5 +16,31 @@
 <h2 id="title"></h2><p id="metadata"></p><pre id="body"></pre><h3>Discovered links (not crawled)</h3><div id="links"></div>
 <button id="ingest" type="button">Ingest this page</button>
 </section>
+<section id="ga-panel">
+<h2>Genetic Algorithm tuning</h2>
+<p>Runs five synthetic local evaluators. Fitness is experimental evidence, not production validation. Candidate approval records an export candidate and does not change live settings.</p>
+<form id="ga-form">
+<label for="ga-population">Population size (15-200)</label>
+<input id="ga-population" type="number" min="15" max="200" step="5" value="50" required>
+<label for="ga-generations">Generations (1-50)</label>
+<input id="ga-generations" type="number" min="1" max="50" value="25" required>
+<label for="ga-seed">Seed (optional, for reproducibility)</label>
+<input id="ga-seed" type="number" min="0" max="4294967295" placeholder="Generate a seed">
+<button id="ga-start" type="submit">Start GA run</button>
+<button id="ga-refresh" type="button">Refresh runs</button>
+</form>
+<p id="ga-status">No run selected.</p>
+<div id="ga-runs"></div>
+<div id="ga-detail" hidden>
+<h3>Run details</h3>
+<pre id="ga-result"></pre>
+<label for="ga-approved-by">Approved by</label>
+<input id="ga-approved-by" type="text" maxlength="256" placeholder="Local operator">
+<label for="ga-reason">Approval reason</label>
+<input id="ga-reason" type="text" maxlength="2048" placeholder="Why this candidate is approved for export">
+<div id="ga-candidates"></div>
+<p>Approval is recorded for export only. Ensemble does not apply candidate parameters to live consumers.</p>
+</div>
+</section>
 <script src="/control.js"></script>
 </body></html>
