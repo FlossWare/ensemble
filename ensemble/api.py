@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from contextlib import asynccontextmanager
 from typing import Any
@@ -574,11 +575,40 @@ def create_app(
     async def scrape_and_ingest(payload: dict[str, Any]):
         try:
             preview = await preview_uri(payload.get("uri"))
-            document = DocumentIn(source_id=preview["final_uri"], revision=payload.get("revision", 1), title=preview["title"], content=preview["text"])
+            source_id = preview["final_uri"]
+            current = await active_index_store.get_source(source_id)
+            revision = payload.get("revision")
+            if revision is None:
+                revision = (current["high_sequence"] + 1) if current else 1
+            digest = hashlib.sha256(preview["text"].encode("utf-8")).hexdigest()
+            profiles = {"chunking": "legacy-char-window-1200-160", "embedding": embeddings.status().get("model") or "disabled"}
+            decision = await active_index_store.record_revision(source_id, revision, digest, profiles)
+            if decision["decision"] not in {"accepted", "duplicate"}:
+                raise HTTPException(status_code=409, detail="source revision rejected: " + decision["decision"])
+            document = DocumentIn(source_id=source_id, revision=revision, title=preview["title"], content=preview["text"])
             result = await documents.ingest(document)
-            return {"ok": True, "source": preview, "document": result}
+            await active_knowledge_store.put({
+                "source_id": source_id, "revision_sequence": revision, "revision_id": digest,
+                "title": preview["title"], "content": preview["text"], "origin": "web",
+                "locator": source_id, "profiles": profiles,
+            })
+            if embeddings.available:
+                indexed = await document_store.all_chunks()
+                records = [item for item in indexed if item.document.id == result.id and item.chunk.embedding]
+                if records:
+                    status = embeddings.status()
+                    dimensions = status.get("dimensions") or len(records[0].chunk.embedding)
+                    await active_vector_store.upsert("documents", status.get("model") or "configured", dimensions, [
+                        {"id": str(item.chunk.id), "embedding": item.chunk.embedding, "document": item.chunk.content,
+                         "metadata": {"url": source_id, "source_id": source_id, "content_sha256": digest,
+                                      "revision": revision, "title": preview["title"]}}
+                        for item in records
+                    ])
+            return {"ok": True, "decision": decision["decision"], "source": preview, "document": result}
         except ScrapeError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        except HTTPException:
+            raise
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
