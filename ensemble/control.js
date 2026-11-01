@@ -38,3 +38,15 @@ ingest.addEventListener("click",async()=>{
   status.textContent="Ingested: "+JSON.stringify(result.document);
  }catch(error){status.textContent="Ingestion failed: "+error.message;ingest.disabled=false;}
 });
+
+const refreshHealth=document.getElementById("refresh-health");
+const healthResult=document.getElementById("health-result");
+refreshHealth.addEventListener("click",async()=>{
+ refreshHealth.disabled=true;
+ try{
+  const response=await fetch("/ready");
+  const payload=await response.json();
+  healthResult.textContent=JSON.stringify(payload,null,2);
+ }catch(error){healthResult.textContent="Readiness check failed: "+error.message;}
+ finally{refreshHealth.disabled=false;}
+});
