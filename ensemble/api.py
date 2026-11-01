@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import re
 import secrets
+import random
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
@@ -31,6 +32,8 @@ from .scraping import ScrapeError, preview_uri
 from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
 from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
 from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
+from .thompson import select_model as thompson_select_model
+from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -65,6 +68,7 @@ def create_app(
     graph_store: GraphStore | None = None,
     memory_store: MemoryStore | None = None,
     ga_store: GAStore | None = None,
+    thompson_store: ThompsonStore | None = None,
 ) -> FastAPI:
     document_store = store or SqlDocumentStore(database_url)
     embeddings = embedding_provider or configured_embedding_provider()
@@ -93,6 +97,11 @@ def create_app(
         InMemoryGAStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteGAStore(database_url)
     )
+    active_thompson_store = thompson_store or (
+        InMemoryThompsonStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteThompsonStore(database_url)
+    )
+    thompson_rng = random.Random()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -104,8 +113,10 @@ def create_app(
             await active_graph_store.initialize()
             await active_memory_store.initialize()
             await active_ga_store.initialize()
+            await active_thompson_store.initialize()
             yield
         finally:
+            await active_thompson_store.close()
             await active_ga_store.close()
             await active_memory_store.close()
             await active_graph_store.close()
@@ -132,6 +143,7 @@ def create_app(
     app.state.graph_store = active_graph_store
     app.state.memory_store = active_memory_store
     app.state.ga_store = active_ga_store
+    app.state.thompson_store = active_thompson_store
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -161,7 +173,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "memory", "ga"],
+            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "memory", "ga", "thompson"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
@@ -585,6 +597,87 @@ def create_app(
         return {"ok": True, "results": results}
 
 
+
+
+    async def thompson_select(payload: dict[str, Any]):
+        task_type = payload.get("task_type", "unknown")
+        required_capability = payload.get("required_capability", 0.5)
+        max_cost = payload.get("max_cost", float("inf"))
+        if "request_id" in payload and (not isinstance(payload["request_id"], str) or len(payload["request_id"]) > 256):
+            raise HTTPException(status_code=400, detail="request_id must be a string of at most 256 characters")
+        try:
+            state = await active_thompson_store.get_state()
+            model = thompson_select_model(state, task_type, required_capability, max_cost, thompson_rng)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "model": model, "request_id": payload.get("request_id") or str(uuid4())}
+
+    async def thompson_record(payload: dict[str, Any]):
+        task_type = payload.get("task_type", "unknown")
+        if not isinstance(task_type, str):
+            raise HTTPException(status_code=400, detail="task_type must be a string")
+        try:
+            await active_thompson_store.record_outcome(
+                payload.get("model"), payload.get("success", False),
+                payload.get("cost", 0.0), payload.get("tokens", 0),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "request_id": payload.get("request_id") or str(uuid4())}
+
+    async def thompson_reset(payload: dict[str, Any]):
+        try:
+            ok = await active_thompson_store.reset(payload.get("model"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": ok, "request_id": payload.get("request_id") or str(uuid4())}
+
+    @app.get("/api/v1/thompson/health", tags=["thompson"])
+    async def thompson_health():
+        return {"ok": True, "service": "thompson", "backend": "sqlite"}
+
+    @app.get("/api/v1/thompson/ready", tags=["thompson"])
+    async def thompson_ready():
+        try:
+            await active_thompson_store.get_state()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Thompson persistence unavailable") from exc
+        return {"ok": True, "ready": True, "algorithm": "beta-thompson-sampling"}
+
+    @app.get("/api/v1/thompson/ping", tags=["thompson"])
+    async def thompson_ping():
+        return {"ok": True, "message": "pong"}
+
+    @app.get("/api/v1/thompson/state", tags=["thompson"])
+    async def thompson_state():
+        return {"ok": True, "state": await active_thompson_store.get_state()}
+
+    @app.post("/api/v1/thompson/select", tags=["thompson"])
+    async def thompson_select_route(payload: dict[str, Any]):
+        return await thompson_select(payload)
+
+    @app.post("/api/v1/thompson/outcomes", tags=["thompson"])
+    async def thompson_outcome_route(payload: dict[str, Any]):
+        return await thompson_record(payload)
+
+    @app.post("/api/v1/thompson/reset", tags=["thompson"])
+    async def thompson_reset_route(payload: dict[str, Any]):
+        return await thompson_reset(payload)
+
+    @app.post("/api/v1/thompson", tags=["thompson"])
+    async def thompson_compatibility_route(payload: dict[str, Any]):
+        action = payload.get("action")
+        if action == "select_model":
+            return await thompson_select(payload)
+        if action == "record_outcome":
+            return await thompson_record(payload)
+        if action == "get_state":
+            return {"ok": True, "state": await active_thompson_store.get_state(), "request_id": payload.get("request_id") or str(uuid4())}
+        if action == "reset":
+            return await thompson_reset(payload)
+        if action == "ping":
+            return {"ok": True, "message": "pong", "request_id": payload.get("request_id") or str(uuid4())}
+        raise HTTPException(status_code=400, detail=f"unknown Thompson action: {action}")
 
     @app.get("/api/v1/ga/health", tags=["ga"])
     async def ga_health():
