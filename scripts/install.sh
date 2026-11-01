@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "Run as root: sudo ./scripts/install.sh" >&2
+  echo "Run as root: sudo bash ./scripts/install.sh" >&2
   exit 1
 fi
 
@@ -60,6 +60,10 @@ set -a
 set +a
 EFFECTIVE_ROOT="${ENSEMBLE_PERSISTENCE_ROOT:-${PERSISTENCE_ROOT}}"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${EFFECTIVE_ROOT}"
+DATABASE_PARENT="$("${VENV_DIR}/bin/python" -c 'import os; from sqlalchemy.engine import make_url; from ensemble.config import resolve_database_url; u=make_url(resolve_database_url()); print(os.path.dirname(os.path.abspath(u.database)) if u.database not in (None, "", ":memory:") else "")')"
+if [[ -n "${DATABASE_PARENT}" ]]; then
+  install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${DATABASE_PARENT}"
+fi
 
 runuser -u "${SERVICE_USER}" -- env \
   ENSEMBLE_HOST="${ENSEMBLE_HOST:-127.0.0.1}" \
@@ -87,6 +91,11 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=${EFFECTIVE_ROOT}
+EOF
+if [[ -n "${DATABASE_PARENT}" && "${DATABASE_PARENT}" != "${EFFECTIVE_ROOT}" ]]; then
+  echo "ReadWritePaths=${DATABASE_PARENT}" >> "${SERVICE_FILE}"
+fi
+cat >> "${SERVICE_FILE}" <<EOF
 UMask=0027
 
 [Install]
