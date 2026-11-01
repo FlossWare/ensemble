@@ -16,7 +16,12 @@ def test_control_panel_is_served_by_the_api():
         response = client.get("/control")
         assert response.status_code == 200
         assert "Ensemble Control Center" in response.text
-        assert client.get("/control.js").status_code == 200
+        assert "Genetic Algorithm tuning" in response.text
+        assert "Start GA run" in response.text
+        script = client.get("/control.js")
+        assert script.status_code == 200
+        assert "/api/v1/ga/runs" in script.text
+        assert "Approve for export" in script.text
 
 
 def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch):
