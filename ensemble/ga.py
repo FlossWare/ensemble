@@ -104,8 +104,16 @@ def _compression_fitness(p: dict[str, float], rng: random.Random) -> float:
     for text in corpus:
         sentences = [part.strip() + "." for part in text.split(". ") if part.strip()]
         keep = max(1, int(len(sentences) * (1.0 - level / 10.0)))
-        chosen = sentences[:keep]
-        compressed = " ".join(chosen)
+        if keep >= len(sentences):
+            compressed = text
+        else:
+            importance = []
+            for index, sentence in enumerate(sentences):
+                position_score = 1.0 - abs(index - len(sentences) / 2) / len(sentences)
+                length_score = min(1.0, len(sentence) / 100.0)
+                importance.append((index, 0.4 * position_score + 0.6 * length_score))
+            selected = sorted(index for index, _ in sorted(importance, key=lambda item: item[1], reverse=True)[:keep])
+            compressed = " ".join(sentences[index] for index in selected)
         original_count += len(_tokens(text))
         compressed_count += len(_tokens(compressed))
         similarities.append(_cosine_similarity(text, compressed))
@@ -247,38 +255,45 @@ def _matrix_fitness(p: dict[str, float], rng: random.Random) -> float:
 
 def _dashboard_fitness(p: dict[str, float], rng: random.Random) -> float:
     models = ("haiku", "sonnet", "opus")
-    params = {"haiku": [1.0, 2.0], "sonnet": [2.0, 1.5], "opus": [3.0, 1.0]}
+    model_params = {
+        "haiku": [1.0, 2.0], "sonnet": [2.0, 1.5], "opus": [3.0, 1.0]
+    }
     costs = {"haiku": .1, "sonnet": 1.0, "opus": 10.0}
-    history, correct, regressions, max_quality = [], 0, 0, 0.0
+    tasks = []
     for task_id in range(500):
         drift = 1.0 + .3 * math.sin(task_id / 100)
         qualities = {
-            model: rng.betavariate(params[model][0] * drift, params[model][1] / drift)
+            model: rng.betavariate(model_params[model][0] * drift, model_params[model][1] / drift)
             for model in models
         }
         optimal = max(qualities, key=qualities.get)
-        exploration = p["exploration_decay"] ** (task_id / 500)
+        baseline_selected = rng.choice(models)
+        tasks.append((qualities[baseline_selected], baseline_selected, optimal))
+    history, correct, regressions, max_quality = [], 0, 0, 0.0
+    for task_id, (actual_quality, _baseline_model, optimal) in enumerate(tasks):
+        exploration = p["exploration_decay"] ** (task_id / len(tasks))
         samples = {}
         for model in models:
-            alpha, beta = params[model]
+            alpha, beta = model_params[model]
             sample = rng.betavariate(alpha, beta)
             if rng.random() < (1.0 - exploration):
                 sample = rng.random()
             samples[model] = sample
         selected = max(samples, key=samples.get)
-        quality = qualities[selected]
-        params[selected][0 if quality >= .7 else 1] += p["learning_rate"]
         correct += int(selected == optimal)
-        history.append(quality)
-        max_quality = max(max_quality, quality)
+        model_params[selected][0 if actual_quality >= .7 else 1] += p["learning_rate"]
+        history.append(actual_quality)
+        max_quality = max(max_quality, actual_quality)
         if task_id > 50 and sum(history[-50:]) / 50 < max_quality * .95:
             regressions += 1
+    accuracy = correct / len(tasks)
+    regression_rate = regressions / (len(tasks) / 50)
+    stability = 1.0 - min(1.0, regression_rate * .5)
     first, last = sum(history[:50]) / 50, sum(history[-50:]) / 50
-    improvement = max(0.0, (last - first) / first) if first else 0.0
-    stability = 1.0 - min(1.0, (regressions / 10.0) * .5)
-    speed_component = min(1.0, improvement / .2)
-    accuracy_component = min(1.0, (correct / 500) * 1.2)
-    return max(0.0, min(1.0, .4 * speed_component + .4 * stability + .2 * accuracy_component))
+    improvement = max(0.0, (last - first) / first) if first > 0 else 0.0
+    speed = min(1.0, improvement / .2)
+    accuracy_component = min(1.0, accuracy * 1.2)
+    return max(0.0, min(1.0, .4 * speed + .4 * stability + .2 * accuracy_component))
 
 
 EVALUATORS: dict[str, Callable[[dict[str, float], random.Random], float]] = {
