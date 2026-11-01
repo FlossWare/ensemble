@@ -28,3 +28,14 @@ def test_ingest_then_lexical_search_returns_provenance():
     assert hits[0]["source_id"] == "architecture-note"
     assert hits[0]["document_id"] == document["id"]
     assert hits[0]["lexical_score"] > 0
+
+
+def test_validation_errors_use_problem_details():
+    client = TestClient(create_app())
+    response = client.post("/api/v1/documents", json={})
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+    body = response.json()
+    assert body["status"] == 422
+    assert body["code"] == "request-validation-failed"
+    assert body["correlationId"]
