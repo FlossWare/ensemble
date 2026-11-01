@@ -5,6 +5,7 @@ const panel=document.getElementById("preview");
 const title=document.getElementById("title");
 const metadata=document.getElementById("metadata");
 const body=document.getElementById("body");
+const links=document.getElementById("links");
 const ingest=document.getElementById("ingest");
 let ready=false;
 async function request(path,payload){
@@ -20,6 +21,8 @@ form.addEventListener("submit",async event=>{
   title.textContent=result.title;
   metadata.textContent=result.final_uri+" | "+result.characters+" characters | "+result.media_type;
   body.textContent=result.text;
+  links.replaceChildren();
+  for(const href of result.links){const link=document.createElement("a");link.href=href;link.textContent=href;link.target="_blank";link.rel="noopener noreferrer";links.append(link,document.createElement("br"));}
   panel.hidden=false;ready=true;ingest.disabled=false;
   status.textContent="Preview ready. No content has been ingested.";
  }catch(error){status.textContent="Preview failed: "+error.message;}
