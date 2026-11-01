@@ -116,3 +116,79 @@ def test_memory_chunking_and_name_validation():
             json={"name": "../outside", "content": "no"},
         )
         assert invalid.status_code == 400
+
+
+
+def test_memory_knowledge_ingest_is_idempotent_and_reconcile_marks_stale():
+    import hashlib
+
+    content = "# Search Engineering\nEnsemble memory preserves provenance and retrieval context."
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    payload = {
+        "path": "/workspace/skills/search.md",
+        "content": content,
+        "sha256": digest,
+        "metadata": {"scope": "/workspace", "title": "Search"},
+    }
+    with client() as http:
+        first = http.post("/api/v1/memory/ingest", json=payload)
+        second = http.post("/api/v1/memory/ingest", json=payload)
+        assert first.status_code == 200
+        assert first.json()["status"] == "ingested"
+        assert second.status_code == 200
+        assert second.json()["status"] == "unchanged"
+        assert http.get("/api/v1/memory/knowledge/status").json()["indexed_document_count"] == 1
+
+        semantic = http.post(
+            "/api/v1/memory/search-semantic",
+            json={"query": "provenance retrieval context", "source": "claude-code"},
+        )
+        assert semantic.status_code == 200
+        assert semantic.json()["results"][0]["source"] == "claude-code"
+        hybrid = http.post(
+            "/api/v1/memory/search-hybrid",
+            json={"query": "provenance retrieval"},
+        )
+        assert hybrid.status_code == 200
+        assert hybrid.json()["results"]
+
+        reconciled = http.post(
+            "/api/v1/memory/reconcile",
+            json={"source": "claude-code", "scope": "/workspace", "paths": []},
+        )
+        assert reconciled.status_code == 200
+        assert reconciled.json()["count"] == 1
+        assert http.get("/api/v1/memory/knowledge/status").json()["indexed_document_count"] == 0
+        stale_search = http.post(
+            "/api/v1/memory/search-semantic",
+            json={"query": "provenance", "source": "claude-code"},
+        )
+        assert stale_search.json()["results"] == []
+
+
+def test_memory_knowledge_ingest_rejects_bad_digest_and_scope_escape():
+    import hashlib
+
+    content = "A memory source."
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    with client() as http:
+        bad_digest = http.post(
+            "/api/v1/memory/ingest",
+            json={
+                "path": "/workspace/a.md",
+                "content": content,
+                "sha256": "0" * 64,
+                "metadata": {"scope": "/workspace"},
+            },
+        )
+        escaped = http.post(
+            "/api/v1/memory/ingest",
+            json={
+                "path": "/outside/a.md",
+                "content": content,
+                "sha256": digest,
+                "metadata": {"scope": "/workspace"},
+            },
+        )
+        assert bad_digest.status_code == 400
+        assert escaped.status_code == 400
