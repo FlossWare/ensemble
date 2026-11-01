@@ -20,11 +20,11 @@ from ensemble.thompson_store import thompson_metadata
 from ensemble.learning_store import learning_metadata
 
 config = context.config
-environment_url = os.getenv("ENSEMBLE_DATABASE_URL")
-if environment_url:
-    config.set_main_option("sqlalchemy.url", environment_url.replace("%", "%%"))
+configured_url = os.getenv("ENSEMBLE_DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+resolved_url = resolve_database_url(configured_url)
+config.set_main_option("sqlalchemy.url", resolved_url.replace("%", "%%"))
 
-database_url = make_url(config.get_main_option("sqlalchemy.url"))
+database_url = make_url(resolved_url)
 if database_url.get_backend_name() != "sqlite":
     raise RuntimeError("Ensemble migrations support SQLite only; alternative persistence implementations belong to FlossWare proper.")
 if database_url.database not in (None, "", ":memory:"):
