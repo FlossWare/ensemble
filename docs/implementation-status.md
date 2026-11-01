@@ -52,10 +52,10 @@ Not yet implemented:
 - The remaining POC capability surface listed in [POC capability parity](poc-parity.md).
 - Integration of the new versioned chunk profiles into document ingestion and persisted chunk provenance.
 - Additional tokenization/analyzer profiles beyond lexical-v1.
-- Dedicated scalable vector index and vector-store operations.
+- Dedicated approximate-nearest-neighbor vector index; exact dot-product search currently scans SQLite collection records.
 - Integration of reranking into the hybrid retrieval pipeline.
 - Full POC hybrid-search orchestration and degraded-dependency behavior.
-- Source manifest, revision sequencing, and tombstones as a distinct index capability.
+- Integration of Index revision decisions into Knowledge publication and document ingestion.
 - Broader learned/entity extraction beyond the POC's rule-based identifier extraction.
 - Any future model-backed intent providers, which are not part of the current POC behavior.
 - Sourced knowledge records and durable episodic memory/session-event ledger.
