@@ -28,21 +28,32 @@ Implemented:
 - Durable SQLite document and chunk storage.
 - Deterministic character-window chunking with overlap.
 - Optional OpenAI-compatible embedding provider.
+- Versioned lexical-v1 tokenization with deterministic compound identifier handling and source offsets.
+- Exact identifier/entity extraction with uncertainty and confidence metadata.
+- Explainable rule-based intent classification with evidence and per-label scores.
+- Deterministic reciprocal-rank fusion with per-list contributions and tie-breaking.
 - Lexical retrieval and reciprocal-rank fusion.
 - Vector similarity over stored chunk embeddings when embeddings are enabled.
 - Document and chunk provenance in search responses.
 - Tests for API behavior, migration setup, restart durability, and revision replacement.
 - Python 3.12 GitHub Actions test workflow.
 
+Implemented on the parity branch (regression tests authored; execution still requires CI verification):
+- POC-compatible lexical-v1 tokenization capability and REST endpoints.
+- POC-compatible identifier extraction capability and REST endpoints.
+- POC-compatible rule-based intent classification capability and REST endpoints.
+- POC-compatible explainable reciprocal-rank fusion capability and REST endpoints.
+
 Not yet implemented:
 - The remaining POC capability surface listed in [POC capability parity](poc-parity.md).
-- Versioned tokenization/analyzer profiles.
+- Additional tokenization/analyzer profiles beyond lexical-v1.
 - Versioned chunk profiles (Markdown and message profiles).
 - Dedicated scalable vector index and vector-store operations.
 - Cross-encoder reranking.
 - Full POC hybrid-search orchestration and degraded-dependency behavior.
 - Source manifest, revision sequencing, and tombstones as a distinct index capability.
-- Exact identifier/entity extraction and evidence-backed intent classification.
+- Broader learned/entity extraction beyond the POC's rule-based identifier extraction.
+- Intent classification parity tests and any future model-backed intent providers.
 - Sourced knowledge records and durable episodic memory/session-event ledger.
 - Control Center web interface and operational controls.
 - Authentication, partition enforcement, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging.
