@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import re
+import hashlib
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -41,6 +43,19 @@ entries = Table(
     UniqueConstraint("name", "event_id", name="uq_ensemble_memory_event"),
 )
 Index("ix_ensemble_memory_entries_name_created", entries.c.name, entries.c.created_at)
+memory_sources = Table(
+    "ensemble_memory_sources",
+    memory_metadata,
+    Column("source_path", String(4096), primary_key=True),
+    Column("document_name", String(128), ForeignKey("ensemble_memories.name", ondelete="CASCADE"), nullable=False, unique=True),
+    Column("source", String(64), nullable=False),
+    Column("scope", String(4096), nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("metadata", JSON, nullable=False),
+    Column("stale", Integer, nullable=False, default=0),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+Index("ix_ensemble_memory_sources_scope_stale", memory_sources.c.scope, memory_sources.c.stale)
 
 
 def validate_memory_name(name: Any) -> str:
@@ -60,6 +75,46 @@ def _canonical_payload(payload: dict[str, Any]) -> tuple[str, int]:
     return encoded, size
 
 
+
+def _validate_ingest(source_path: Any, content: Any, sha256: Any, metadata: Any) -> tuple[str, dict[str, Any]]:
+    if not isinstance(source_path, str) or not Path(source_path).is_absolute() or len(source_path) > 4096:
+        raise ValueError("source_path must be an absolute path")
+    if not isinstance(content, str):
+        raise ValueError("content must be a string")
+    if len(content) > MAX_CONTENT_CHARS:
+        raise OverflowError(f"content exceeds {MAX_CONTENT_CHARS} characters")
+    if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise ValueError("sha256 must be a lowercase SHA-256 digest")
+    if hashlib.sha256(content.encode("utf-8")).hexdigest() != sha256:
+        raise ValueError("sha256 does not match content")
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be an object")
+    scope = metadata.get("scope")
+    if not isinstance(scope, str) or not Path(scope).is_absolute() or len(scope) > 4096:
+        raise ValueError("metadata.scope must be an absolute path")
+    if not Path(source_path).is_relative_to(Path(scope)):
+        raise ValueError("source_path must be within metadata.scope")
+    _canonical_payload(metadata)
+    return scope, dict(metadata)
+
+
+def _validate_reconciliation(source: Any, scope: Any, paths: Any) -> set[str]:
+    if source != "claude-code":
+        raise ValueError("unsupported reconciliation source")
+    if not isinstance(scope, str) or not Path(scope).is_absolute() or len(scope) > 4096:
+        raise ValueError("scope must be an absolute path")
+    if not isinstance(paths, list) or len(paths) > 10000:
+        raise ValueError("paths must be a list with at most 10000 entries")
+    current = set()
+    for path in paths:
+        if not isinstance(path, str) or not Path(path).is_absolute() or not Path(path).is_relative_to(Path(scope)):
+            raise ValueError("every path must be absolute and within scope")
+        current.add(path)
+    return current
+
+
 class MemoryStore(Protocol):
     async def initialize(self) -> None: ...
     async def close(self) -> None: ...
@@ -70,6 +125,9 @@ class MemoryStore(Protocol):
     async def list_names(self) -> list[str]: ...
     async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]: ...
     async def search(self, keywords: list[str], limit: int = 50) -> list[dict[str, Any]]: ...
+    async def ingest_claude_markdown(self, source_path: str, content: str, sha256: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]: ...
+    async def reconcile_claude_markdown(self, source: str, scope: str, paths: list[str]) -> dict[str, Any]: ...
+    async def knowledge_status(self) -> dict[str, Any]: ...
 
 
 class SqliteMemoryStore:
@@ -86,7 +144,7 @@ class SqliteMemoryStore:
         async with self.engine.connect() as connection:
             from sqlalchemy import inspect
             names = await connection.run_sync(lambda conn: inspect(conn).get_table_names())
-        required = {"ensemble_memories", "ensemble_memory_entries"}
+        required = {"ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources"}
         if not required.issubset(names):
             raise RuntimeError("Memory schema is not initialized; run 'alembic upgrade head'")
 
@@ -210,6 +268,68 @@ class SqliteMemoryStore:
                 results.append({"name": name, "score": len(matched) / len(terms), "matched": matched})
         return sorted(results, key=lambda item: (-item["score"], item["name"]))[:limit]
 
+    async def ingest_claude_markdown(
+        self, source_path: str, content: str, sha256: str, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        scope, meta = _validate_ingest(source_path, content, sha256, metadata)
+        document_name = "claude-code-" + hashlib.sha256(source_path.encode("utf-8")).hexdigest()[:32]
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            existing = (await connection.execute(
+                select(memory_sources.c.sha256, memory_sources.c.stale)
+                .where(memory_sources.c.source_path == source_path)
+            )).first()
+            stored = await connection.scalar(select(memories.c.content).where(memories.c.name == document_name))
+            if existing and existing.sha256 == sha256 and not existing.stale and stored is not None:
+                if hashlib.sha256(stored.encode("utf-8")).hexdigest() == sha256:
+                    return {"status": "unchanged", "source_path": source_path, "sha256": sha256}
+            await connection.execute(
+                sqlite_insert(memories).values(name=document_name, content=content, updated_at=now)
+                .on_conflict_do_update(
+                    index_elements=[memories.c.name],
+                    set_={"content": content, "updated_at": now},
+                )
+            )
+            await connection.execute(
+                sqlite_insert(memory_sources).values(
+                    source_path=source_path, document_name=document_name, source="claude-code",
+                    scope=scope, sha256=sha256, metadata=meta, stale=False, updated_at=now,
+                ).on_conflict_do_update(
+                    index_elements=[memory_sources.c.source_path],
+                    set_={"document_name": document_name, "source": "claude-code", "scope": scope,
+                          "sha256": sha256, "metadata": meta, "stale": False, "updated_at": now},
+                )
+            )
+        return {"status": "ingested", "source_path": source_path, "sha256": sha256, "document": document_name}
+
+    async def reconcile_claude_markdown(self, source: str, scope: str, paths: list[str]) -> dict[str, Any]:
+        current = _validate_reconciliation(source, scope, paths)
+        async with self.engine.begin() as connection:
+            rows = (await connection.execute(
+                select(memory_sources.c.source_path).where(
+                    memory_sources.c.source == source, memory_sources.c.scope == scope,
+                    memory_sources.c.stale.is_(False),
+                )
+            )).scalars().all()
+            stale = sorted(path for path in rows if path not in current)
+            if stale:
+                await connection.execute(
+                    update(memory_sources).where(memory_sources.c.source_path.in_(stale))
+                    .values(stale=True, updated_at=datetime.now(timezone.utc))
+                )
+        return {"status": "reconciled", "stale": stale, "count": len(stale)}
+
+    async def knowledge_status(self) -> dict[str, Any]:
+        async with self.engine.connect() as connection:
+            count = await connection.scalar(
+                select(entries.c.id.count()).select_from(memory_sources.join(
+                    memories, memory_sources.c.document_name == memories.c.name
+                )).where(memory_sources.c.source == "claude-code", memory_sources.c.stale.is_(False))
+            )
+        indexed = int(count or 0)
+        return {"source": "claude-code", "status": "available" if indexed else "empty",
+                "indexed_document_count": indexed}
+
     async def retrieve(self, name: str, context: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
         validate_memory_name(name)
         if not isinstance(context, dict):
@@ -275,6 +395,7 @@ class InMemoryMemoryStore:
         self._memories: dict[str, str] = {}
         self._entries: dict[str, list[dict[str, Any]]] = {}
         self._events: dict[tuple[str, str], str] = {}
+        self.sources: dict[str, dict[str, Any]] = {}
 
     async def initialize(self) -> None:
         return None
@@ -343,6 +464,44 @@ class InMemoryMemoryStore:
             if matched:
                 results.append({"name": name, "score": len(matched) / len(terms), "matched": matched})
         return sorted(results, key=lambda item: (-item["score"], item["name"]))[:limit]
+
+    async def ingest_claude_markdown(
+        self, source_path: str, content: str, sha256: str, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        scope, meta = _validate_ingest(source_path, content, sha256, metadata)
+        document_name = "claude-code-" + hashlib.sha256(source_path.encode("utf-8")).hexdigest()[:32]
+        existing = self.sources.get(source_path)
+        stored = self._memories.get(document_name)
+        if existing and existing["sha256"] == sha256 and not existing["stale"] and stored is not None:
+            if hashlib.sha256(stored.encode("utf-8")).hexdigest() == sha256:
+                return {"status": "unchanged", "source_path": source_path, "sha256": sha256}
+        now = datetime.now(timezone.utc).isoformat()
+        self._memories[document_name] = content
+        self.sources[source_path] = {
+            "source_path": source_path, "document_name": document_name, "source": "claude-code",
+            "scope": scope, "sha256": sha256, "metadata": meta, "stale": False, "updated_at": now,
+        }
+        return {"status": "ingested", "source_path": source_path, "sha256": sha256, "document": document_name}
+
+    async def reconcile_claude_markdown(self, source: str, scope: str, paths: list[str]) -> dict[str, Any]:
+        current = _validate_reconciliation(source, scope, paths)
+        stale = []
+        for source_path, entry in self.sources.items():
+            if entry["source"] == source and entry["scope"] == scope and not entry["stale"] and source_path not in current:
+                entry["stale"] = True
+                entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+                stale.append(source_path)
+        stale.sort()
+        return {"status": "reconciled", "stale": stale, "count": len(stale)}
+
+    async def knowledge_status(self) -> dict[str, Any]:
+        indexed = sum(
+            1 for entry in self.sources.values()
+            if entry["source"] == "claude-code" and not entry["stale"]
+            and entry["document_name"] in self._memories
+        )
+        return {"source": "claude-code", "status": "available" if indexed else "empty",
+                "indexed_document_count": indexed}
 
     async def retrieve(self, name: str, context: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
         validate_memory_name(name)
