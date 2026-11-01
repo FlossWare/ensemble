@@ -608,6 +608,156 @@ def create_app(
 
 
 
+    async def process_learning_outcome(payload: dict[str, Any]):
+        request_id = payload.get("request_id") or str(uuid4())
+        try:
+            prepared = await active_learning_store.prepare_outcome(
+                task_id=payload.get("task_id"), task_type=payload.get("task_type"),
+                model=payload.get("model"), rating=payload.get("rating"),
+                tokens=payload.get("tokens"), cost=payload.get("cost"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409 if "already exists" in str(exc) else 400, detail=str(exc)) from exc
+        outcome = prepared["outcome"]
+        if prepared["status"] == "duplicate":
+            return {"ok": True, "duplicate": True, "checkpoint_advanced": True, "request_id": request_id}
+        task_id = outcome["task_id"]
+        try:
+            memory_result = await active_memory_store.append(
+                "learning-outcomes",
+                {
+                    "event_type": "learning.outcome", "source": "learning-service",
+                    "task_id": task_id, "task_type": outcome["task_type"],
+                    "model": outcome["model"], "rating": outcome["rating"],
+                    "success": outcome["rating"] >= 3, "tokens": outcome["tokens"],
+                    "cost": outcome["cost"], "timestamp": outcome["timestamp"],
+                },
+                event_id=task_id,
+            )
+            await active_thompson_store.record_outcome_once(
+                event_id=task_id, model=outcome["model"],
+                success=outcome["rating"] >= 3, cost=outcome["cost"], tokens=outcome["tokens"],
+            )
+            await active_learning_store.complete_outcome(task_id, True, True)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"message": "Learning outcome remains pending and can be retried", "checkpoint_advanced": False},
+            ) from exc
+        return {
+            "ok": True, "memory": memory_result["status"] in {"stored", "duplicate"},
+            "thompson": True, "checkpoint_advanced": True, "request_id": request_id,
+        }
+
+    async def record_learning_artifact(payload: dict[str, Any]):
+        artifact = payload.get("artifact")
+        try:
+            artifact_status = await active_learning_store.record_artifact(artifact)
+            artifact_type, run_id = artifact["artifact_type"], artifact["payload"]["run_id"]
+            memory_result = await active_memory_store.append(
+                "learning-artifacts",
+                {"event_type": "learning.artifact", "source": "learning-service", "artifact": artifact},
+                event_id=f"learning-artifact:{artifact_type}:{run_id}",
+            )
+        except (KeyError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail="artifact must contain artifact_type and payload.run_id") from exc
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409 if "already exists" in str(exc) else 400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="artifact stored but Memory event acknowledgement failed") from exc
+        return {
+            "ok": True, "artifact_status": artifact_status,
+            "memory": memory_result["status"] in {"stored", "duplicate"},
+            "knowledge_promotion": "not_attempted",
+        }
+
+    @app.get("/api/v1/learning/health", tags=["learning"])
+    async def learning_health():
+        return {"ok": True, "service": "learning", "backend": "sqlite"}
+
+    @app.get("/api/v1/learning/ready", tags=["learning"])
+    async def learning_ready():
+        try:
+            await active_learning_store.recent_outcomes(1)
+            await active_memory_store.check_ready()
+            await active_thompson_store.get_state()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Learning dependency unavailable") from exc
+        return {"ok": True, "ready": True, "dependencies": {"memory": True, "thompson": True}}
+
+    @app.get("/api/v1/learning/ping", tags=["learning"])
+    async def learning_ping():
+        return {"ok": True, "message": "pong", "request_id": str(uuid4())}
+
+    @app.post("/api/v1/learning/outcomes", tags=["learning"])
+    async def learning_outcome(payload: dict[str, Any]):
+        return await process_learning_outcome(payload)
+
+    @app.get("/api/v1/learning/outcomes/{task_id}", tags=["learning"])
+    async def learning_get_outcome(task_id: str):
+        outcome = await active_learning_store.get_outcome(task_id)
+        if outcome is None:
+            raise HTTPException(status_code=404, detail="Learning outcome not found")
+        return {"ok": True, "outcome": outcome}
+
+    @app.get("/api/v1/learning/outcomes", tags=["learning"])
+    async def learning_recent_outcomes(days: int = 7):
+        try:
+            outcomes = await active_learning_store.recent_outcomes(days)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "outcomes": outcomes}
+
+    @app.get("/api/v1/learning/report", tags=["learning"])
+    async def learning_report():
+        return await active_learning_store.report()
+
+    @app.post("/api/v1/learning/reset", tags=["learning"])
+    async def learning_reset(payload: dict[str, Any]):
+        if payload.get("confirm") is not True:
+            raise HTTPException(status_code=400, detail="explicit confirm=true is required")
+        await active_learning_store.reset()
+        return {"ok": True, "reset": True, "thompson_state_preserved": True}
+
+    @app.post("/api/v1/learning/artifacts", tags=["learning"])
+    async def learning_artifact(payload: dict[str, Any]):
+        return await record_learning_artifact(payload)
+
+    @app.get("/api/v1/learning/artifacts", tags=["learning"])
+    async def learning_artifacts(limit: int = 50):
+        try:
+            artifacts = await active_learning_store.list_artifacts(limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "artifacts": artifacts}
+
+    @app.post("/api/v1/learning", tags=["learning"])
+    async def learning_compatibility_route(payload: dict[str, Any]):
+        operation = payload.get("op")
+        if operation == "process_outcome":
+            return await process_learning_outcome(payload)
+        if operation == "record_artifact":
+            return await record_learning_artifact(payload)
+        if operation == "get_report":
+            return await active_learning_store.report()
+        if operation == "get_recent_outcomes":
+            try:
+                return {"ok": True, "outcomes": await active_learning_store.recent_outcomes(payload.get("days", 7))}
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if operation == "reset_learning":
+            if payload.get("confirm") is not True:
+                raise HTTPException(status_code=400, detail="explicit confirm=true is required")
+            await active_learning_store.reset()
+            return {"ok": True}
+        if operation == "ping":
+            return {"ok": True, "message": "pong", "request_id": str(uuid4())}
+        raise HTTPException(status_code=400, detail=f"unknown Learning operation: {operation}")
+
     async def thompson_select(payload: dict[str, Any]):
         task_type = payload.get("task_type", "unknown")
         required_capability = payload.get("required_capability", 0.5)
