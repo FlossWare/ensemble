@@ -615,8 +615,6 @@ def create_app(
             raise HTTPException(status_code=502, detail="scrape ingestion failed") from exc
 
     @app.post("/api/v1/documents", response_model=DocumentOut, status_code=201, tags=["documents"])
-
-    @app.post("/api/v1/documents", response_model=DocumentOut, status_code=201, tags=["documents"])
     async def ingest_document(request: DocumentIn):
         try:
             return await documents.ingest(request)
