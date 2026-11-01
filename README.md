@@ -35,11 +35,11 @@ alembic upgrade head
 uvicorn ensemble.api:app --host 127.0.0.1 --port 8090
 ```
 
-The default database is .ensemble/ensemble.db. Override its SQLite URL with ENSEMBLE_DATABASE_URL, for example:
+The default persistence root is .ensemble and the database is .ensemble/ensemble.db. Configure the HTTP listener with ENSEMBLE_HOST and ENSEMBLE_PORT, and move all default persistent data with ENSEMBLE_PERSISTENCE_ROOT. The server can also be started with command-line overrides. For example:
 
 ```bash
-ENSEMBLE_DATABASE_URL='sqlite+aiosqlite:////var/lib/ensemble/ensemble.db' alembic upgrade head
-ENSEMBLE_DATABASE_URL='sqlite+aiosqlite:////var/lib/ensemble/ensemble.db' uvicorn ensemble.api:app --host 127.0.0.1 --port 8090
+ENSEMBLE_PERSISTENCE_ROOT=/var/lib/ensemble alembic upgrade head
+ENSEMBLE_PERSISTENCE_ROOT=/var/lib/ensemble python -m ensemble --host 127.0.0.1 --port 8090
 ```
 
 The API refuses to start against an unmigrated or incomplete database. Apply migrations as a deployment step before starting the application.
