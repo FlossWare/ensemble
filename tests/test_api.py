@@ -1,6 +1,8 @@
+import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+
 from ensemble.api import create_app
 
 
@@ -11,6 +13,13 @@ def _client(tmp_path):
     migration_config.set_main_option("sqlalchemy.url", database_url)
     command.upgrade(migration_config, "head")
     return TestClient(create_app(database_url=database_url))
+
+
+def test_startup_rejects_unmigrated_database(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'unmigrated.db'}"
+    with pytest.raises(RuntimeError, match="alembic upgrade head"):
+        with TestClient(create_app(database_url=database_url)):
+            pass
 
 
 def test_health_and_ready(tmp_path):
@@ -94,37 +103,6 @@ def test_reingest_replaces_chunk_content_for_same_revision(tmp_path):
 
 
 def test_reingest_is_idempotent_and_latest_revision_is_searchable(tmp_path):
-    with _client(tmp_path) as client:
-        original = {
-            "source_id": "versioned-note",
-            "revision": 1,
-            "title": "First revision",
-            "content": "The original document discusses obsolete indexing behavior.",
-        }
-        first = client.post("/api/v1/documents", json=original).json()
-        again = client.post("/api/v1/documents", json=original).json()
-        assert again["id"] == first["id"]
-
-        revised = {
-            "source_id": "versioned-note",
-            "revision": 2,
-            "title": "Second revision",
-            "content": "The current document discusses durable indexing behavior.",
-        }
-        second = client.post("/api/v1/documents", json=revised).json()
-        assert second["id"] != first["id"]
-
-        current = client.post("/api/v1/search", json={"query": "indexing behavior"}).json()
-        assert len(current) == 1
-        assert current[0]["revision"] == 2
-        assert current[0]["document_id"] == second["id"]
-
-        historical = client.post("/api/v1/documents", json=original).json()
-        assert historical["id"] == first["id"]
-        still_current = client.post("/api/v1/search", json={"query": "indexing behavior"}).json()
-        assert len(still_current) == 1
-        assert still_current[0]["revision"] == 2
-
     with _client(tmp_path) as client:
         original = {
             "source_id": "versioned-note",
