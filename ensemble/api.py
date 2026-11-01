@@ -27,6 +27,7 @@ from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
 from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_reranker, validate_rerank_request
 from .scraping import ScrapeError, preview_uri
+from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -59,6 +60,7 @@ def create_app(
     index_store: IndexStore | None = None,
     knowledge_store: KnowledgeStore | None = None,
     graph_store: GraphStore | None = None,
+    memory_store: MemoryStore | None = None,
 ) -> FastAPI:
     document_store = store or SqlDocumentStore(database_url)
     embeddings = embedding_provider or configured_embedding_provider()
@@ -79,6 +81,10 @@ def create_app(
         InMemoryGraphStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteGraphStore(database_url)
     )
+    active_memory_store = memory_store or (
+        InMemoryMemoryStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteMemoryStore(database_url)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -88,8 +94,10 @@ def create_app(
             await active_index_store.initialize()
             await active_knowledge_store.initialize()
             await active_graph_store.initialize()
+            await active_memory_store.initialize()
             yield
         finally:
+            await active_memory_store.close()
             await active_graph_store.close()
             await active_knowledge_store.close()
             await active_index_store.close()
@@ -112,6 +120,7 @@ def create_app(
     app.state.index_store = active_index_store
     app.state.knowledge_store = active_knowledge_store
     app.state.graph_store = active_graph_store
+    app.state.memory_store = active_memory_store
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -134,13 +143,14 @@ def create_app(
     async def ready():
         try:
             await document_store.check_ready()
+            await active_memory_store.check_ready()
         except Exception as exc:
             raise HTTPException(status_code=503, detail="persistence unavailable") from exc
         return {
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph"],
+            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "memory"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
@@ -562,6 +572,99 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "results": results}
+
+
+    @app.get("/api/v1/memory/health", tags=["memory"])
+    async def memory_health():
+        return {"ok": True, "service": "memory", "backend": "sqlite"}
+
+    @app.get("/api/v1/memory/ready", tags=["memory"])
+    async def memory_ready():
+        try:
+            await active_memory_store.check_ready()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="memory persistence unavailable") from exc
+        return {"ok": True, "ready": True, "backend": "sqlite"}
+
+    @app.post("/api/v1/memory/read", tags=["memory"])
+    async def memory_read(payload: dict[str, Any]):
+        try:
+            content = await active_memory_store.read(payload.get("name"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if content is None:
+            raise HTTPException(status_code=404, detail="memory not found")
+        return {"ok": True, "content": content}
+
+    @app.post("/api/v1/memory/write", tags=["memory"])
+    async def memory_write(payload: dict[str, Any]):
+        try:
+            await active_memory_store.write(payload.get("name"), payload.get("content"))
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/api/v1/memory/append", tags=["memory"])
+    async def memory_append(payload: dict[str, Any]):
+        try:
+            result = await active_memory_store.append(payload.get("name"), payload.get("entry", {}))
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, **result}
+
+    @app.post("/api/v1/memory/append-once", tags=["memory"])
+    async def memory_append_once(payload: dict[str, Any]):
+        try:
+            result = await active_memory_store.append(
+                payload.get("name"), payload.get("entry", {}), payload.get("event_id")
+            )
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409 if "already exists" in str(exc) else 400, detail=str(exc)) from exc
+        return {"ok": True, **result}
+
+    @app.post("/api/v1/memory/entries", tags=["memory"])
+    async def memory_entries(payload: dict[str, Any]):
+        try:
+            result = await active_memory_store.read_entries(payload.get("name"), payload.get("limit", 1000))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "entries": result}
+
+    @app.post("/api/v1/memory/retrieve", tags=["memory"])
+    async def memory_retrieve(payload: dict[str, Any]):
+        try:
+            result = await active_memory_store.retrieve(
+                payload.get("name"), payload.get("context", {}), payload.get("limit", 10)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "results": result}
+
+    @app.get("/api/v1/memory/list", tags=["memory"])
+    async def memory_list():
+        return {"ok": True, "memories": await active_memory_store.list_names()}
+
+    @app.post("/api/v1/memory/search", tags=["memory"])
+    async def memory_search(payload: dict[str, Any]):
+        try:
+            result = await active_memory_store.search(payload.get("keywords", []), payload.get("limit", 50))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "results": result}
+
+    @app.post("/api/v1/memory/chunk", tags=["memory"])
+    async def memory_chunk(payload: dict[str, Any]):
+        try:
+            result = await active_memory_store.chunk(payload.get("name"), payload.get("size", 500))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "chunks": result}
 
     @app.get("/api/v1/graph/health", tags=["graph"])
     async def graph_health():
