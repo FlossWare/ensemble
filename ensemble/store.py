@@ -8,7 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON, MetaData,
-    String, Table, Text, UniqueConstraint, delete, func, insert, inspect, select, update,
+    String, Table, Text, UniqueConstraint, delete, func, insert, inspect, select, text, update,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
