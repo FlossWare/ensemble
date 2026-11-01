@@ -1,0 +1,103 @@
+# POC Capability Parity
+
+Reference: FlossWare/poc-claude-ensemble
+Target: FlossWare/ensemble
+Target deployment: one application, one REST listener, independently addressable capability endpoint groups, plus a browser-based Control Center.
+Persistence boundary: SQLite is Ensemble's own persistence implementation. PostgreSQL and alternative/shared persistence implementations belong to FlossWare proper and are not Ensemble deliverables.
+
+## Parity policy
+
+The POC service catalog is the functional baseline. Every listed capability must be represented in Ensemble. We are migrating behavior and contracts, not copying the POC's multi-process topology, standard-library server framework, physical storage, or deployment assumptions.
+
+Disposition meanings:
+- Reuse: source implementation is sound and can be incorporated with minimal adaptation.
+- Adapt: preserve behavior/algorithm, redesign implementation for Ensemble contracts and the one-server architecture.
+- Replace: preserve required behavior, replace implementation because its design or dependencies do not fit.
+- Reference: use as behavioral evidence only; do not carry code forward.
+- Not assessed: full source, tests, edge cases, and dependencies have not yet been inspected.
+
+No capability is at parity until its REST contract, positive and negative behavior, error semantics, readiness behavior, persistence expectations, and regression tests are covered. Any intentional behavior change must be recorded with its compatibility impact.
+
+## Complete POC service inventory
+
+The POC README declares 13 services. All 13 are in scope.
+
+| POC capability | POC location / contract | Required Ensemble capability | Current Ensemble state | Initial disposition |
+|---|---|---|---|---|
+| Embedding | services/embeddings, port 8770, embeddings/model/health | Document/query embeddings, model identity and revision, dimensions, runtime provenance, limits, provider selection, health | Optional OpenAI-compatible provider exists; POC Nomic contract and runtime parity absent | Adapt |
+| Vector | services/embeddings, port 8771, collection query/upsert/existing/delete-superseded | Vector collection operations, deterministic IDs, upsert, search, deletion/revision handling, health | Embeddings stored as JSON and application-scored; no dedicated vector index or collection API | Replace |
+| Lexical | services/embeddings, port 8772, search/documents | Incremental idempotent lexical indexing, analyzed fields, BM25/FTS retrieval, source metadata | Basic lexical retrieval exists; POC FTS5, tokenization dependency, incremental transcript ingestion absent | Adapt |
+| Hybrid | services/embeddings, port 8773, search/knowledge-search/prompts | Orchestrated multi-channel retrieval, knowledge/transcript retrieval, partial dependency degradation, ingestion/event handling | Basic search and RRF exist; full orchestration and degraded mode absent | Adapt |
+| Reranking | services/embeddings, port 8774, rerank | Cross-encoder candidate reranking, model metadata, bounded inputs, aligned scores, health/readiness | Not implemented | Adapt |
+| Chunking | services/chunking, port 8775, profiles/chunk | Versioned deterministic profiles: window, Markdown, message; stable chunk IDs and source offsets/provenance | Character-window chunker only; current behavior differs from POC profiles | Adapt |
+| Tokenization | services/tokenization, port 8776, profiles/tokenize | Versioned deterministic analyzers, compound identifier handling, exact offsets, consistent index/query analysis | Not implemented | Adapt |
+| Index | services/index, port 8777, revisions/tombstones/sources/manifest | Source manifest, monotonic revision sequencing, profile provenance, duplicate/conflict/superseded decisions, tombstones, bounded manifest | Some document revision behavior exists; separate manifest, sequence semantics and tombstones absent | Adapt |
+| Extraction | services/extraction, port 8778, extract | Exact identifier extraction and uncertain entity candidates with evidence, offsets and confidence | Not implemented | Adapt |
+| Intent | services/intent, port 8779, classify | Explainable intent labels, confidence, matched evidence and per-label scores | Not implemented | Adapt |
+| Ranking | services/ranking, port 8780, rank | Deterministic reciprocal-rank fusion with per-list score contributions and stable tie-breaking | Basic RRF exists; independent contract and full explainability parity absent | Adapt |
+| Knowledge | services/knowledge, port 8781, records/tombstone | Sourced records, origin/locator provenance, revision checks through Index, idempotency and deletion | Document ingestion exists; knowledge record lifecycle and provenance contract absent | Adapt |
+| Memory | services/memory, port 8767, memory operations and session-events ledger | Durable episodic memory, session event ledger, concurrent access, path/scope validation, recall and memory lifecycle | Not implemented as POC-equivalent memory capability | Replace |
+
+## Embedding runtime behavior to preserve or explicitly supersede
+
+The POC embedding contract uses Nomic nomic-embed-text-v1.5, 768 dimensions, search_document: and search_query: prefixes, masked mean pooling, and L2 normalization. Runtime choices are ONNX Runtime CPU FP32 (default), OpenVINO CPU FP32, and OpenVINO GPU FP16. Explicit GPU selection fails closed rather than silently falling back to CPU. Model identity, pinned revision, actual device, graph precision, and runtime provenance are reported.
+
+Ensemble may support additional providers and models, but must preserve equivalent model identity/provenance, query-vs-document semantics, dimensions, and explicit failure behavior. A provider must never silently claim GPU execution after falling back to CPU.
+
+## Retrieval behavior to preserve
+
+- Vector and lexical retrieval are separate candidate channels.
+- Hybrid search fuses channels using reciprocal-rank fusion, with POC default k=60.
+- Candidate provenance distinguishes transcript and knowledge sources and retains source locator, title, chunk identity/position, and content digest where applicable.
+- A failed channel is reported as degraded while successful channels can still contribute. Return service-unavailable only when no candidate source succeeds.
+- Optional cross-encoder reranking operates on a bounded candidate set after authorization filtering.
+- Knowledge-only retrieval remains independently callable.
+- Results and fusion contributions must be explainable and deterministic where the POC guarantees determinism.
+
+## Control Center parity
+
+The POC capability set must be inspectable and operable from a real browser UI, not only Swagger/OpenAPI.
+
+| Area | Required functionality |
+|---|---|
+| Overview | Application health/readiness, capability status, provider status, active configuration, throughput/latency/error indicators |
+| Capability Explorer | Enumerate all 13 capabilities, contracts, versions, dependencies, health and readiness |
+| Retrieval Explorer | Submit query; inspect lexical/vector candidates, fused ranks/contributions, reranking scores, provenance and degraded channels |
+| Documents and Indexes | Inspect sources, revisions, tombstones, chunks, profiles, indexing state and provenance |
+| Memory and Knowledge | Inspect scoped records/events, provenance, revisions, recall results and lifecycle operations |
+| Models and Providers | Inspect embedding/reranking model IDs, revisions, dimensions, runtime/device/precision, configured providers and failures |
+| Configuration | View and safely change supported chunking, tokenization, retrieval, ranking, provider and timeout settings |
+| Operations | Trigger permitted ingestion/reindex/maintenance operations, inspect jobs/results, confirm destructive actions |
+| Diagnostics | Structured logs, correlation IDs, dependency failures, latency breakdowns, persistence health and exportable diagnostics |
+
+The UI is served by the same Ensemble application and uses the same REST contracts. It must not introduce a second backend or duplicate domain logic. Administrative operations are localhost-only initially; remote administration requires a designed authentication/authorization boundary. Do not expose arbitrary shell execution.
+
+## Cross-cutting parity requirements
+
+- One FastAPI application and one REST listener; logical capability boundaries remain independently addressable.
+- Stable, versioned, language-neutral REST contracts with consistent Problem Details errors.
+- Explicit health and readiness per capability, including dependency state.
+- Bounded request sizes, candidate counts, timeouts and concurrency.
+- Deterministic/idempotent ingestion and retry semantics where applicable.
+- Source, revision, chunk, model and analyzer provenance.
+- Observable partial failure and degraded retrieval behavior.
+- No implicit data sharing across users/partitions; access filtering precedes fusion and reranking.
+- No POC runtime dependency or direct sharing of POC database files/directories.
+- SQLite only in this repository. Shared infrastructure and alternate persistence implementations are owned by FlossWare proper.
+- No mandatory generation model or MCP dependency.
+
+## Work status
+
+This is the initial catalog-level inventory, not a completed source audit. The README establishes the 13-service inventory and several contract/behavior details. Individual implementation files have been located for the core services, but their full tests, edge cases, helper modules, dependency graph, and runtime interactions still require systematic inspection.
+
+Before implementing each capability, complete a source audit recording:
+1. POC source files and tests.
+2. Public endpoints and request/response schemas.
+3. Algorithms, model IDs/revisions, profiles and defaults.
+4. Persistence and idempotency behavior.
+5. Validation, error, health/readiness and degraded-mode behavior.
+6. External dependencies and runtime assumptions.
+7. Ensemble target module/contract and reuse/adapt/replace/reference decision.
+8. Contract and regression tests proving parity.
+
+Do not mark parity complete based solely on matching endpoint names or a green unit-test suite.
