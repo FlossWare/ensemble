@@ -6,6 +6,7 @@ from ensemble.api import create_app
 from ensemble.embeddings import (
     DisabledEmbeddingProvider,
     NomicEmbeddingProvider,
+    validate_embedding_request,
 )
 from ensemble.store import InMemoryDocumentStore
 
@@ -33,11 +34,11 @@ class FakeNomicEmbedder:
 
     def embed_documents(self, texts):
         self.document_calls.append(texts)
-        return FakeArray([[1.0, 0.0] for _ in texts])
+        return FakeArray([[1.0] + [0.0] * 767 for _ in texts])
 
     def embed_queries(self, texts):
         self.query_calls.append(texts)
-        return FakeArray([[0.0, 1.0] for _ in texts])
+        return FakeArray([[0.0, 1.0] + [0.0] * 766 for _ in texts])
 
 
 class StubEmbeddingProvider:
@@ -61,8 +62,10 @@ def test_nomic_provider_preserves_document_and_query_modes():
     provider = NomicEmbeddingProvider(embedder)
     documents = asyncio.run(provider.embed(["document text"], mode="document"))
     queries = asyncio.run(provider.embed(["query text"], mode="query"))
-    assert documents == [[1.0, 0.0]]
-    assert queries == [[0.0, 1.0]]
+    assert len(documents[0]) == 768
+    assert documents[0][:2] == [1.0, 0.0]
+    assert len(queries[0]) == 768
+    assert queries[0][:2] == [0.0, 1.0]
     assert embedder.document_calls == [["document text"]]
     assert embedder.query_calls == [["query text"]]
     status = provider.status()
@@ -108,3 +111,35 @@ def test_embedding_rest_fails_closed_when_not_configured():
             json={"texts": ["text"], "mode": "document"},
         )
         assert response.status_code == 503
+
+
+def test_embedding_request_validation_matches_poc_bounds():
+    validate_embedding_request(["document"], "document")
+    validate_embedding_request(["query"], "query")
+    for texts, mode in [([], "document"), ([" "], "document"), (["text"], "other")]:
+        try:
+            validate_embedding_request(texts, mode)
+            assert False, "invalid embedding request was accepted"
+        except ValueError:
+            pass
+    try:
+        validate_embedding_request(["x"] * 65, "document")
+        assert False, "oversized batch was accepted"
+    except OverflowError:
+        pass
+    try:
+        validate_embedding_request(["x" * 65_537], "query")
+        assert False, "oversized text was accepted"
+    except OverflowError:
+        pass
+
+
+def test_nomic_provider_rejects_wrong_dimensions_and_non_finite_values():
+    class BadEmbedder(FakeNomicEmbedder):
+        def embed_documents(self, texts):
+            return FakeArray([[float("nan")] * 768 for _ in texts])
+
+    import pytest
+    provider = NomicEmbeddingProvider(BadEmbedder())
+    with pytest.raises(RuntimeError, match="non-finite"):
+        asyncio.run(provider.embed(["text"]))
