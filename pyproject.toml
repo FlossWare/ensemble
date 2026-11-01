@@ -28,3 +28,6 @@ addopts = "-q"
 
 [tool.setuptools.packages.find]
 include = ["ensemble*"]
+
+[tool.setuptools.package-data]
+ensemble = ["control_panel.html", "control.js"]
