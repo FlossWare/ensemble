@@ -32,7 +32,7 @@ Ingestion is idempotent for a source identifier and revision. Re-ingesting that 
 
 ## Planned capabilities
 
-Memory, graph, reranking, tokenization, extraction, and ingestion jobs remain planned. Specify and test each contract before implementing it. The current index enumeration is unbounded and vector scoring scans stored JSON embeddings; bounded retrieval and a dedicated vector index are required before unbounded corpus growth.
+Memory, graph, reranking, tokenization, extraction, and ingestion jobs remain planned. Specify and test each contract before implementing it. Index candidate retrieval is bounded (maximum 1,000 candidates) and uses database-side lexical matching. Vector similarity is currently calculated only over that lexical candidate set, so semantic-only matches can be missed. A dedicated vector index and independent vector candidate retrieval remain required before unbounded corpus growth.
 
 ## Security requirements
 

@@ -23,6 +23,11 @@ class EmbeddingRequest(BaseModel):
     texts: list[str]
 
 
+class IndexSearchRequest(BaseModel):
+    query: str = Field(min_length=1)
+    limit: int = Field(default=200, ge=1, le=1000)
+
+
 class IndexDocumentRequest(BaseModel):
     source_id: str
     revision: int
@@ -79,9 +84,9 @@ def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider
             created_at=document.created_at,
         )
 
-    @router.get("/capabilities/index/chunks", tags=["capabilities", "index"])
-    async def read_indexed_chunks():
-        indexed = await store.all_chunks()
+    @router.post("/capabilities/index/search-candidates", tags=["capabilities", "index"])
+    async def read_indexed_chunks(request: IndexSearchRequest):
+        indexed = await store.all_chunks(request.query, request.limit)
         return [
             {
                 "document": {
@@ -142,8 +147,11 @@ class CapabilityClient:
             },
         )
 
-    async def indexed_chunks(self) -> list[IndexedChunk]:
-        rows = await self._request("GET", "/api/v1/capabilities/index/chunks")
+    async def indexed_chunks(self, query: str, limit: int) -> list[IndexedChunk]:
+        rows = await self._request(
+            "POST", "/api/v1/capabilities/index/search-candidates",
+            json={"query": query, "limit": limit},
+        )
         result: list[IndexedChunk] = []
         for row in rows:
             raw_document, raw_chunk = row["document"], row["chunk"]

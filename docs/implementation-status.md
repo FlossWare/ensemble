@@ -29,12 +29,14 @@ Implemented:
 Implemented:
 - Deterministic character-window chunking with overlap.
 - Optional OpenAI-compatible embedding provider.
-- Lexical retrieval, optional cosine similarity, and reciprocal-rank fusion.
+- Database-side lexical candidate retrieval with a bounded candidate set (maximum 1,000).
+- Optional cosine similarity over lexical candidates and reciprocal-rank fusion.
 - Document and chunk provenance in search responses.
 
 Known limitations:
 - Embeddings are stored as JSON and scored in application memory. There is no dedicated vector index.
-- Search currently loads the current indexed chunk set; bounded candidate retrieval and pagination remain future work.
+- Vector similarity is limited to lexical candidates; semantically related documents without lexical overlap can be missed.
+- Search candidate pagination is not yet exposed; requests are bounded to at most 1,000 candidates.
 - Chunking is character-window based, not token-aware.
 - Authentication, tenant/partition enforcement, sharing policy, and authorization-aware retrieval are not implemented. Do not expose this as a multi-user shared service until those controls exist.
 - Reranking, graph, memory-specific APIs, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging remain future work.

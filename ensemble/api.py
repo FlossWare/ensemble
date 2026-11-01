@@ -96,7 +96,8 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
     @app.post("/api/v1/search", response_model=list[SearchHit], tags=["search"])
     async def search_documents(request: SearchIn):
         try:
-            indexed = await client.indexed_chunks()
+            candidate_limit = min(max(request.limit * 20, 100), 1000)
+            indexed = await client.indexed_chunks(request.query, candidate_limit)
             if not indexed:
                 return []
             query_vectors = await client.embed([request.query])

@@ -16,7 +16,7 @@ def test_capability_rest_contracts_are_exposed_and_used(tmp_path):
         assert "/api/v1/capabilities/chunking/split" in paths
         assert "/api/v1/capabilities/embeddings" in paths
         assert "/api/v1/capabilities/index/documents" in paths
-        assert "/api/v1/capabilities/index/chunks" in paths
+        assert "/api/v1/capabilities/index/search-candidates" in paths
 
         split = client.post(
             "/api/v1/capabilities/chunking/split",
@@ -41,6 +41,9 @@ def test_capability_rest_contracts_are_exposed_and_used(tmp_path):
         })
         assert ingested.status_code == 201
 
-        indexed = client.get("/api/v1/capabilities/index/chunks")
+        indexed = client.post(
+            "/api/v1/capabilities/index/search-candidates",
+            json={"query": "REST boundary", "limit": 100},
+        )
         assert indexed.status_code == 200
         assert indexed.json()[0]["document"]["source_id"] == "rest-boundary"

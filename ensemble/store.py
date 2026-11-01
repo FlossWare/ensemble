@@ -54,7 +54,7 @@ class DocumentStore(Protocol):
     async def close(self) -> None: ...
     async def check_ready(self) -> None: ...
     async def save(self, document: Document, chunks: list[Chunk]) -> Document: ...
-    async def all_chunks(self) -> list[IndexedChunk]: ...
+    async def all_chunks(self, query: str | None = None, limit: int | None = None) -> list[IndexedChunk]: ...
 
 
 class InMemoryDocumentStore:
@@ -84,19 +84,21 @@ class InMemoryDocumentStore:
         self._chunks[document.id] = list(chunks)
         return document
 
-    async def all_chunks(self) -> list[IndexedChunk]:
+    async def all_chunks(self, query: str | None = None, limit: int | None = None) -> list[IndexedChunk]:
         latest: dict[str, Document] = {}
         for document in self._documents.values():
             current = latest.get(document.source_id)
             if current is None or document.revision > current.revision:
                 latest[document.source_id] = document
         result: list[IndexedChunk] = []
+        terms = {term.casefold() for term in (query or "").split() if term}
         for document in latest.values():
-            result.extend(
-                IndexedChunk(document, chunk)
-                for chunk in self._chunks.get(document.id, [])
-            )
-        return result
+            for chunk in self._chunks.get(document.id, []):
+                if terms and not any(term in chunk.content.casefold() for term in terms):
+                    continue
+                result.append(IndexedChunk(document, chunk))
+        result.sort(key=lambda item: (item.document.source_id, item.chunk.ordinal))
+        return result[:limit] if limit is not None else result
 
 
 class SqlDocumentStore:
@@ -224,7 +226,7 @@ class SqlDocumentStore:
                 ])
         return document
 
-    async def all_chunks(self) -> list[IndexedChunk]:
+    async def all_chunks(self, query: str | None = None, limit: int | None = None) -> list[IndexedChunk]:
         statement = (
             select(
                 self.documents.c.id.label("document_id"),
@@ -242,6 +244,14 @@ class SqlDocumentStore:
             .where(self.documents.c.is_current.is_(True))
             .order_by(self.documents.c.source_id, self.chunks.c.ordinal)
         )
+        if query and query.strip():
+            from sqlalchemy import or_
+            terms = [term for term in query.split() if term]
+            statement = statement.where(or_(*[
+                self.chunks.c.content.ilike(f"%{term}%") for term in terms
+            ]))
+        if limit is not None:
+            statement = statement.limit(limit)
         async with self.engine.connect() as connection:
             rows = (await connection.execute(statement)).mappings().all()
 
