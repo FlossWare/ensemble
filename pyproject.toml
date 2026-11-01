@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3,<9", "pytest-cov>=6,<7", "httpx>=0.28,<1"]
+reranking = ["sentence-transformers>=3.4,<6"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
