@@ -111,7 +111,7 @@ def create_app(
     app.state.vector_store = active_vector_store
     app.state.index_store = active_index_store
     app.state.knowledge_store = active_knowledge_store
-    app.state.graph_store = active_graph_store\n    app.state.graph_store = active_graph_store
+    app.state.graph_store = active_graph_store
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
