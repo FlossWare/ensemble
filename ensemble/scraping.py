@@ -76,7 +76,11 @@ def _validate_public_uri(uri: str) -> str:
         raise ScrapeError("invalid_uri", "only absolute HTTP and HTTPS URIs are supported")
     if parsed.username or parsed.password:
         raise ScrapeError("invalid_uri", "credentials in URIs are not allowed")
-    if parsed.port not in (None, 80, 443):
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ScrapeError("invalid_uri", "URI contains an invalid port") from exc
+    if port not in (None, 80, 443):
         raise ScrapeError("invalid_uri", "only standard HTTP and HTTPS ports are allowed")
     host = parsed.hostname.rstrip(".").lower()
     if host in {"localhost", "localhost.localdomain"} or host.endswith(".localhost") or host.endswith(".local"):
