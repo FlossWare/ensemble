@@ -45,8 +45,12 @@ Implemented on the parity branch (GitHub Actions has verified the latest complet
 - POC-compatible identifier extraction capability and REST endpoints.
 - POC-compatible rule-based intent classification capability and REST endpoints.
 - POC-compatible explainable reciprocal-rank fusion capability and REST endpoints.
-- POC vector collection REST operations and durable SQLite collection/record storage; ANN indexing remains intentionally absent.\n- POC graph node/edge mutation, deterministic identities, typed queries, bounded directional traversal, and SQLite persistence.
-- POC-compatible reranking REST endpoint and optional local cross-encoder provider (local model installation/runtime verification pending).\n- Browser Control Center served by the same REST application at /control, with a URI preview and explicit ingest workflow.\n- Bounded public-URI fetching, HTML/plain-text extraction, local/private destination rejection, redirect limits, response-size limits, and preview-only operation.\n- Scraped-page ingestion through Index revision decisions, document/chunk persistence, Knowledge provenance, and SQLite vector collections when embeddings are available.
+- POC vector collection REST operations and durable SQLite collection/record storage; ANN indexing remains intentionally absent.
+- POC graph node/edge mutation, deterministic identities, typed queries, bounded directional traversal, and SQLite persistence.
+- POC-compatible reranking REST endpoint and optional local cross-encoder provider (local model installation/runtime verification pending).
+- Browser Control Center served by the same REST application at /control, with a URI preview and explicit ingest workflow.
+- Bounded public-URI fetching, HTML/plain-text extraction, local/private destination rejection, redirect limits, response-size limits, and preview-only operation.
+- Scraped-page ingestion through Index revision decisions, document/chunk persistence, Knowledge provenance, and SQLite vector collections when embeddings are available.
 
 Not yet implemented:
 - The remaining POC capability surface listed in [POC capability parity](poc-parity.md).
@@ -59,7 +63,8 @@ Not yet implemented:
 - Broader learned/entity extraction beyond the POC's rule-based identifier extraction.
 - Any future model-backed intent providers, which are not part of the current POC behavior.
 - Durable episodic memory/session-event ledger and remaining POC adjunct modules (Learning, Thompson, and scrape-ledger) pending separate scope decisions.
-- Complete Control Center beyond the initial URI-ingestion workbench: service/model configuration, retrieval explorer, document/index management, job history, metrics, and maintenance controls.\n- Multi-page bounded crawling, robots.txt policy, DNS-to-connection pinning, durable ingestion jobs, retries, and scheduled source refresh.
+- Complete Control Center beyond the initial URI-ingestion workbench: service/model configuration, retrieval explorer, document/index management, job history, metrics, and maintenance controls.
+- Multi-page bounded crawling, robots.txt policy, DNS-to-connection pinning, durable ingestion jobs, retries, and scheduled source refresh.
 - Authentication, partition enforcement, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging.
 
 SQLite is the only persistence implementation in this repository. Embeddings are currently stored as JSON and scored in the application; this is not a scalable vector index.
