@@ -171,6 +171,8 @@ def _keyword_search(documents: list[tuple[str, str]], active_knowledge: set[str]
             terms = [word.strip(".,!?;:").casefold() for word in chunk["content"].split() if len(word) > 2]
             docs.append((name, chunk, terms))
     count = len(docs)
+    if not count:
+        return []
     idf = {
         term: math.log(count / max(1, sum(1 for _, _, terms in docs if term in terms)))
         for term in keyword_set
