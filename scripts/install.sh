@@ -58,9 +58,9 @@ set -a
 # shellcheck disable=SC1090
 . "${ENV_FILE}"
 set +a
+cd "${APP_DIR}"
 EFFECTIVE_ROOT="$(realpath -m "${ENSEMBLE_PERSISTENCE_ROOT:-${PERSISTENCE_ROOT}}")"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${EFFECTIVE_ROOT}"
-cd "${APP_DIR}"
 DATABASE_PARENT="$("${VENV_DIR}/bin/python" -c 'import os; from sqlalchemy.engine import make_url; from ensemble.config import resolve_database_url; u=make_url(resolve_database_url()); print(os.path.dirname(os.path.abspath(u.database)) if u.database not in (None, "", ":memory:") else "")')"
 if [[ -n "${DATABASE_PARENT}" ]]; then
   install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${DATABASE_PARENT}"
