@@ -21,7 +21,7 @@ See [Architecture and decisions](docs/architecture.md), [REST contract conventio
 
 The Python application provides health/readiness, durable document ingestion, chunking, optional embeddings, lexical/vector retrieval, and reciprocal-rank fusion through one FastAPI application.
 
-SQLite is the default local database. PostgreSQL is supported for a shared deployment. The storage adapter is private to the implementation; REST contracts expose neither database choice nor schema.
+SQLite is the default local database. PostgreSQL is supported for a shared deployment. The storage adapter is private to the implementation; REST contracts expose neither database choice nor schema. Database schema changes are managed with Alembic migrations.
 
 ## Run locally
 
@@ -31,16 +31,18 @@ Python 3.12 or newer is required.
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[dev]'
+alembic upgrade head
 uvicorn ensemble.api:app --host 127.0.0.1 --port 8090
 ```
 
-The default database is created at .ensemble/ensemble.db. Override it with ENSEMBLE_DATABASE_URL, for example:
+The default database is .ensemble/ensemble.db. Override it with ENSEMBLE_DATABASE_URL, for example:
 
 ```bash
+ENSEMBLE_DATABASE_URL='postgresql+asyncpg://ensemble:secret@localhost/ensemble' alembic upgrade head
 ENSEMBLE_DATABASE_URL='postgresql+asyncpg://ensemble:secret@localhost/ensemble' uvicorn ensemble.api:app --host 127.0.0.1 --port 8090
 ```
 
-The application creates its initial schema on startup. This is for the early implementation stage; versioned database migrations are required before production deployment.
+The API refuses to start against an unmigrated or incomplete database. Apply migrations as a deployment step before starting the application.
 
 Run tests:
 
