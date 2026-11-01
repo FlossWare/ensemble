@@ -15,6 +15,7 @@ from ensemble.vector_store import vector_metadata
 from ensemble.index_store import index_metadata
 from ensemble.knowledge_store import knowledge_metadata
 from ensemble.memory_store import memory_metadata
+from ensemble.ga_store import ga_metadata
 
 config = context.config
 environment_url = os.getenv("ENSEMBLE_DATABASE_URL")
@@ -30,7 +31,7 @@ if database_url.database not in (None, "", ":memory:"):
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = [metadata, vector_metadata, index_metadata, knowledge_metadata, memory_metadata]
+target_metadata = [metadata, vector_metadata, index_metadata, knowledge_metadata, memory_metadata, ga_metadata]
 
 
 def run_migrations_offline() -> None:
