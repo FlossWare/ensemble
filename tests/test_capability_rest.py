@@ -62,7 +62,7 @@ def test_vector_search_capability_returns_nearest_candidates(tmp_path):
     config.set_main_option("sqlalchemy.url", database_url)
     command.upgrade(config, "head")
 
-    with TestClient(create_app(database_url=database_url)) as client:
+    with TestClient(create_app(database_url=database_url), headers={"Authorization": "Bearer test-key", "X-Ensemble-Partition": "default"}) as client:
         first = client.post("/api/v1/capabilities/index/documents", json={
             "source_id": "vector-first",
             "revision": 1,

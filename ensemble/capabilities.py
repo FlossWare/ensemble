@@ -95,7 +95,7 @@ def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider
         return [
             {
                 "document": {
-                    "id": str(item.document.id), "source_id": item.document.source_id, "partition_id": item.document.partition_id, "partition_id": item.document.partition_id,
+                    "id": str(item.document.id), "source_id": item.document.source_id, "partition_id": item.document.partition_id,
                     "revision": item.document.revision, "title": item.document.title,
                     "content": item.document.content,
                     "created_at": item.document.created_at.isoformat(),
@@ -115,7 +115,7 @@ def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider
             {
                 "document": {
                     "id": str(item.document.id), "source_id": item.document.source_id,
-                    "revision": item.document.revision, "title": item.document.title,
+                    "partition_id": item.document.partition_id, "revision": item.document.revision, "title": item.document.title,
                     "content": item.document.content,
                     "created_at": item.document.created_at.isoformat(),
                 },
