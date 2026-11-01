@@ -6,13 +6,18 @@ from fastapi.testclient import TestClient
 from ensemble.api import create_app
 
 
+@pytest.fixture(autouse=True)
+def configure_api_keys(monkeypatch):
+    monkeypatch.setenv("ENSEMBLE_API_KEYS", '{"test-key":{"subject":"test-user","partitions":["default"],"permissions":["read","write"]}}')
+
+
 def test_capability_rest_contracts_are_exposed_and_used(tmp_path):
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'ensemble.db'}"
     config = Config("alembic.ini")
     config.set_main_option("sqlalchemy.url", database_url)
     command.upgrade(config, "head")
 
-    with TestClient(create_app(database_url=database_url)) as client:
+    with TestClient(create_app(database_url=database_url), headers={"Authorization": "Bearer test-key", "X-Ensemble-Partition": "default"}) as client:
         paths = client.get("/openapi.json").json()["paths"]
         assert "/api/v1/capabilities/chunking/split" in paths
         assert "/api/v1/capabilities/embeddings" in paths

@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid5, NAMESPACE_URL
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .chunking import Chunker
@@ -68,10 +68,10 @@ def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider
         "/capabilities/index/documents", response_model=DocumentOut,
         status_code=201, tags=["capabilities", "index"],
     )
-    async def index_document(request: IndexDocumentRequest):
+    async def index_document(request: IndexDocumentRequest, http_request: Request):
         if len(request.chunks) != len(request.embeddings):
             raise HTTPException(status_code=400, detail="chunk and embedding counts differ")
-        document = Document(request.source_id, request.revision, request.title, request.content)
+        document = Document(request.source_id, request.revision, request.title, request.content, http_request.state.partition_id)
         chunks = [
             Chunk(document.id, ordinal, content, request.embeddings[ordinal])
             for ordinal, content in enumerate(request.chunks)
@@ -84,18 +84,18 @@ def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider
             raise HTTPException(status_code=502, detail="index persistence failed") from exc
         return DocumentOut(
             id=document.id, source_id=document.source_id, revision=document.revision,
-            title=document.title, chunk_count=len(chunks),
+            partition_id=document.partition_id, title=document.title, chunk_count=len(chunks),
             embedded=all(bool(chunk.embedding) for chunk in chunks),
             created_at=document.created_at,
         )
 
     @router.post("/capabilities/index/vector-search", tags=["capabilities", "index", "vector"])
-    async def vector_search(request: VectorSearchRequest):
-        indexed = await store.vector_candidates(request.embedding, request.limit)
+    async def vector_search(request: VectorSearchRequest, http_request: Request):
+        indexed = await store.vector_candidates(request.embedding, request.limit, http_request.state.partition_id)
         return [
             {
                 "document": {
-                    "id": str(item.document.id), "source_id": item.document.source_id, "partition_id": item.document.partition_id,
+                    "id": str(item.document.id), "source_id": item.document.source_id, "partition_id": item.document.partition_id, "partition_id": item.document.partition_id,
                     "revision": item.document.revision, "title": item.document.title,
                     "content": item.document.content,
                     "created_at": item.document.created_at.isoformat(),
@@ -109,8 +109,8 @@ def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider
         ]
 
     @router.post("/capabilities/index/search-candidates", tags=["capabilities", "index"])
-    async def read_indexed_chunks(request: IndexSearchRequest):
-        indexed = await store.all_chunks(request.query, request.limit)
+    async def read_indexed_chunks(request: IndexSearchRequest, http_request: Request):
+        indexed = await store.all_chunks(request.query, request.limit, http_request.state.partition_id)
         return [
             {
                 "document": {
@@ -137,13 +137,18 @@ class CapabilityClient:
     routing, request validation, and JSON serialization at every capability edge.
     """
 
-    def __init__(self, app):
+    def __init__(self, app, authorization: str, partition_id: str):
         self.app = app
+        self.headers = {
+            "Authorization": authorization,
+            "X-Ensemble-Partition": partition_id,
+        }
 
     async def _request(self, method: str, path: str, **kwargs):
         transport = httpx.ASGITransport(app=self.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://ensemble") as client:
-            response = await client.request(method, path, **kwargs)
+            request_headers = {**self.headers, **kwargs.pop("headers", {})}
+            response = await client.request(method, path, headers=request_headers, **kwargs)
             response.raise_for_status()
             return response.json()
 
@@ -193,6 +198,7 @@ class CapabilityClient:
             document = Document(
                 raw_document["source_id"], raw_document["revision"],
                 raw_document["title"], raw_document["content"],
+                raw_document["partition_id"],
             )
             document.id = UUID(raw_document["id"])
             document.created_at = datetime.fromisoformat(raw_document["created_at"])
