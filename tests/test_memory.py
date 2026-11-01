@@ -95,6 +95,8 @@ def test_memory_context_retrieval_prioritizes_parent_and_search_is_bounded():
         ).json()["results"]
         assert recalled[0]["relation"] == "parent"
 
+        http.post("/api/v1/memory/write", json={"name": "execution", "content": "parent memory result"})
+        http.post("/api/v1/memory/write", json={"name": "unrelated", "content": "different document"})
         search = http.post(
             "/api/v1/memory/search",
             json={"keywords": ["parent", "memory"]},
