@@ -155,7 +155,7 @@ def create_app(
     app.state.ga_store = active_ga_store
     app.state.thompson_store = active_thompson_store
     app.state.learning_store = active_learning_store
-    app.state.settings = settings_from_env()
+    app.state.settings = settings_from_env(database_url)
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
