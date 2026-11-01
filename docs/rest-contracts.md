@@ -1,92 +1,39 @@
 # REST Contract Conventions
 
-**Status:** Initial conventions. The running FastAPI application publishes its OpenAPI schema at /openapi.json and interactive documentation at /docs.
+**Status:** Initial versioned contracts. FastAPI publishes OpenAPI at `/openapi.json` and interactive documentation at `/docs`.
 
-## 1. Base path and media type
+## Conventions
 
-- Base path: /api/v1.
-- JSON request and response bodies use UTF-8.
-- REST/HTTP is the canonical public and internal capability boundary.
-- Endpoint contracts are independent of implementation language, framework, and deployment location.
+- Base path: `/api/v1`; JSON request/response bodies use UTF-8.
+- REST/HTTP is canonical for public and internal capability communication.
+- Contracts are independent of implementation language, framework, and deployment location.
+- Prefer additive optional fields. Breaking changes require a new API version and an explicit migration plan.
+- Do not expose database table names, filesystem paths, or provider implementation details as public contract requirements.
+- Use appropriate status codes and Problem Details errors. Do not expose stack traces, secrets, or internal storage details.
+- Correlation metadata is not an authorization credential.
+- Authentication must derive caller identity and authorized scope from trusted context. That control is not yet implemented.
 
-## 2. Resource and operation conventions
-
-- Use nouns for resources and HTTP methods for operations.
-- Use stable resource identifiers in paths.
-- Use explicit operation endpoints for domain actions that do not map cleanly to CRUD (for example, POST /api/v1/search and POST /api/v1/rerank).
-- Use plural resource names.
-- Do not expose database table names, vector-store collection names, filesystem paths, or provider implementation details as public contract requirements.
-
-## 3. Versioning and compatibility
-
-- The major API version is in the URL path.
-- Additive optional fields are preferred for compatible evolution.
-- Do not silently change the meaning or type of an existing field.
-- Breaking changes require a new API version and an explicit migration plan.
-- Capability implementations may evolve independently as long as the contract remains compatible.
-
-## 4. Request context
-
-The server derives caller identity and authorized data scope from trusted authentication and authorization context. Callers must not be able to grant themselves access by supplying tenant or partition identifiers in an ordinary request body.
-
-Where useful, request metadata may include a caller-generated correlation ID. Correlation metadata is not an authorization credential.
-
-## 5. Responses and errors
-
-- Return the appropriate HTTP status code.
-- Use a consistent Problem Details error representation (RFC 9457) for errors.
-- Do not include stack traces, secrets, inaccessible resource metadata, or internal storage details in error responses.
-- Return stable error types/codes suitable for programmatic handling.
-- Include a correlation identifier when available.
-
-## 6. Operational behavior
-
-- Define explicit request limits and timeouts.
-- Use idempotency keys for operations where clients may safely retry a write.
-- Paginate collection responses; do not require unbounded result sets.
-- Make long-running work explicit rather than holding requests open indefinitely.
-- Expose health/readiness separately from business operations.
-
-## 7. Initial implemented endpoints
+## Implemented endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | /health | Liveness |
-| GET | /ready | Application readiness and persistence configuration |
-| POST | /api/v1/documents | Register or replace a document revision, chunk it, optionally embed it, and durably store it |
-| POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |
+| GET | `/health` | Liveness |
+| GET | `/ready` | Application readiness and persistence |
+| POST | `/api/v1/documents` | Ingest/revise a document through chunking, embeddings, and indexing contracts |
+| POST | `/api/v1/search` | Retrieve candidates and fuse lexical/vector rankings |
+| POST | `/api/v1/capabilities/chunking/split` | Deterministic chunking capability |
+| POST | `/api/v1/capabilities/embeddings` | Provider-neutral embedding capability |
+| POST | `/api/v1/capabilities/index/documents` | Persist a document and its chunks |
+| GET | `/api/v1/capabilities/index/chunks` | Return current indexed chunks with provenance |
 
-Ingestion is idempotent for a given source identifier and revision. Re-ingesting that revision replaces its chunk set transactionally. Search returns only the highest registered revision for each source identifier; historical revisions remain stored but are not included in the active search view.
+Capability routes are independently addressable and called over HTTP by ingestion/search orchestration. They are co-hosted today. Authentication is not implemented, so do not expose these routes as a trusted multi-user service.
 
-The current document and search implementation remains an initial vertical slice, not the final complete capability surface. FastAPI publishes the machine-readable schema at /openapi.json.
+Ingestion is idempotent for a source identifier and revision. Re-ingesting that revision replaces its chunk set transactionally. Search returns only the highest registered revision for each source identifier.
 
-## 8. Planned endpoint groups
+## Planned capabilities
 
-These are candidate groups, not a claim that they are implemented:
+Memory, graph, reranking, tokenization, extraction, and ingestion jobs remain planned. Specify and test each contract before implementing it. The current index enumeration is unbounded and vector scoring scans stored JSON embeddings; bounded retrieval and a dedicated vector index are required before unbounded corpus growth.
 
-| Group | Initial purpose |
-|---|---|
-| /capabilities | Discover enabled capabilities and contract versions |
-| /ingestion | Submit and inspect ingestion work |
-| /embeddings | Generate embeddings through configured providers |
-| /rerank | Rerank an explicitly supplied authorized candidate set |
-| /memory | Store and recall scoped memories |
-| /graph | Inspect and traverse authorized relationships |
+## Security requirements
 
-Do not create every endpoint merely because it appears in this candidate list.
-
-## 9. Search and reranking security
-
-- Authorized scope is resolved server-side.
-- Every retrieval channel enforces that scope.
-- Graph traversal cannot reveal inaccessible nodes, edges, or metadata.
-- Candidate fusion only receives authorized candidates.
-- Rerankers receive only authorized candidate text.
-- Results are revalidated before being returned.
-- Cache keys and cached values are scoped so one caller cannot retrieve another partition's results.
-
-## 10. Decorator compatibility
-
-Decorators wrap capability implementations or REST clients while preserving the same request/response contract. Cross-cutting behavior must not require consumers to call a different API.
-
-Security-sensitive decorators are defense in depth. Enforcement also belongs at the trusted authorization and storage/query boundaries.
+The target design resolves authorized scope server-side, applies scope in every retrieval channel, filters candidates before fusion/reranking, and scopes caches. These controls are not implemented in the initial vertical slice.
