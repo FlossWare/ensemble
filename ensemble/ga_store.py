@@ -142,8 +142,11 @@ class InMemoryGAStore:
     async def promote(self, run_id: str, system: str, candidate: dict[str, Any], reason: str, approved_by: str) -> dict[str, Any]:
         if run_id not in self.runs:
             raise KeyError("GA run not found")
+        key = (run_id, system)
+        if key in self.promotions:
+            raise ValueError("candidate already has a promotion record")
         row = {"run_id": run_id, "system": system, "candidate": candidate, "reason": reason,
                "approved_by": approved_by, "approved_at": datetime.now(timezone.utc).isoformat(),
                "status": "approved_for_export"}
-        self.promotions[(run_id, system)] = row
+        self.promotions[key] = row
         return dict(row)
