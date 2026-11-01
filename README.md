@@ -19,7 +19,7 @@ See [Architecture and decisions](docs/architecture.md), [REST contract conventio
 
 ## Current implementation
 
-The Python application provides health/readiness, durable document ingestion, initial SQLite-backed episodic memory and append-once event operations, a bounded GA optimizer with five synthetic evaluator families and persisted runs, versioned chunking profiles, optional OpenAI-compatible or local Nomic ONNX/OpenVINO embeddings and local cross-encoder reranking, lexical/vector retrieval, reciprocal-rank fusion, tokenization, exact/uncertain entity extraction, explainable intent classification, and ranking through one FastAPI application. Memory semantic/hybrid search and the full POC memory lifecycle remain in progress.
+The Python application provides health/readiness, durable document ingestion, initial SQLite-backed episodic memory and append-once event operations, SQLite-backed Thompson sampling, a bounded GA optimizer with five synthetic evaluator families and persisted runs, versioned chunking profiles, optional OpenAI-compatible or local Nomic ONNX/OpenVINO embeddings and local cross-encoder reranking, lexical/vector retrieval, reciprocal-rank fusion, tokenization, exact/uncertain entity extraction, explainable intent classification, and ranking through one FastAPI application. Memory semantic/hybrid search and the full POC memory lifecycle remain in progress.
 
 SQLite is the only persistence implementation in this repository. The storage adapter is private to the implementation; REST contracts expose neither database choice nor schema. Database schema changes are managed with Alembic migrations.
 
@@ -50,7 +50,7 @@ Run tests:
 pytest
 ```
 
-The browser Control Center is available at /control. It includes a URI preview/explicit-ingest workflow and initial GA run, history, candidate inspection, and explicit approval-to-export controls. GA candidates are not applied to live settings. Discovered URI links are displayed but not crawled. API documentation is available at /docs; the OpenAPI document is at /openapi.json.
+The browser Control Center is available at /control. It includes a URI preview/explicit-ingest workflow and initial GA run, history, candidate inspection, explicit approval-to-export controls, and Thompson model inspection/selection/reset controls. GA candidates are not applied to live settings. Discovered URI links are displayed but not crawled. API documentation is available at /docs; the OpenAPI document is at /openapi.json.
 
 ## Scope
 
