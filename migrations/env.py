@@ -20,7 +20,7 @@ from ensemble.thompson_store import thompson_metadata
 from ensemble.learning_store import learning_metadata
 
 config = context.config
-configured_url = os.getenv("ENSEMBLE_DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+configured_url = os.getenv("ENSEMBLE_DATABASE_URL")
 resolved_url = resolve_database_url(configured_url)
 config.set_main_option("sqlalchemy.url", resolved_url.replace("%", "%%"))
 
