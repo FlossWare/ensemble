@@ -280,3 +280,14 @@ learningReset.addEventListener("click",async()=>{
  finally{learningReset.disabled=false;}
 });
 refreshLearning();
+
+const runtimeConfigValues=document.getElementById("runtime-config-values");
+if(runtimeConfigValues){
+ fetch("/api/v1/system/config")
+  .then(async response=>{
+   const value=await response.json();
+   if(!response.ok)throw new Error(value.detail||"configuration request failed");
+   runtimeConfigValues.textContent=JSON.stringify(value,null,2);
+  })
+  .catch(error=>{runtimeConfigValues.textContent="Could not load runtime configuration: "+error.message;});
+}
