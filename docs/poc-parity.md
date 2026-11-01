@@ -36,7 +36,7 @@ The POC README declares 13 services. All 13 are in scope.
 | Intent | services/intent, port 8779, classify | Explainable intent labels, confidence, matched evidence and per-label scores | POC rule set and REST routes added; parity tests authored, CI not yet verified | Adapt |
 | Ranking | services/ranking, port 8780, rank | Deterministic reciprocal-rank fusion with per-list score contributions and stable tie-breaking | POC-compatible fusion logic and REST routes added; parity tests authored, CI not yet verified | Adapt |
 | Knowledge | services/knowledge, port 8781, records/tombstone | Sourced records, origin/locator provenance, revision checks through Index, idempotency and deletion | SQLite sourced-record storage, SHA-256 content digest, Index-gated revision decisions, provenance, tombstones and REST routes implemented; tests authored, CI not yet verified | Adapt |
-| Memory | services/memory, port 8767, memory operations and session-events ledger | Durable episodic memory, session event ledger, concurrent access, path/scope validation, recall and memory lifecycle | Not implemented as POC-equivalent memory capability | Replace |
+| Memory | services/memory, port 8767, memory operations and session-events ledger | Durable episodic memory, session event ledger, concurrent access, path/scope validation, recall and memory lifecycle | Not implemented as POC-equivalent memory capability | Replace |\n| URI scraping | POC ingestion workflows and source discovery | Safe public-URI fetch, readable extraction, preview, explicit ingest, bounded link discovery and observable job lifecycle | Initial single-page preview and explicit ingest endpoints plus browser UI implemented; bounded multi-page crawl, robots policy, scheduling, and durable job history pending | Adapt |
 
 ## Knowledge implementation
 
@@ -180,3 +180,10 @@ Before implementing each capability, complete a source audit recording:
 8. Contract and regression tests proving parity.
 
 Do not mark parity complete based solely on matching endpoint names or a green unit-test suite.
+
+
+## URI scraping and Control Center
+
+The browser Control Center is served by the same FastAPI application at `/control`; its JavaScript uses the same REST listener. The first ingestion workflow accepts one public HTTP(S) URI, rejects local/private/reserved destinations, bounds redirects, response size and duration, extracts readable HTML or plain text, and presents a preview. Preview is read-only. The user must explicitly select Ingest before the document pipeline is called. Discovered links are shown as future crawl candidates and are not fetched automatically.
+
+This is the first slice, not full crawler parity. Remaining work includes robots.txt policy, stronger DNS-to-connection binding against rebinding, bounded same-origin crawl selection, deduplication, durable ingestion jobs/progress/retry, and source refresh scheduling. Do not expose arbitrary network targets or shell execution through the Control Center.
