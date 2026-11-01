@@ -14,7 +14,7 @@ Ensemble supports a standard Linux host installation under systemd. It does not 
 From a checkout of this repository:
 
 ```bash
-sudo ./scripts/install.sh
+sudo bash ./scripts/install.sh
 ```
 
 The installer creates a dedicated ensemble system user, installs the application under /opt/ensemble/app, creates a virtual environment under /opt/ensemble/venv, creates /etc/ensemble/ensemble.env if it does not exist, initializes the SQLite schema as the service user, and enables ensemble.service.
