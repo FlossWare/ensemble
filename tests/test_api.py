@@ -249,3 +249,89 @@ def test_vector_contract_rejects_invalid_vectors(tmp_path):
             json={"embedding": [1.0], "top_k": 1},
         )
         assert response.status_code == 400
+
+
+
+def test_index_revision_decisions_and_profile_conflicts(tmp_path):
+    with _client(tmp_path) as client:
+        first = client.post("/api/v1/index/revisions", json={
+            "source_id": "source-a", "revision_sequence": 1,
+            "revision_id": "rev-1", "profiles": {"chunk": "window-v1"},
+        }).json()
+        assert first["decision"] == "accepted"
+
+        duplicate = client.post("/api/v1/index/revisions", json={
+            "source_id": "source-a", "revision_sequence": 1,
+            "revision_id": "rev-1", "profiles": {"chunk": "window-v1"},
+        }).json()
+        assert duplicate["decision"] == "duplicate"
+
+        conflict = client.post("/api/v1/index/revisions", json={
+            "source_id": "source-a", "revision_sequence": 1,
+            "revision_id": "rev-1", "profiles": {"chunk": "markdown-v1"},
+        }).json()
+        assert conflict["decision"] == "conflict"
+
+        newer = client.post("/api/v1/index/revisions", json={
+            "source_id": "source-a", "revision_sequence": 2,
+            "revision_id": "rev-2", "profiles": {"chunk": "markdown-v1"},
+        }).json()
+        assert newer["decision"] == "accepted"
+
+        late = client.post("/api/v1/index/revisions", json={
+            "source_id": "source-a", "revision_sequence": 1,
+            "revision_id": "rev-1", "profiles": {"chunk": "window-v1"},
+        }).json()
+        assert late["decision"] == "superseded"
+
+
+def test_index_tombstones_are_permanent_and_manifest_is_bounded(tmp_path):
+    with _client(tmp_path) as client:
+        client.post("/api/v1/index/revisions", json={
+            "source_id": "source-b", "revision_sequence": 3,
+            "revision_id": "rev-3", "profiles": {"chunk": "window-v1"},
+        })
+        tombstone = client.post("/api/v1/index/tombstones", json={
+            "source_id": "source-b", "revision_sequence": 4,
+        }).json()
+        assert tombstone["decision"] == "tombstoned"
+
+        later = client.post("/api/v1/index/revisions", json={
+            "source_id": "source-b", "revision_sequence": 5,
+            "revision_id": "rev-5", "profiles": {"chunk": "window-v1"},
+        }).json()
+        assert later["decision"] == "tombstoned"
+        source = client.get("/api/v1/index/sources/source-b").json()["source"]
+        assert source["tombstoned"] is True
+        assert source["high_sequence"] == 4
+
+        assert client.get("/api/v1/index/manifest?limit=500").status_code == 200
+        assert client.get("/api/v1/index/manifest?limit=501").status_code == 400
+
+
+def test_index_manifest_persists_across_restart(tmp_path):
+    payload = {
+        "source_id": "persistent-index", "revision_sequence": 9,
+        "revision_id": "rev-9", "profiles": {"chunk": "window-v1"},
+    }
+    with _client(tmp_path) as client:
+        assert client.post("/api/v1/index/revisions", json=payload).json()["decision"] == "accepted"
+
+    with _client(tmp_path) as client:
+        source = client.get("/api/v1/index/sources/persistent-index").json()["source"]
+        assert source["high_sequence"] == 9
+        assert source["revision_id"] == "rev-9"
+
+
+def test_index_rejects_invalid_revision_inputs(tmp_path):
+    with _client(tmp_path) as client:
+        response = client.post("/api/v1/index/revisions", json={
+            "source_id": "source", "revision_sequence": True,
+            "revision_id": "rev", "profiles": {"chunk": "window-v1"},
+        })
+        assert response.status_code == 400
+        response = client.post("/api/v1/index/revisions", json={
+            "source_id": "source", "revision_sequence": 1,
+            "revision_id": "rev", "profiles": {},
+        })
+        assert response.status_code == 400
