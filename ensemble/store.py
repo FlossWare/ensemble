@@ -52,6 +52,7 @@ class IndexedChunk:
 class DocumentStore(Protocol):
     async def initialize(self) -> None: ...
     async def close(self) -> None: ...
+    async def check_ready(self) -> None: ...
     async def save(self, document: Document, chunks: list[Chunk]) -> Document: ...
     async def all_chunks(self) -> list[IndexedChunk]: ...
 
@@ -67,6 +68,9 @@ class InMemoryDocumentStore:
         return None
 
     async def close(self) -> None:
+        return None
+
+    async def check_ready(self) -> None:
         return None
 
     async def save(self, document: Document, chunks: list[Chunk]) -> Document:
@@ -129,9 +133,19 @@ class SqlDocumentStore:
             raise RuntimeError(
                 "Ensemble database schema is incomplete; run 'alembic upgrade head'"
             )
+        async with self.engine.connect() as connection:
+            revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
+        if revision != "0001_initial":
+            raise RuntimeError(
+                "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
+            )
 
     async def close(self) -> None:
         await self.engine.dispose()
+
+    async def check_ready(self) -> None:
+        async with self.engine.connect() as connection:
+            await connection.execute(select(1))
 
     async def save(self, document: Document, chunks: list[Chunk]) -> Document:
         backend = self.engine.url.get_backend_name()
