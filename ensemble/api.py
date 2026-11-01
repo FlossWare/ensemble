@@ -35,6 +35,7 @@ from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
 from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
 from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
+from .config import settings_from_env, resolve_database_url
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -72,6 +73,7 @@ def create_app(
     thompson_store: ThompsonStore | None = None,
     learning_store: LearningStore | None = None,
 ) -> FastAPI:
+    database_url = resolve_database_url(database_url)
     document_store = store or SqlDocumentStore(database_url)
     embeddings = embedding_provider or configured_embedding_provider()
     active_reranker = reranker or configured_reranker()
@@ -153,6 +155,7 @@ def create_app(
     app.state.ga_store = active_ga_store
     app.state.thompson_store = active_thompson_store
     app.state.learning_store = active_learning_store
+    app.state.settings = settings_from_env()
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -166,6 +169,18 @@ def create_app(
             request, 422, "Unprocessable Content",
             "Request validation failed", "request-validation-failed"
         )
+
+    @app.get("/api/v1/system/config", tags=["system"])
+    async def system_config():
+        settings = app.state.settings
+        return {
+            "ok": True,
+            "host": settings.host,
+            "port": settings.port,
+            "persistence_root": str(settings.persistence_root),
+            "database": "sqlite",
+            "database_url": settings.database_url,
+        }
 
     @app.get("/health", tags=["operations"])
     async def health():
