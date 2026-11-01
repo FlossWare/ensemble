@@ -16,6 +16,9 @@ dependencies = [
   "alembic>=1.15,<2",
 ]
 
+[project.scripts]
+ensemble = "ensemble.__main__:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.3,<9", "pytest-cov>=6,<7", "httpx>=0.28,<1"]
 reranking = ["sentence-transformers>=3.4,<6"]
