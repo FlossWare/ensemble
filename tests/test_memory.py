@@ -100,7 +100,7 @@ def test_memory_context_retrieval_prioritizes_parent_and_search_is_bounded():
             json={"keywords": ["parent", "memory"]},
         )
         assert search.status_code == 200
-        assert search.json()["results"][0]["name"] == "execution"
+        assert search.json()["results"][0]["file"] == "execution"
 
 
 def test_memory_chunking_and_name_validation():
