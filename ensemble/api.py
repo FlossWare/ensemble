@@ -37,8 +37,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        await document_store.initialize()
         try:
+            await document_store.initialize()
             yield
         finally:
             await document_store.close()
@@ -74,6 +74,10 @@ def create_app(
 
     @app.get("/ready", tags=["operations"])
     async def ready():
+        try:
+            await document_store.check_ready()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="persistence unavailable") from exc
         return {
             "status": "ready",
             "persistence": "durable",
