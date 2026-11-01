@@ -45,6 +45,7 @@ Implemented on the parity branch (regression tests authored; execution still req
 - POC-compatible identifier extraction capability and REST endpoints.
 - POC-compatible rule-based intent classification capability and REST endpoints.
 - POC-compatible explainable reciprocal-rank fusion capability and REST endpoints.
+- POC vector collection REST operations and durable SQLite collection/record storage; ANN indexing remains intentionally absent.
 - POC-compatible reranking REST endpoint and optional local cross-encoder provider (model installation/runtime verification pending).
 
 Not yet implemented:
