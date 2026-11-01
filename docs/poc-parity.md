@@ -25,7 +25,7 @@ The POC README declares 13 services. All 13 are in scope.
 | POC capability | POC location / contract | Required Ensemble capability | Current Ensemble state | Initial disposition |
 |---|---|---|---|---|
 | Embedding | services/embeddings, port 8770, embeddings/model/health | Document/query embeddings, model identity and revision, dimensions, runtime provenance, limits, provider selection, health | Optional OpenAI-compatible provider exists; POC Nomic contract and runtime parity absent | Adapt |
-| Vector | services/embeddings, port 8771, collection query/upsert/existing/delete-superseded | Vector collection operations, deterministic IDs, upsert, search, deletion/revision handling, health | Embeddings stored as JSON and application-scored; no dedicated vector index or collection API | Replace |
+| Vector | services/embeddings, port 8771, collection query/upsert/existing/delete-superseded | Vector collection operations, deterministic IDs, upsert, search, deletion/revision handling, health | SQLite-backed named collections and all POC collection routes implemented; exact dot-product search and model/dimension compatibility; tests authored, CI not yet verified | Replace |
 | Lexical | services/embeddings, port 8772, search/documents | Incremental idempotent lexical indexing, analyzed fields, BM25/FTS retrieval, source metadata | Basic lexical retrieval exists; POC FTS5, tokenization dependency, incremental transcript ingestion absent | Adapt |
 | Hybrid | services/embeddings, port 8773, search/knowledge-search/prompts | Orchestrated multi-channel retrieval, knowledge/transcript retrieval, partial dependency degradation, ingestion/event handling | Basic search and RRF exist; full orchestration and degraded mode absent | Adapt |
 | Reranking | services/embeddings, port 8774, rerank | Cross-encoder candidate reranking, model metadata, bounded inputs, aligned scores, health/readiness | Optional local CrossEncoder provider and REST route added; model/runtime and hybrid-pipeline integration pending; tests authored, CI not yet verified | Adapt |
@@ -37,6 +37,10 @@ The POC README declares 13 services. All 13 are in scope.
 | Ranking | services/ranking, port 8780, rank | Deterministic reciprocal-rank fusion with per-list score contributions and stable tie-breaking | POC-compatible fusion logic and REST routes added; parity tests authored, CI not yet verified | Adapt |
 | Knowledge | services/knowledge, port 8781, records/tombstone | Sourced records, origin/locator provenance, revision checks through Index, idempotency and deletion | Document ingestion exists; knowledge record lifecycle and provenance contract absent | Adapt |
 | Memory | services/memory, port 8767, memory operations and session-events ledger | Durable episodic memory, session event ledger, concurrent access, path/scope validation, recall and memory lifecycle | Not implemented as POC-equivalent memory capability | Replace |
+
+## Vector storage implementation
+
+Ensemble replaces ChromaDB with its own SQLite-backed vector collections. Collection model and dimensions are immutable once created; records are upserted by stable ID; exact dot-product search is deterministic with ID tie-breaking; metadata updates and source-revision cleanup are supported. This is functionally compatible with the POC operations but does not claim ANN scalability. Vector tables are introduced by Alembic migration `0002_vector_collections`.
 
 ## Embedding runtime behavior to preserve or explicitly supersede
 
