@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -8,7 +9,7 @@ from .chunking import Chunker
 from .embeddings import configured_embedding_provider
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
-from .store import InMemoryDocumentStore
+from .store import DocumentStore, SqlDocumentStore
 
 
 def _problem(request: Request, status: int, title: str, detail: str, code: str) -> JSONResponse:
@@ -27,18 +28,31 @@ def _problem(request: Request, status: int, title: str, detail: str, code: str) 
     )
 
 
-def create_app() -> FastAPI:
+def create_app(
+    database_url: str | None = None,
+    store: DocumentStore | None = None,
+) -> FastAPI:
+    document_store = store or SqlDocumentStore(database_url)
+    embeddings = configured_embedding_provider()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        await document_store.initialize()
+        try:
+            yield
+        finally:
+            await document_store.close()
+
     app = FastAPI(
         title="Ensemble API",
         version="0.1",
         description="REST-first memory, knowledge, and retrieval platform.",
+        lifespan=lifespan,
     )
-    store = InMemoryDocumentStore()
-    embeddings = configured_embedding_provider()
-    documents = DocumentService(store, Chunker(), embeddings)
-    search = SearchService(store, embeddings)
+    documents = DocumentService(document_store, Chunker(), embeddings)
+    search = SearchService(document_store, embeddings)
 
-    app.state.store = store
+    app.state.store = document_store
     app.state.embedding_provider = embeddings
 
     @app.exception_handler(HTTPException)
@@ -60,7 +74,11 @@ def create_app() -> FastAPI:
 
     @app.get("/ready", tags=["operations"])
     async def ready():
-        return {"status": "ready", "persistence": "memory", "embeddings": embeddings.available}
+        return {
+            "status": "ready",
+            "persistence": "durable",
+            "embeddings": embeddings.available,
+        }
 
     @app.post("/api/v1/documents", response_model=DocumentOut, status_code=201, tags=["documents"])
     async def ingest_document(request: DocumentIn):
