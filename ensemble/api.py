@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
@@ -21,6 +22,11 @@ from .extraction import extract
 from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
 from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_reranker, validate_rerank_request
+
+
+def _validate_vector_collection_name(name: str) -> None:
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name) or name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="collection name must be 1-128 safe characters")
 
 
 def _problem(request: Request, status: int, title: str, detail: str, code: str) -> JSONResponse:
@@ -223,6 +229,7 @@ def create_app(
 
     @app.post("/api/v1/vector/collections/{name}/existing", tags=["vector"])
     async def vector_existing(name: str, payload: dict[str, Any]):
+        _validate_vector_collection_name(name)
         ids = payload.get("ids", [])
         if not isinstance(ids, list) or len(ids) > 1000 or any(
             not isinstance(item, str) or not item or len(item) > 512 for item in ids
@@ -232,6 +239,7 @@ def create_app(
 
     @app.post("/api/v1/vector/collections/{name}/upsert", tags=["vector"])
     async def vector_upsert(name: str, payload: dict[str, Any]):
+        _validate_vector_collection_name(name)
         ids, vectors = payload.get("ids"), payload.get("embeddings")
         documents_payload, metadatas = payload.get("documents"), payload.get("metadatas")
         if not isinstance(ids, list) or not isinstance(vectors, list) or not isinstance(documents_payload, list):
@@ -240,8 +248,10 @@ def create_app(
             raise HTTPException(status_code=400, detail="ids, embeddings, and documents must be non-empty and equal length")
         if len(ids) > 256:
             raise HTTPException(status_code=413, detail="at most 256 records per upsert")
-        if len(set(ids)) != len(ids) or any(not isinstance(item, str) or not item or len(item) > 512 for item in ids):
-            raise HTTPException(status_code=400, detail="ids must be unique non-empty strings of at most 512 characters")
+        if any(not isinstance(item, str) or not item or len(item) > 512 for item in ids):
+            raise HTTPException(status_code=400, detail="ids must be non-empty strings of at most 512 characters")
+        if len(set(ids)) != len(ids):
+            raise HTTPException(status_code=400, detail="ids must be unique")
         status = embeddings.status()
         model = payload.get("model") or status.get("model")
         dimensions = payload.get("dimensions") or status.get("dimensions")
@@ -275,6 +285,7 @@ def create_app(
 
     @app.post("/api/v1/vector/collections/{name}/metadata", tags=["vector"])
     async def vector_metadata(name: str, payload: dict[str, Any]):
+        _validate_vector_collection_name(name)
         ids, metadatas = payload.get("ids"), payload.get("metadatas")
         if not isinstance(ids, list) or not isinstance(metadatas, list) or not ids or len(ids) != len(metadatas) or len(ids) > 256:
             raise HTTPException(status_code=400, detail="ids and metadatas must be non-empty lists of equal length, at most 256")
@@ -287,6 +298,7 @@ def create_app(
 
     @app.post("/api/v1/vector/collections/{name}/delete-superseded", tags=["vector"])
     async def vector_delete_superseded(name: str, payload: dict[str, Any]):
+        _validate_vector_collection_name(name)
         url, digest = payload.get("url"), payload.get("keep_sha256")
         if not isinstance(url, str) or not url or len(url) > 2048:
             raise HTTPException(status_code=400, detail="url must be a non-empty string of at most 2048 characters")
@@ -297,6 +309,7 @@ def create_app(
 
     @app.post("/api/v1/vector/collections/{name}/query", tags=["vector"])
     async def vector_query(name: str, payload: dict[str, Any]):
+        _validate_vector_collection_name(name)
         vector, top_k = payload.get("embedding"), payload.get("top_k", 10)
         if not isinstance(top_k, int) or isinstance(top_k, bool) or not 1 <= top_k <= 200:
             raise HTTPException(status_code=400, detail="top_k must be an integer from 1 to 200")
