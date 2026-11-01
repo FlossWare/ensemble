@@ -5,6 +5,13 @@ import random
 from typing import Any
 
 
+def _average_cost(stats: dict[str, Any]) -> float:
+    calls = stats.get("calls", 0)
+    if isinstance(calls, bool) or not isinstance(calls, int) or calls <= 0:
+        return 0.0
+    return float(stats.get("avg_cost", stats.get("total_cost", 0.0) / calls))
+
+
 def select_model(
     state: dict[str, Any],
     task_type: str = "unknown",
@@ -29,7 +36,7 @@ def select_model(
     candidates = {
         name: stats for name, stats in sorted(models.items())
         if (
-            (stats.get("avg_cost", stats.get("total_cost", 0.0) / stats.get("calls", 1)) <= max_cost)
+            (_average_cost(stats) <= max_cost)
             or stats.get("calls", 0) == 0
         )
     }
@@ -37,7 +44,7 @@ def select_model(
         name = min(
             models,
             key=lambda item: (
-                models[item].get("avg_cost", models[item].get("total_cost", 0.0) / max(1, models[item].get("calls", 0))),
+                _average_cost(models[item]),
                 item,
             ),
         )
