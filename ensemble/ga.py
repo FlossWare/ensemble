@@ -326,8 +326,10 @@ class GeneticAlgorithm:
         if not 1 <= c.tournament_k <= 10:
             raise ValueError("tournament_k must be between 1 and 10")
         for name, value in (("crossover_rate", c.crossover_rate), ("mutation_rate", c.mutation_rate)):
-            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
-                raise ValueError(f"{name} must be between 0 and 1")
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be numeric and between 0 and 1")
+        if isinstance(c.tournament_k, bool) or not isinstance(c.tournament_k, int) or not 1 <= c.tournament_k <= 10:
+            raise ValueError("tournament_k must be an integer between 1 and 10")
         if isinstance(c.seed, bool) or not isinstance(c.seed, int) or not 0 <= c.seed <= 2**32 - 1:
             raise ValueError("seed must be an integer between 0 and 2^32-1")
 
