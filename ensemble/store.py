@@ -26,6 +26,9 @@ class InMemoryDocumentStore:
 
     async def save(self, document: Document, chunks: list[Chunk]) -> None:
         key = (document.source_id, document.revision)
+        previous = self._documents.get(key)
+        if previous is not None:
+            self._chunks.pop(previous.id, None)
         self._documents[key] = document
         self._chunks[document.id] = list(chunks)
 
