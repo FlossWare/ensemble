@@ -219,3 +219,64 @@ thompsonForm.addEventListener("submit",async event=>{
 });
 thompsonRefresh.addEventListener("click",refreshThompson);
 refreshThompson();
+
+const learningRefresh=document.getElementById("learning-refresh");
+const learningReset=document.getElementById("learning-reset");
+const learningStatus=document.getElementById("learning-status");
+const learningReport=document.getElementById("learning-report");
+const learningOutcomes=document.getElementById("learning-outcomes");
+const learningArtifacts=document.getElementById("learning-artifacts");
+async function learningGet(path,options={}){
+ const response=await fetch(path,options);
+ const result=await response.json();
+ if(!response.ok)throw new Error(JSON.stringify(result.detail||result));
+ return result;
+}
+async function refreshLearning(){
+ learningRefresh.disabled=true;
+ try{
+  const [report,outcomes,artifacts]=await Promise.all([
+   learningGet("/api/v1/learning/report"),
+   learningGet("/api/v1/learning/outcomes?days=30"),
+   learningGet("/api/v1/learning/artifacts?limit=50")
+  ]);
+  learningReport.textContent=JSON.stringify(report,null,2);
+  learningOutcomes.replaceChildren();
+  const table=document.createElement("table");
+  const header=document.createElement("tr");
+  for(const label of ["Task ID","Task type","Model","Rating","Tokens","Cost","Status"]){
+   const cell=document.createElement("th");cell.textContent=label;header.append(cell);
+  }
+  table.append(header);
+  for(const item of outcomes.outcomes){
+   const row=document.createElement("tr");
+   for(const value of [item.task_id,item.task_type,item.model,item.rating,item.tokens,item.cost,item.status]){
+    const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);
+   }
+   table.append(row);
+  }
+  learningOutcomes.append(table);
+  if(!outcomes.outcomes.length)learningOutcomes.textContent="No outcomes in the selected period.";
+  learningArtifacts.replaceChildren();
+  for(const artifact of artifacts.artifacts){
+   const item=document.createElement("p");
+   item.textContent=artifact.artifact_type+" | "+artifact.artifact_key+" | "+artifact.created_at;
+   learningArtifacts.append(item);
+  }
+  if(!artifacts.artifacts.length)learningArtifacts.textContent="No portable artifacts recorded.";
+  learningStatus.textContent=outcomes.outcomes.length+" recent outcome(s), "+artifacts.artifacts.length+" artifact(s).";
+ }catch(error){learningStatus.textContent="Could not load Learning state: "+error.message;}
+ finally{learningRefresh.disabled=false;}
+}
+learningRefresh.addEventListener("click",refreshLearning);
+learningReset.addEventListener("click",async()=>{
+ if(!window.confirm("Reset all Learning outcomes? Portable artifacts and Thompson model statistics will be preserved."))return;
+ learningReset.disabled=true;
+ try{
+  await learningGet("/api/v1/learning/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({confirm:true})});
+  learningStatus.textContent="Learning outcomes reset. Thompson state and artifacts were preserved.";
+  await refreshLearning();
+ }catch(error){learningStatus.textContent="Reset failed: "+error.message;}
+ finally{learningReset.disabled=false;}
+});
+refreshLearning();
