@@ -2,40 +2,96 @@ from fastapi.testclient import TestClient
 from ensemble.api import create_app
 
 
-def test_health_and_ready():
-    client = TestClient(create_app())
-    assert client.get("/health").json()["status"] == "ok"
-    assert client.get("/ready").json()["status"] == "ready"
+def _client(tmp_path):
+    database = tmp_path / "ensemble.db"
+    return TestClient(create_app(database_url=f"sqlite+aiosqlite:///{database}"))
 
 
-def test_ingest_then_lexical_search_returns_provenance():
-    client = TestClient(create_app())
-    response = client.post("/api/v1/documents", json={
-        "source_id": "architecture-note",
+def test_health_and_ready(tmp_path):
+    with _client(tmp_path) as client:
+        assert client.get("/health").json()["status"] == "ok"
+        ready = client.get("/ready").json()
+        assert ready["status"] == "ready"
+        assert ready["persistence"] == "durable"
+
+
+def test_ingest_then_lexical_search_returns_provenance(tmp_path):
+    with _client(tmp_path) as client:
+        response = client.post("/api/v1/documents", json={
+            "source_id": "architecture-note",
+            "revision": 1,
+            "title": "Vector retrieval",
+            "content": "Vector retrieval combines embeddings with lexical search for better recall."
+        })
+        assert response.status_code == 201
+        document = response.json()
+        assert document["chunk_count"] == 1
+        assert document["embedded"] is False
+
+        result = client.post("/api/v1/search", json={"query": "lexical embeddings", "limit": 5})
+        assert result.status_code == 200
+        hits = result.json()
+        assert len(hits) == 1
+        assert hits[0]["source_id"] == "architecture-note"
+        assert hits[0]["document_id"] == document["id"]
+        assert hits[0]["lexical_score"] > 0
+
+
+def test_validation_errors_use_problem_details(tmp_path):
+    with _client(tmp_path) as client:
+        response = client.post("/api/v1/documents", json={})
+        assert response.status_code == 422
+        assert response.headers["content-type"].startswith("application/problem+json")
+        body = response.json()
+        assert body["status"] == 422
+        assert body["code"] == "request-validation-failed"
+        assert body["correlationId"]
+
+
+def test_documents_survive_application_restart(tmp_path):
+    payload = {
+        "source_id": "persistent-note",
         "revision": 1,
-        "title": "Vector retrieval",
-        "content": "Vector retrieval combines embeddings with lexical search for better recall."
-    })
-    assert response.status_code == 201
-    document = response.json()
-    assert document["chunk_count"] == 1
-    assert document["embedded"] is False
+        "title": "Durable storage",
+        "content": "Durable storage must survive application restarts and process replacement.",
+    }
+    with _client(tmp_path) as client:
+        first = client.post("/api/v1/documents", json=payload).json()
 
-    result = client.post("/api/v1/search", json={"query": "lexical embeddings", "limit": 5})
-    assert result.status_code == 200
-    hits = result.json()
-    assert len(hits) == 1
-    assert hits[0]["source_id"] == "architecture-note"
-    assert hits[0]["document_id"] == document["id"]
-    assert hits[0]["lexical_score"] > 0
+    with _client(tmp_path) as client:
+        hits = client.post("/api/v1/search", json={"query": "durable storage"}).json()
+        assert len(hits) == 1
+        assert hits[0]["document_id"] == first["id"]
 
 
-def test_validation_errors_use_problem_details():
-    client = TestClient(create_app())
-    response = client.post("/api/v1/documents", json={})
-    assert response.status_code == 422
-    assert response.headers["content-type"].startswith("application/problem+json")
-    body = response.json()
-    assert body["status"] == 422
-    assert body["code"] == "request-validation-failed"
-    assert body["correlationId"]
+def test_reingest_is_idempotent_and_latest_revision_is_searchable(tmp_path):
+    with _client(tmp_path) as client:
+        original = {
+            "source_id": "versioned-note",
+            "revision": 1,
+            "title": "First revision",
+            "content": "The original document discusses obsolete indexing behavior.",
+        }
+        first = client.post("/api/v1/documents", json=original).json()
+        again = client.post("/api/v1/documents", json=original).json()
+        assert again["id"] == first["id"]
+
+        revised = {
+            "source_id": "versioned-note",
+            "revision": 2,
+            "title": "Second revision",
+            "content": "The current document discusses durable indexing behavior.",
+        }
+        second = client.post("/api/v1/documents", json=revised).json()
+        assert second["id"] != first["id"]
+
+        current = client.post("/api/v1/search", json={"query": "indexing behavior"}).json()
+        assert len(current) == 1
+        assert current[0]["revision"] == 2
+        assert current[0]["document_id"] == second["id"]
+
+        historical = client.post("/api/v1/documents", json=original).json()
+        assert historical["id"] == first["id"]
+        still_current = client.post("/api/v1/search", json={"query": "indexing behavior"}).json()
+        assert len(still_current) == 1
+        assert still_current[0]["revision"] == 2
