@@ -335,3 +335,89 @@ def test_index_rejects_invalid_revision_inputs(tmp_path):
             "revision_id": "rev", "profiles": {},
         })
         assert response.status_code == 400
+
+
+
+def _knowledge_record(source_id="rfc-1", sequence=1, revision_id="rev-1", content="the body"):
+    return {
+        "source_id": source_id,
+        "revision_sequence": sequence,
+        "revision_id": revision_id,
+        "title": "RFC 1",
+        "content": content,
+        "provenance": {"origin": "rfc-editor", "locator": "https://example.org/rfc1"},
+        "profiles": {"chunking": "window-v1@1", "tokenization": "lexical-v1@1"},
+    }
+
+
+def test_knowledge_store_readback_and_provenance(tmp_path):
+    with _client(tmp_path) as client:
+        response = client.post("/api/v1/knowledge/records", json=_knowledge_record())
+        assert response.status_code == 200
+        body = response.json()
+        assert (body["decision"], body["stored"]) == ("accepted", True)
+        record = client.get("/api/v1/knowledge/records/rfc-1").json()["record"]
+        assert record["content"] == "the body"
+        assert record["provenance"]["origin"] == "rfc-editor"
+        assert record["provenance"]["locator"] == "https://example.org/rfc1"
+        assert len(record["content_sha256"]) == 64
+
+
+def test_knowledge_is_index_gated_and_revision_ordered(tmp_path):
+    with _client(tmp_path) as client:
+        first = client.post("/api/v1/knowledge/records", json=_knowledge_record()).json()
+        duplicate = client.post("/api/v1/knowledge/records", json=_knowledge_record()).json()
+        assert first["decision"] == duplicate["decision"] == "accepted"
+        assert duplicate["stored"] is True
+
+        newer = client.post(
+            "/api/v1/knowledge/records",
+            json=_knowledge_record(sequence=2, revision_id="rev-2", content="new body"),
+        ).json()
+        assert newer["decision"] == "accepted"
+        stale = client.post(
+            "/api/v1/knowledge/records",
+            json=_knowledge_record(content="stale body"),
+        ).json()
+        assert (stale["decision"], stale["stored"]) == ("superseded", False)
+        record = client.get("/api/v1/knowledge/records/rfc-1").json()["record"]
+        assert record["revision_sequence"] == 2
+        assert record["content"] == "new body"
+
+
+def test_knowledge_tombstone_blocks_future_revisions(tmp_path):
+    with _client(tmp_path) as client:
+        client.post("/api/v1/knowledge/records", json=_knowledge_record())
+        tombstone = client.post(
+            "/api/v1/knowledge/records/rfc-1/tombstone",
+            json={"revision_sequence": 2},
+        ).json()
+        assert tombstone["decision"] == "tombstoned"
+        record = client.get("/api/v1/knowledge/records/rfc-1").json()["record"]
+        assert record["tombstoned"] is True
+        later = client.post(
+            "/api/v1/knowledge/records",
+            json=_knowledge_record(sequence=3, revision_id="rev-3", content="resurrected"),
+        ).json()
+        assert (later["decision"], later["stored"]) == ("tombstoned", False)
+        assert client.get("/api/v1/knowledge/records/rfc-1").json()["record"]["content"] == "the body"
+
+
+def test_knowledge_records_persist_across_restart(tmp_path):
+    with _client(tmp_path) as client:
+        client.post("/api/v1/knowledge/records", json=_knowledge_record("persisted-rfc"))
+    with _client(tmp_path) as client:
+        record = client.get("/api/v1/knowledge/records/persisted-rfc").json()["record"]
+        assert record["source_id"] == "persisted-rfc"
+        assert record["revision_id"] == "rev-1"
+
+
+def test_knowledge_validation_rejects_missing_provenance_and_profiles(tmp_path):
+    with _client(tmp_path) as client:
+        payload = _knowledge_record()
+        payload["provenance"] = {"origin": "source"}
+        assert client.post("/api/v1/knowledge/records", json=payload).status_code == 400
+        payload = _knowledge_record()
+        payload["profiles"] = {}
+        assert client.post("/api/v1/knowledge/records", json=payload).status_code == 400
+        assert client.get("/api/v1/knowledge/records/missing").status_code == 404
