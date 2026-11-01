@@ -557,6 +557,12 @@ def create_app(
         from pathlib import Path
         return HTMLResponse(Path(__file__).with_name("control_panel.html").read_text(encoding="utf-8"))
 
+    @app.get("/control.js", include_in_schema=False)
+    async def control_script():
+        from pathlib import Path
+        from fastapi.responses import Response
+        return Response(Path(__file__).with_name("control.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
     @app.post("/api/v1/scrape/preview", tags=["scraping"])
     async def scrape_preview(payload: dict[str, Any]):
         try:
