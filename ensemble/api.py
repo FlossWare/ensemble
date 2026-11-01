@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import secrets
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, HTMLResponse
 from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chunk as chunk_text, describe_profiles as describe_chunk_profiles
@@ -28,6 +29,8 @@ from .ranking import DEFAULT_K, fuse
 from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_reranker, validate_rerank_request
 from .scraping import ScrapeError, preview_uri
 from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
+from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
+from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -61,6 +64,7 @@ def create_app(
     knowledge_store: KnowledgeStore | None = None,
     graph_store: GraphStore | None = None,
     memory_store: MemoryStore | None = None,
+    ga_store: GAStore | None = None,
 ) -> FastAPI:
     document_store = store or SqlDocumentStore(database_url)
     embeddings = embedding_provider or configured_embedding_provider()
@@ -85,6 +89,10 @@ def create_app(
         InMemoryMemoryStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteMemoryStore(database_url)
     )
+    active_ga_store = ga_store or (
+        InMemoryGAStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteGAStore(database_url)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -95,8 +103,10 @@ def create_app(
             await active_knowledge_store.initialize()
             await active_graph_store.initialize()
             await active_memory_store.initialize()
+            await active_ga_store.initialize()
             yield
         finally:
+            await active_ga_store.close()
             await active_memory_store.close()
             await active_graph_store.close()
             await active_knowledge_store.close()
@@ -121,6 +131,7 @@ def create_app(
     app.state.knowledge_store = active_knowledge_store
     app.state.graph_store = active_graph_store
     app.state.memory_store = active_memory_store
+    app.state.ga_store = active_ga_store
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -150,7 +161,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "memory"],
+            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "memory", "ga"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
@@ -573,6 +584,131 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "results": results}
 
+
+
+    @app.get("/api/v1/ga/health", tags=["ga"])
+    async def ga_health():
+        return {"ok": True, "service": "ga", "systems": list(GA_SYSTEMS)}
+
+    @app.get("/api/v1/ga/ready", tags=["ga"])
+    async def ga_ready():
+        try:
+            await active_ga_store.list_runs(1)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="GA persistence unavailable") from exc
+        return {
+            "ok": True, "ready": True, "systems": list(GA_SYSTEMS),
+            "parameter_schema_version": "1.0",
+            "evaluation_scope": "synthetic-local",
+        }
+
+    @app.get("/api/v1/ga/optimizers", tags=["ga"])
+    async def ga_optimizers():
+        return {
+            "ok": True,
+            "parameter_schema_version": "1.0",
+            "systems": {
+                system: {
+                    name: {"lower": spec["lower"], "upper": spec["upper"], "default": spec["default"]}
+                    for name, spec in parameters.items()
+                }
+                for system, parameters in GA_PARAMETERS.items()
+            },
+            "evaluation_scope": "synthetic-local",
+            "promotion_policy": "explicit-approval-required; approval records an export candidate and never changes live settings",
+        }
+
+    async def execute_ga_run(run_id: str, config: dict[str, Any]):
+        from datetime import datetime, timezone
+        await active_ga_store.update_run(
+            run_id, status="running", started_at=datetime.now(timezone.utc)
+        )
+        try:
+            result = await asyncio.to_thread(
+                GeneticAlgorithm(GAConfig(**config)).run
+            )
+            await active_ga_store.update_run(
+                run_id, status="completed", result=result,
+                completed_at=datetime.now(timezone.utc), error=None,
+            )
+        except Exception as exc:
+            await active_ga_store.update_run(
+                run_id, status="failed", error=f"{type(exc).__name__}: {exc}",
+                completed_at=datetime.now(timezone.utc),
+            )
+
+    @app.post("/api/v1/ga/runs", status_code=202, tags=["ga"])
+    async def ga_create_run(payload: dict[str, Any], background_tasks: BackgroundTasks):
+        allowed = {"population_size", "generations", "crossover_rate", "mutation_rate", "tournament_k", "seed"}
+        unknown = set(payload) - allowed
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"unsupported GA config fields: {', '.join(sorted(unknown))}")
+        config = {
+            "population_size": payload.get("population_size", 50),
+            "generations": payload.get("generations", 25),
+            "crossover_rate": payload.get("crossover_rate", 0.8),
+            "mutation_rate": payload.get("mutation_rate", 0.1),
+            "tournament_k": payload.get("tournament_k", 3),
+            "seed": payload.get("seed", secrets.randbits(32)),
+        }
+        try:
+            GAConfig(**config)
+            GeneticAlgorithm(GAConfig(**config))._validate_config()
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        run = await active_ga_store.create_run(config)
+        background_tasks.add_task(execute_ga_run, run["id"], config)
+        return {"ok": True, "run": run}
+
+    @app.get("/api/v1/ga/runs", tags=["ga"])
+    async def ga_list_runs(limit: int = 50):
+        try:
+            runs = await active_ga_store.list_runs(limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "runs": runs}
+
+    @app.get("/api/v1/ga/runs/{run_id}", tags=["ga"])
+    async def ga_get_run(run_id: str):
+        run = await active_ga_store.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="GA run not found")
+        return {"ok": True, "run": run}
+
+    @app.post("/api/v1/ga/runs/{run_id}/promote", tags=["ga"])
+    async def ga_promote_candidate(run_id: str, payload: dict[str, Any]):
+        if payload.get("approved") is not True:
+            raise HTTPException(status_code=400, detail="explicit approved=true is required")
+        system = payload.get("system")
+        rank = payload.get("rank", 1)
+        reason = payload.get("reason")
+        approved_by = payload.get("approved_by")
+        if system not in GA_SYSTEMS:
+            raise HTTPException(status_code=400, detail="unknown GA system")
+        if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= 3:
+            raise HTTPException(status_code=400, detail="rank must be between 1 and 3")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 2048:
+            raise HTTPException(status_code=400, detail="reason is required and limited to 2048 characters")
+        if not isinstance(approved_by, str) or not approved_by.strip() or len(approved_by) > 256:
+            raise HTTPException(status_code=400, detail="approved_by is required and limited to 256 characters")
+        run = await active_ga_store.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="GA run not found")
+        if run["status"] != "completed" or not run.get("result"):
+            raise HTTPException(status_code=409, detail="only completed GA runs can be promoted")
+        candidates = run["result"].get("best_by_system", {}).get(system, [])
+        candidate = next((item for item in candidates if item.get("rank") == rank), None)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="GA candidate not found")
+        try:
+            promotion = await active_ga_store.promote(run_id, system, candidate, reason.strip(), approved_by.strip())
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail="candidate already has a promotion record or persistence failed") from exc
+        return {
+            "ok": True, "promotion": promotion,
+            "applied": False,
+            "message": "Candidate approved for export only; no live configuration was changed.",
+        }
 
     @app.get("/api/v1/memory/health", tags=["memory"])
     async def memory_health():
