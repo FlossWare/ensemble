@@ -192,9 +192,27 @@ This is the first slice, not full crawler parity. Remaining work includes robots
 
 ## Additional POC modules outside the 13-service README catalog
 
-The repository also contains separate Graph, Learning, Thompson, scrape-ledger, arbitration, collaboration, workflow, cost-tracking, policy, decision-provenance, operational-metrics, experiments, and provider modules. These are not all listed as the 13 core REST services in the POC README. They require a separate disposition inventory before parity can be declared; do not silently treat their existence as proof that each is a required Ensemble capability. Graph is being treated as a first-class Ensemble capability because it has its own documented REST service and durable graph contract.
+The repository also contains separate Graph, Learning, Thompson, GA Tuning, scrape-ledger, arbitration, collaboration, workflow, cost-tracking, policy, decision-provenance, operational-metrics, experiments, and provider modules. These are not all listed as the 13 core REST services in the POC README. They require a separate disposition inventory before parity can be declared; do not silently treat their existence as proof that each is a required Ensemble capability. Graph and GA Tuning are explicitly included in Ensemble's parity scope.
 
 
 ## Graph implementation
 
 Ensemble adapts the POC Graph service contract into the same REST application. It provides deterministic content-derived node and edge IDs, idempotent add operations, typed node and relationship queries, node lookup, and bounded directional traversal. SQLite tables persist graph mutations and the graph can be reconstructed after restart. This replaces the POC's NetworkX plus atomic JSON-file persistence while retaining its public operation semantics. The graph does not introduce a separate listener or external graph database.
+
+
+## Genetic Algorithm (GA) tuning
+
+The POC contains a substantial GA subsystem at `core/ga_tuning`, separate from the 13 core REST services. It is in Ensemble's parity scope. It must not be mistaken for the generic ranking or Thompson capabilities.
+
+The POC GA evolves parameter sets for five evaluators:
+- Compression: token savings constrained by semantic preservation.
+- Thompson router: cost savings while maintaining quality.
+- Caching: cache hit rate and token savings with false-negative constraints.
+- Capability matrix: model-selection/routing accuracy.
+- Dashboard learning: learning speed and stability under concept drift.
+
+The reference engine uses population-based evolution, tournament selection, crossover, Gaussian mutation, elite preservation, bounded parameter schemas, reproducible runs, fitness history, and best-parameter artifacts. The POC also includes a GA tuning dashboard, a scheduled runner/workflow, parameter extraction/application support, evaluator-specific tests, and recovery/scheduler contract tests.
+
+Ensemble parity must cover the optimizer and evaluator contracts, versioned parameter/result schemas, run configuration, bounded execution, deterministic/reproducible behavior, persisted run status and artifacts, inspectable fitness history and best candidates, and safe parameter promotion. A browser Control Center must be able to configure and launch a run, inspect progress/results, compare candidates, and explicitly approve promotion. Candidate parameters must never be silently applied to live behavior.
+
+The existing POC evaluators use local evaluation and synthetic or configured corpora; do not imply their fitness scores establish production quality. Any evaluator that depends on unavailable RH-only data or consumers must report that limitation rather than fabricate a successful evaluation. GA is a first-class Ensemble capability but remains SQLite-backed and hosted by the single Ensemble REST application; no second server is introduced.
