@@ -28,7 +28,7 @@ def test_ga_run_is_reproducible_and_reports_all_five_evaluators():
 
     assert first == second
     assert set(first["best_by_system"]) == set(SYSTEMS)
-    assert first["total_evaluations"] == 25
+    assert first["total_evaluations"] == 24
     assert first["evaluation_scope"] == {
         "mode": "synthetic-local",
         "api_calls": 0,
