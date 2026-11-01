@@ -259,3 +259,118 @@ class SqliteMemoryStore:
              "content": content[offset:offset + size]}
             for offset in range(0, len(content), size)
         ]
+
+
+class InMemoryMemoryStore:
+    """Isolated non-durable adapter used by tests."""
+
+    def __init__(self):
+        self._memories: dict[str, str] = {}
+        self._entries: dict[str, list[dict[str, Any]]] = {}
+        self._events: dict[tuple[str, str], str] = {}
+
+    async def initialize(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def check_ready(self) -> None:
+        return None
+
+    async def read(self, name: str) -> str | None:
+        return self._memories.get(validate_memory_name(name))
+
+    async def write(self, name: str, content: str) -> None:
+        validate_memory_name(name)
+        if not isinstance(content, str):
+            raise ValueError("content must be a string")
+        if len(content) > MAX_CONTENT_CHARS:
+            raise OverflowError(f"content exceeds {MAX_CONTENT_CHARS} characters")
+        self._memories[name] = content
+
+    async def append(self, name: str, payload: dict[str, Any], event_id: str | None = None) -> dict[str, str]:
+        validate_memory_name(name)
+        if not isinstance(payload, dict) or not payload:
+            raise ValueError("entry must be a non-empty JSON object")
+        record = dict(payload)
+        digest = None
+        if event_id is not None:
+            if not isinstance(event_id, str) or not event_id.strip() or len(event_id) > 256:
+                raise ValueError("event_id must be a non-empty string of at most 256 characters")
+            record["event_id"] = event_id
+            canonical, _ = _canonical_payload(record)
+            digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            existing = self._events.get((name, event_id))
+            if existing is not None:
+                if existing != digest:
+                    raise ValueError("event_id already exists with different payload")
+                return {"status": "duplicate", "event_id": event_id}
+        _canonical_payload(record)
+        record.setdefault("timestamp", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+        self._memories.setdefault(name, "")
+        self._entries.setdefault(name, []).append(record)
+        if event_id is not None:
+            self._events[(name, event_id)] = digest
+        return {"status": "stored", **({"event_id": event_id} if event_id else {})}
+
+    async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]:
+        validate_memory_name(name)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_ENTRIES:
+            raise ValueError(f"limit must be an integer between 1 and {MAX_ENTRIES}")
+        return list(self._entries.get(name, [])[-limit:])
+
+    async def list_names(self) -> list[str]:
+        return sorted(set(self._memories) | set(self._entries))
+
+    async def search(self, keywords: list[str], limit: int = 50) -> list[dict[str, Any]]:
+        if not isinstance(keywords, list) or any(not isinstance(word, str) for word in keywords):
+            raise ValueError("keywords must be a list of strings")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer between 1 and 100")
+        terms = list(dict.fromkeys(word.casefold() for word in keywords if word.strip()))
+        results = []
+        for name in await self.list_names():
+            content = self._memories.get(name, "") + json.dumps(self._entries.get(name, []), ensure_ascii=False)
+            matched = [term for term in terms if term in content.casefold()]
+            if matched:
+                results.append({"name": name, "score": len(matched) / len(terms), "matched": matched})
+        return sorted(results, key=lambda item: (-item["score"], item["name"]))[:limit]
+
+    async def retrieve(self, name: str, context: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
+        validate_memory_name(name)
+        if not isinstance(context, dict) or not isinstance(context.get("request_id"), str) or not isinstance(context.get("objective"), str):
+            raise ValueError("context requires request_id and objective")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer between 1 and 100")
+        lineage = context.get("lineage", [])
+        matches = []
+        for index, record in enumerate(self._entries.get(name, [])):
+            prior = record.get("execution_context")
+            if not isinstance(prior, dict) or prior.get("request_id") != context["request_id"]:
+                continue
+            prior_id, prior_lineage = prior.get("execution_id"), prior.get("lineage", [])
+            if not prior_id or prior_id == context.get("execution_id"):
+                continue
+            if context.get("parent_execution_id") == prior_id:
+                relation, rank = "parent", 100
+            elif prior_lineage and len(prior_lineage) < len(lineage) and list(lineage[:len(prior_lineage)]) == list(prior_lineage) and prior_id == prior_lineage[-1]:
+                relation, rank = "ancestor", 90
+            elif prior_lineage and lineage and prior_lineage[0] == lineage[0]:
+                relation, rank = "related-lineage", 60
+            else:
+                relation, rank = "same-request", 70
+            matches.append({"record": record, "execution_context": prior, "relation": relation, "authoritative": False, "_rank": rank, "_index": index})
+        matches.sort(key=lambda item: (-item["_rank"], item["_index"]))
+        for item in matches:
+            item.pop("_rank", None)
+            item.pop("_index", None)
+        return matches[:limit]
+
+    async def chunk(self, name: str, size: int = 500) -> list[dict[str, Any]]:
+        content = await self.read(name)
+        if content is None:
+            return []
+        if isinstance(size, bool) or not isinstance(size, int) or not 1 <= size <= 10000:
+            raise ValueError("size must be an integer between 1 and 10000")
+        return [{"ordinal": offset // size, "start": offset, "end": min(offset + size, len(content)), "content": content[offset:offset + size]} for offset in range(0, len(content), size)]
