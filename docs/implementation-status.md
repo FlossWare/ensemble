@@ -40,13 +40,13 @@ Implemented:
 - Tests for API behavior, migration setup, restart durability, and revision replacement.
 - Python 3.12 GitHub Actions test workflow.
 
-Implemented on the parity branch (regression tests authored; execution still requires CI verification):
+Implemented on the parity branch (GitHub Actions has verified the latest completed test run):
 - POC-compatible lexical-v1 tokenization capability and REST endpoints.
 - POC-compatible identifier extraction capability and REST endpoints.
 - POC-compatible rule-based intent classification capability and REST endpoints.
 - POC-compatible explainable reciprocal-rank fusion capability and REST endpoints.
 - POC vector collection REST operations and durable SQLite collection/record storage; ANN indexing remains intentionally absent.
-- POC-compatible reranking REST endpoint and optional local cross-encoder provider (model installation/runtime verification pending).
+- POC-compatible reranking REST endpoint and optional local cross-encoder provider (local model installation/runtime verification pending).\n- Browser Control Center served by the same REST application at /control, with a URI preview and explicit ingest workflow.\n- Bounded public-URI fetching, HTML/plain-text extraction, local/private destination rejection, redirect limits, response-size limits, and preview-only operation.\n- Scraped-page ingestion through Index revision decisions, document/chunk persistence, Knowledge provenance, and SQLite vector collections when embeddings are available.
 
 Not yet implemented:
 - The remaining POC capability surface listed in [POC capability parity](poc-parity.md).
@@ -55,11 +55,11 @@ Not yet implemented:
 - Dedicated approximate-nearest-neighbor vector index; exact dot-product search currently scans SQLite collection records.
 - Integration of reranking into the hybrid retrieval pipeline.
 - Full POC hybrid-search orchestration and degraded-dependency behavior.
-- Integration of Index revision decisions into Knowledge publication and document ingestion.
+- Generalize the Index-to-Knowledge publication pipeline to all document ingestion paths; the URI scraper currently uses it.
 - Broader learned/entity extraction beyond the POC's rule-based identifier extraction.
 - Any future model-backed intent providers, which are not part of the current POC behavior.
 - Durable episodic memory/session-event ledger.
-- Control Center web interface and operational controls.
+- Complete Control Center beyond the initial URI-ingestion workbench: service/model configuration, retrieval explorer, document/index management, job history, metrics, and maintenance controls.\n- Multi-page bounded crawling, robots.txt policy, DNS-to-connection pinning, durable ingestion jobs, retries, and scheduled source refresh.
 - Authentication, partition enforcement, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging.
 
 SQLite is the only persistence implementation in this repository. Embeddings are currently stored as JSON and scored in the application; this is not a scalable vector index.
