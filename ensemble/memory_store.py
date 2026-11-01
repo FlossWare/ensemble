@@ -254,7 +254,7 @@ class MemoryStore(Protocol):
     async def reconcile_claude_markdown(self, source: str, scope: str, paths: list[str]) -> dict[str, Any]: ...
     async def knowledge_status(self) -> dict[str, Any]: ...
     async def retrieve(self, name: str, context: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]: ...
-    async def chunk(self, name: str, size: int = 500) -> list[dict[str, Any]]: ...
+    async def chunk(self, name: str, size: int = 2000) -> list[dict[str, Any]]: ...
 
 
 class SqliteMemoryStore:
@@ -502,17 +502,13 @@ class SqliteMemoryStore:
             item.pop("_index", None)
         return matches[:limit]
 
-    async def chunk(self, name: str, size: int = 500) -> list[dict[str, Any]]:
+    async def chunk(self, name: str, size: int = 2000) -> list[dict[str, Any]]:
         content = await self.read(name)
         if content is None:
             return []
         if isinstance(size, bool) or not isinstance(size, int) or not 1 <= size <= 10000:
             raise ValueError("size must be an integer between 1 and 10000")
-        return [
-            {"ordinal": offset // size, "start": offset, "end": min(offset + size, len(content)),
-             "content": content[offset:offset + size]}
-            for offset in range(0, len(content), size)
-        ]
+        return _chunk_markdown(content, size)
 
 
 class InMemoryMemoryStore:
