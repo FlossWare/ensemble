@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chunk as chunk_text, describe_profiles as describe_chunk_profiles
-from .embeddings import EmbeddingProvider, MAX_TEXTS as MAX_EMBED_TEXTS, MAX_TEXT_CHARS as MAX_EMBED_TEXT_CHARS, configured_embedding_provider
+from .embeddings import EmbeddingProvider, MAX_BODY_BYTES as MAX_EMBED_BODY_BYTES, configured_embedding_provider, validate_embedding_request
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
 from .store import DocumentStore, SqlDocumentStore
@@ -107,22 +107,18 @@ def create_app(
         return JSONResponse(status_code=200 if embeddings.available else 503, content=status)
 
     @app.post("/api/v1/embeddings/embed", tags=["embeddings"])
-    async def embed_texts(payload: dict[str, Any]):
+    async def embed_texts(payload: dict[str, Any], request: Request):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_EMBED_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="request body exceeds 1 MiB")
         texts = payload.get("texts")
         mode = payload.get("mode", "document")
-        if not isinstance(texts, list) or not texts or len(texts) > MAX_EMBED_TEXTS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"texts must be a list of 1 to {MAX_EMBED_TEXTS} strings",
-            )
-        if mode not in {"document", "query"}:
-            raise HTTPException(status_code=400, detail="mode must be document or query")
-        for item in texts:
-            if not isinstance(item, str) or len(item) > MAX_EMBED_TEXT_CHARS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"each text must be a string of at most {MAX_EMBED_TEXT_CHARS} characters",
-                )
+        try:
+            validate_embedding_request(texts, mode)
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not embeddings.available:
             raise HTTPException(status_code=503, detail=embeddings.status().get("error", "embedding provider unavailable"))
         try:
