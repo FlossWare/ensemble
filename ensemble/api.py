@@ -19,6 +19,8 @@ from .vector_memory import InMemoryVectorStore
 from .index_store import IndexStore, SqliteIndexStore
 from .index_memory import InMemoryIndexStore
 from .knowledge_store import KnowledgeStore, SqliteKnowledgeStore, InMemoryKnowledgeStore
+from .graph_store import GraphStore, SqliteGraphStore
+from .graph_memory import InMemoryGraphStore
 from .tokenization import PROFILES as TOKENIZATION_PROFILES, TokenizationError, describe_profiles, tokenize
 from .extraction import extract
 from .intent import RULES as INTENT_RULES, classify
@@ -101,7 +103,7 @@ def create_app(
     app.state.reranker = active_reranker
     app.state.vector_store = active_vector_store
     app.state.index_store = active_index_store
-    app.state.knowledge_store = active_knowledge_store
+    app.state.knowledge_store = active_knowledge_store\n    app.state.graph_store = active_graph_store
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -552,6 +554,58 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "results": results}
+
+    @app.get("/api/v1/graph/health", tags=["graph"])
+    async def graph_health():
+        return {"ok": True, "service": "graph", "backend": "sqlite"}
+
+    @app.post("/api/v1/graph/add-node", tags=["graph"])
+    async def graph_add_node(payload: dict[str, Any]):
+        try:
+            node = await active_graph_store.add_node(payload.get("type"), payload.get("properties", {}), payload.get("id"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "node": node}
+
+    @app.post("/api/v1/graph/add-edge", tags=["graph"])
+    async def graph_add_edge(payload: dict[str, Any]):
+        try:
+            edge = await active_graph_store.add_edge(payload.get("source"), payload.get("target"), payload.get("type"), payload.get("properties", {}), payload.get("id"))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "edge": edge}
+
+    @app.get("/api/v1/graph/node/{node_id}", tags=["graph"])
+    async def graph_get_node(node_id: str):
+        node = await active_graph_store.get_node(node_id)
+        if node is None:
+            raise HTTPException(status_code=404, detail="node not found")
+        return {"ok": True, "node": node}
+
+    @app.post("/api/v1/graph/query", tags=["graph"])
+    async def graph_query(payload: dict[str, Any]):
+        try:
+            if payload.get("type") == "edges":
+                result = await active_graph_store.query_edges(payload.get("from_type"), payload.get("to_type"), payload.get("relationship"))
+                return {"ok": True, "edges": result}
+            result = await active_graph_store.query_nodes(payload.get("type"), payload.get("properties", {}))
+            return {"ok": True, "nodes": result}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/graph/traverse", tags=["graph"])
+    async def graph_traverse(payload: dict[str, Any]):
+        try:
+            result = await active_graph_store.traverse(payload.get("start"), payload.get("direction", "out"), payload.get("max_depth", 1), payload.get("edge_type"))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "results": result}
+
+    @app.get("/control", response_class=HTMLResponse, include_in_schema=False)
 
     @app.get("/control", response_class=HTMLResponse, include_in_schema=False)
     async def control_panel():
