@@ -237,12 +237,12 @@ def test_vector_collection_persists_across_restart(tmp_path):
 
 def test_vector_contract_rejects_invalid_vectors(tmp_path):
     with _client(tmp_path) as client:
-        invalid = {
-            "model": "model-a", "dimensions": 2,
-            "ids": ["bad"], "embeddings": [[float("nan"), 0.0]],
-            "documents": ["bad"], "metadatas": [{"source": "test"}],
-        }
-        response = client.post("/api/v1/vector/collections/c/upsert", json=invalid)
+        invalid = '{"model":"model-a","dimensions":2,"ids":["bad"],"embeddings":[[NaN,0.0]],"documents":["bad"],"metadatas":[{"source":"test"}]}'
+        response = client.post(
+            "/api/v1/vector/collections/c/upsert",
+            content=invalid,
+            headers={"content-type": "application/json"},
+        )
         assert response.status_code == 400
         response = client.post(
             "/api/v1/vector/collections/c/query",
