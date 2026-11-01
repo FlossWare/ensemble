@@ -53,7 +53,7 @@ Not yet implemented:
 - Full POC hybrid-search orchestration and degraded-dependency behavior.
 - Source manifest, revision sequencing, and tombstones as a distinct index capability.
 - Broader learned/entity extraction beyond the POC's rule-based identifier extraction.
-- Intent classification parity tests and any future model-backed intent providers.
+- Any future model-backed intent providers, which are not part of the current POC behavior.
 - Sourced knowledge records and durable episodic memory/session-event ledger.
 - Control Center web interface and operational controls.
 - Authentication, partition enforcement, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging.
