@@ -194,7 +194,18 @@ class SqlDocumentStore:
 
     async def all_chunks(self) -> list[IndexedChunk]:
         statement = (
-            select(self.documents, self.chunks)
+            select(
+                self.documents.c.id.label("document_id"),
+                self.documents.c.source_id,
+                self.documents.c.revision,
+                self.documents.c.title,
+                self.documents.c.content.label("document_content"),
+                self.documents.c.created_at,
+                self.chunks.c.id.label("chunk_id"),
+                self.chunks.c.ordinal,
+                self.chunks.c.content.label("chunk_content"),
+                self.chunks.c.embedding,
+            )
             .join(self.chunks, self.documents.c.id == self.chunks.c.document_id)
             .where(self.documents.c.is_current.is_(True))
             .order_by(self.documents.c.source_id, self.chunks.c.ordinal)
@@ -205,13 +216,13 @@ class SqlDocumentStore:
         result: list[IndexedChunk] = []
         for row in rows:
             document = Document(
-                row["source_id"], row["revision"], row["title"], row["content"]
+                row["source_id"], row["revision"], row["title"], row["document_content"]
             )
-            document.id = UUID(row["id"])
+            document.id = UUID(row["document_id"])
             document.created_at = row["created_at"]
             chunk = Chunk(
-                document.id, row["ordinal"], row["content"], row["embedding"]
+                document.id, row["ordinal"], row["chunk_content"], row["embedding"]
             )
-            chunk.id = UUID(row["id_1"])
+            chunk.id = UUID(row["chunk_id"])
             result.append(IndexedChunk(document, chunk))
         return result
