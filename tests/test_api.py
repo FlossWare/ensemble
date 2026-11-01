@@ -367,7 +367,8 @@ def test_knowledge_is_index_gated_and_revision_ordered(tmp_path):
     with _client(tmp_path) as client:
         first = client.post("/api/v1/knowledge/records", json=_knowledge_record()).json()
         duplicate = client.post("/api/v1/knowledge/records", json=_knowledge_record()).json()
-        assert first["decision"] == duplicate["decision"] == "accepted"
+        assert first["decision"] == "accepted"
+        assert duplicate["decision"] == "duplicate"
         assert duplicate["stored"] is True
 
         newer = client.post(
