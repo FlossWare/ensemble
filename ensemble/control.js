@@ -8,6 +8,7 @@ const body=document.getElementById("body");
 const links=document.getElementById("links");
 const ingest=document.getElementById("ingest");
 let ready=false;
+uri.addEventListener("input",()=>{ready=false;ingest.disabled=true;status.textContent="URI changed. Fetch a fresh preview before ingesting.";});
 async function request(path,payload){
  const response=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
  const result=await response.json();
