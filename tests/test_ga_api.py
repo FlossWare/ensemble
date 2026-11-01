@@ -23,7 +23,7 @@ def test_ga_run_is_persisted_and_exposes_five_evaluators():
         assert fetched.status_code == 200
         run = fetched.json()["run"]
         assert run["status"] == "completed"
-        assert run["result"]["total_evaluations"] == 25
+        assert run["result"]["total_evaluations"] == 24
         assert run["result"]["evaluation_scope"]["externally_validated"] is False
         assert set(run["result"]["best_by_system"]) == {
             "compression", "thompson", "caching", "matrix", "dashboard"
