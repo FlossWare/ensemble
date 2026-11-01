@@ -61,3 +61,7 @@ Client-specific integrations belong in separate consumer repositories (for examp
 The historical claude-ensemble and poc-claude-ensemble repositories are reference material for capability discovery, behavior, and contract compatibility. They are not runtime dependencies or the target implementation.
 
 Existing POC services and data must remain undisturbed during this work. Ensemble must not couple itself to POC process internals, database files, or persistence directories. Any required data migration will use an explicitly designed, supported interface or export/import process.
+
+## Runtime configuration
+
+The HTTP listener and persistence root are configurable through ENSEMBLE_HOST, ENSEMBLE_PORT and ENSEMBLE_PERSISTENCE_ROOT. Defaults are 127.0.0.1, 8090 and ./.ensemble respectively. The SQLite database defaults to <persistence-root>/ensemble.db. Command-line overrides are available through python -m ensemble --host, --port, --persistence-root and --database-url. See docs/installation.md for the systemd installer and deployment configuration.
