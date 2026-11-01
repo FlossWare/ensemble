@@ -19,6 +19,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.3,<9", "pytest-cov>=6,<7", "httpx>=0.28,<1"]
 reranking = ["sentence-transformers>=3.4,<6"]
+local-embeddings = ["numpy>=1.26,<3", "tokenizers>=0.21,<1", "onnxruntime>=1.20,<2"]
+openvino = ["openvino>=2026.2,<2027"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
