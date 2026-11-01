@@ -86,6 +86,28 @@ The UI is served by the same Ensemble application and uses the same REST contrac
 - SQLite only in this repository. Shared infrastructure and alternate persistence implementations are owned by FlossWare proper.
 - No mandatory generation model or MCP dependency.
 
+## POC HTTP route catalog
+
+The source handlers expose the following route surface. These are the behavioral reference routes; Ensemble may normalize their naming under /api/v1, but must account for each operation in its versioned contracts.
+
+| Capability | POC GET routes | POC POST routes |
+|---|---|---|
+| Embedding | /health, /model | /embeddings |
+| Vector | /health, /collections | /collections/{name}/existing, /upsert, /metadata, /delete-superseded, /query |
+| Lexical | /health | /search, /documents |
+| Hybrid | /health | /search, /knowledge/search, /prompts, /sessions/ingest |
+| Reranking | /health | /rerank |
+| Chunking | /health, /ready, /profiles | /chunk |
+| Tokenization | /health, /ready, /profiles | /tokenize |
+| Index | /health, /ready, /sources/{source_id}, /manifest | /revisions, /tombstones |
+| Extraction | /health, /ready | /extract |
+| Intent | /health, /ready | /classify |
+| Ranking | /health, /ready | /rank |
+| Knowledge | /health, /ready, /records/{source_id} | /records, /records/{source_id}/tombstone |
+| Memory | /health, /ready | /memory/read, /memory/write, /memory/append, /memory/append-once, /memory/entries, /memory/retrieve, /memory/list, /memory/search, /memory/search-semantic, /memory/search-hybrid, /memory/chunk, /memory/ingest, /memory/reconcile, /memory/knowledge/status |
+
+The vector service also exposes /collections/{name}/metadata as a POST operation for metadata updates. The memory API includes both search and search-semantic aliases; preserve compatibility intentionally rather than accidentally dropping an alias. The POC route table is derived from the source handlers, not inferred from README prose alone.
+
 ## Source and regression-test inventory
 
 The POC source and matching service test files have now been located and inspected at the contract/test-name level. The listed test files contain 271 top-level test cases in total (counted from test method declarations). This is an inventory count, not evidence that the POC suite was executed during this task.
