@@ -18,10 +18,13 @@ def test_control_panel_is_served_by_the_api():
         assert "Ensemble Control Center" in response.text
         assert "Genetic Algorithm tuning" in response.text
         assert "Start GA run" in response.text
+        assert "Thompson Router" in response.text
         script = client.get("/control.js")
         assert script.status_code == 200
         assert "/api/v1/ga/runs" in script.text
         assert "Approve for export" in script.text
+        assert "/api/v1/thompson/state" in script.text
+        assert "Reset history" not in script.text
 
 
 def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch):
