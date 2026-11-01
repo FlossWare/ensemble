@@ -19,9 +19,36 @@ See [Architecture and decisions](docs/architecture.md), [REST contract conventio
 
 ## Current implementation
 
-The initial Python vertical slice provides health/readiness, document ingestion, chunking, optional embeddings, lexical/vector retrieval, and reciprocal-rank fusion through one FastAPI application. See the implementation status document for what is and is not complete.
+The Python application provides health/readiness, durable document ingestion, chunking, optional embeddings, lexical/vector retrieval, and reciprocal-rank fusion through one FastAPI application.
 
-The default in-memory store is for development and tests only. Durable Ensemble-owned persistence is the next implementation step.
+SQLite is the default local database. PostgreSQL is supported for a shared deployment. The storage adapter is private to the implementation; REST contracts expose neither database choice nor schema.
+
+## Run locally
+
+Python 3.12 or newer is required.
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -e '.[dev]'
+uvicorn ensemble.api:app --host 127.0.0.1 --port 8090
+```
+
+The default database is created at .ensemble/ensemble.db. Override it with ENSEMBLE_DATABASE_URL, for example:
+
+```bash
+ENSEMBLE_DATABASE_URL='postgresql+asyncpg://ensemble:secret@localhost/ensemble' uvicorn ensemble.api:app --host 127.0.0.1 --port 8090
+```
+
+The application creates its initial schema on startup. This is for the early implementation stage; versioned database migrations are required before production deployment.
+
+Run tests:
+
+```bash
+pytest
+```
+
+API documentation is available at /docs; the OpenAPI document is at /openapi.json.
 
 ## Scope
 
