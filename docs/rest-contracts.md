@@ -55,6 +55,14 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | GET | /ready | Application readiness and persistence configuration |
 | POST | /api/v1/documents | Register or replace a document revision, chunk it, optionally embed it, and durably store it |
 | POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |
+| GET | /api/v1/tokenization/health, /ready, /profiles | Tokenization capability status and analyzer profiles |
+| POST | /api/v1/tokenization/tokenize | Versioned deterministic text analysis |
+| GET | /api/v1/extraction/health, /ready | Extraction capability status |
+| POST | /api/v1/extraction/extract | Exact identifiers and uncertain entity candidates |
+| GET | /api/v1/intent/health, /ready | Intent capability status and labels |
+| POST | /api/v1/intent/classify | Evidence-backed intent classification |
+| GET | /api/v1/ranking/health, /ready | Ranking capability status |
+| POST | /api/v1/ranking/rank | Explainable reciprocal-rank fusion |
 
 Ingestion is idempotent for a given source identifier and revision. Re-ingesting that revision replaces its chunk set transactionally. Search returns only the highest registered revision for each source identifier; historical revisions remain stored but are not included in the active search view.
 
