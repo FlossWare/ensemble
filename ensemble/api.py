@@ -34,6 +34,7 @@ from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS
 from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
 from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
+from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -69,6 +70,7 @@ def create_app(
     memory_store: MemoryStore | None = None,
     ga_store: GAStore | None = None,
     thompson_store: ThompsonStore | None = None,
+    learning_store: LearningStore | None = None,
 ) -> FastAPI:
     document_store = store or SqlDocumentStore(database_url)
     embeddings = embedding_provider or configured_embedding_provider()
@@ -102,6 +104,10 @@ def create_app(
         else SqliteThompsonStore(database_url)
     )
     thompson_rng = random.Random()
+    active_learning_store = learning_store or (
+        InMemoryLearningStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteLearningStore(database_url)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -114,8 +120,10 @@ def create_app(
             await active_memory_store.initialize()
             await active_ga_store.initialize()
             await active_thompson_store.initialize()
+            await active_learning_store.initialize()
             yield
         finally:
+            await active_learning_store.close()
             await active_thompson_store.close()
             await active_ga_store.close()
             await active_memory_store.close()
@@ -144,6 +152,7 @@ def create_app(
     app.state.memory_store = active_memory_store
     app.state.ga_store = active_ga_store
     app.state.thompson_store = active_thompson_store
+    app.state.learning_store = active_learning_store
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -173,7 +182,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "memory", "ga", "thompson"],
+            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "memory", "ga", "thompson", "learning"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
