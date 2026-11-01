@@ -11,6 +11,8 @@ from .chunking import Chunker
 from .embeddings import EmbeddingProvider
 from .models import Chunk, Document, DocumentOut
 from .store import DocumentStore, IndexedChunk
+from .reranking import Reranker
+from .tokenization import TOKENIZER_ID, tokenize
 
 
 class ChunkRequest(BaseModel):
@@ -21,6 +23,16 @@ class ChunkRequest(BaseModel):
 
 class EmbeddingRequest(BaseModel):
     texts: list[str]
+
+
+class TokenizationRequest(BaseModel):
+    text: str
+
+
+class RerankRequest(BaseModel):
+    query: str = Field(min_length=1)
+    documents: list[str] = Field(min_length=1, max_length=100)
+    top_n: int = Field(default=10, ge=1, le=100)
 
 
 class IndexSearchRequest(BaseModel):
@@ -42,9 +54,23 @@ class IndexDocumentRequest(BaseModel):
     embeddings: list[list[float]]
 
 
-def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider) -> APIRouter:
+def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider, reranker: Reranker) -> APIRouter:
     router = APIRouter()
     chunker = Chunker()
+
+    @router.post("/capabilities/tokenization/tokenize", tags=["capabilities", "tokenization"])
+    async def tokenize_text(request: TokenizationRequest):
+        tokens = tokenize(request.text)
+        return {"tokenizer": TOKENIZER_ID, "tokens": tokens, "token_count": len(tokens)}
+
+    @router.post("/capabilities/reranking/rerank", tags=["capabilities", "reranking"])
+    async def rerank_documents(request: RerankRequest):
+        if not reranker.available:
+            raise HTTPException(status_code=503, detail="reranking provider is not configured")
+        try:
+            return {"results": await reranker.rerank(request.query, request.documents, request.top_n)}
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="reranking provider request failed") from exc
 
     @router.post("/capabilities/chunking/split", tags=["capabilities", "chunking"])
     async def split_chunks(request: ChunkRequest):

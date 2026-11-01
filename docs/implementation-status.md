@@ -27,7 +27,7 @@ Implemented:
 ## Retrieval
 
 Implemented:
-- Deterministic character-window chunking with overlap.
+- Deterministic Unicode word/punctuation tokenization (`ensemble-unicode-v1`).\n- Deterministic character-window chunking with overlap; token-aware chunking remains planned.\n- Provider-neutral reranking contract with a Cohere-compatible HTTP adapter; it reports unavailable when not configured.
 - Optional OpenAI-compatible embedding provider.
 - Database-side lexical candidate retrieval with a bounded candidate set (maximum 1,000).
 - Independent lexical and vector candidate retrieval with reciprocal-rank fusion.\n- PostgreSQL pgvector HNSW cosine index; SQLite exhaustive vector fallback for local development.
@@ -39,7 +39,7 @@ Known limitations:
 - Search candidate pagination is not yet exposed; requests are bounded to at most 1,000 candidates.
 - Chunking is character-window based, not token-aware.
 - API-key authentication, read/write permissions, and partition enforcement are implemented. API keys are configured through `ENSEMBLE_API_KEYS`; health/readiness are public, while all `/api/v1` routes require bearer authentication. Key rotation, audit logging, rate limiting, and external identity-provider integration remain future hardening.
-- Reranking, graph, memory-specific APIs, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging remain future work.
+- Graph, memory-specific APIs, token-aware chunking, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging remain future work. Reranking requires an explicitly configured provider.
 
 ## Compatibility and migration
 

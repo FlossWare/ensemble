@@ -89,3 +89,30 @@ def test_vector_search_capability_returns_nearest_candidates(tmp_path):
         assert nearest.status_code == 200
         assert len(nearest.json()) == 1
         assert nearest.json()[0]["document"]["source_id"] == "vector-first"
+
+
+
+def test_tokenization_contract_and_disabled_reranker(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'tokenization.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    with TestClient(
+        create_app(database_url=database_url),
+        headers={"Authorization": "Bearer test-key", "X-Ensemble-Partition": "default"},
+    ) as client:
+        tokenized = client.post(
+            "/api/v1/capabilities/tokenization/tokenize",
+            json={"text": "Hello, world!"},
+        )
+        assert tokenized.status_code == 200
+        assert tokenized.json()["tokenizer"] == "ensemble-unicode-v1"
+        assert tokenized.json()["tokens"] == ["Hello", ",", "world", "!"]
+        assert tokenized.json()["token_count"] == 4
+
+        reranked = client.post(
+            "/api/v1/capabilities/reranking/rerank",
+            json={"query": "retrieval", "documents": ["semantic retrieval"]},
+        )
+        assert reranked.status_code == 503
