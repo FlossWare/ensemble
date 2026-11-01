@@ -7,7 +7,7 @@ from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Integer, JSON, MetaData,
+    Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON, MetaData,
     String, Table, Text, UniqueConstraint, delete, func, insert, inspect, select, update,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -39,6 +39,8 @@ chunks = Table(
     Column("embedding", JSON, nullable=False),
     UniqueConstraint("document_id", "ordinal", name="uq_ensemble_chunk_document_ordinal"),
 )
+Index("ix_ensemble_documents_current_source", documents.c.source_id, documents.c.is_current)
+Index("ix_ensemble_chunks_document", chunks.c.document_id)
 
 
 @dataclass(frozen=True)
