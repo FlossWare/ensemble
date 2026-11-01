@@ -193,3 +193,8 @@ This is the first slice, not full crawler parity. Remaining work includes robots
 ## Additional POC modules outside the 13-service README catalog
 
 The repository also contains separate Graph, Learning, Thompson, scrape-ledger, arbitration, collaboration, workflow, cost-tracking, policy, decision-provenance, operational-metrics, experiments, and provider modules. These are not all listed as the 13 core REST services in the POC README. They require a separate disposition inventory before parity can be declared; do not silently treat their existence as proof that each is a required Ensemble capability. Graph is being treated as a first-class Ensemble capability because it has its own documented REST service and durable graph contract.
+
+
+## Graph implementation
+
+Ensemble adapts the POC Graph service contract into the same REST application. It provides deterministic content-derived node and edge IDs, idempotent add operations, typed node and relationship queries, node lookup, and bounded directional traversal. SQLite tables persist graph mutations and the graph can be reconstructed after restart. This replaces the POC's NetworkX plus atomic JSON-file persistence while retaining its public operation semantics. The graph does not introduce a separate listener or external graph database.
