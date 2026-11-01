@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import math
 from collections.abc import Sequence
+from uuid import uuid5, NAMESPACE_URL
 from .chunking import Chunker
 from .embeddings import EmbeddingProvider
 from .models import Chunk, Document, DocumentIn, DocumentOut, SearchHit
@@ -27,7 +28,9 @@ class DocumentService:
             Chunk(document.id, ordinal, text, vectors[ordinal])
             for ordinal, text in enumerate(texts)
         ]
-        await self.store.save(document, chunks)
+        for chunk in chunks:
+            chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
+        document = await self.store.save(document, chunks)
         return DocumentOut(
             id=document.id,
             source_id=document.source_id,
