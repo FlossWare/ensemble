@@ -28,6 +28,11 @@ class IndexSearchRequest(BaseModel):
     limit: int = Field(default=200, ge=1, le=1000)
 
 
+class VectorSearchRequest(BaseModel):
+    embedding: list[float] = Field(min_length=1)
+    limit: int = Field(default=200, ge=1, le=1000)
+
+
 class IndexDocumentRequest(BaseModel):
     source_id: str
     revision: int
@@ -83,6 +88,25 @@ def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider
             embedded=all(bool(chunk.embedding) for chunk in chunks),
             created_at=document.created_at,
         )
+
+    @router.post("/capabilities/index/vector-search", tags=["capabilities", "index", "vector"])
+    async def vector_search(request: VectorSearchRequest):
+        indexed = await store.vector_candidates(request.embedding, request.limit)
+        return [
+            {
+                "document": {
+                    "id": str(item.document.id), "source_id": item.document.source_id,
+                    "revision": item.document.revision, "title": item.document.title,
+                    "content": item.document.content,
+                    "created_at": item.document.created_at.isoformat(),
+                },
+                "chunk": {
+                    "id": str(item.chunk.id), "ordinal": item.chunk.ordinal,
+                    "content": item.chunk.content, "embedding": item.chunk.embedding,
+                },
+            }
+            for item in indexed
+        ]
 
     @router.post("/capabilities/index/search-candidates", tags=["capabilities", "index"])
     async def read_indexed_chunks(request: IndexSearchRequest):
