@@ -36,7 +36,7 @@ A capability calls another capability through its REST contract, even when both 
 
 Contracts are language-neutral. Implementations may use the language and runtime best suited to the capability, but clients must not depend on implementation language or framework.
 
-See [REST contract conventions](rest-contracts.md).
+See REST contract conventions in docs/rest-contracts.md.
 
 ## 4. Composition and decorators
 
@@ -70,9 +70,13 @@ The full multi-user sharing and partition implementation is a later capability. 
 
 ## 7. Storage and migration
 
-Storage technology is not part of the public REST contract and is not selected by this architecture document.
+Storage technology is not part of the public REST contract.
 
-Ensemble will own its implementations and data access. It must not depend on POC database files, persistence directories, process internals, or direct database sharing.
+Ensemble owns its persistence and data access. It must not depend on POC database files, persistence directories, process internals, or direct database sharing.
+
+The current adapter uses SQLAlchemy with portable relational tables. SQLite is the default for local development and a single-instance deployment. PostgreSQL is supported through the same adapter and is the intended backend for a shared multi-client deployment. Embeddings are stored as portable JSON values for now; this does not commit the public contract to a vector database or vector extension.
+
+The first schema is created at startup for ease of development. This is not the final production migration strategy. Versioned migrations and deployment-time schema upgrades must be in place before production use.
 
 Use the POC's supported REST endpoints as a behavioral and contract reference when useful. Do not inspect or couple to its physical storage as a prerequisite for building Ensemble.
 
@@ -94,22 +98,20 @@ MCP is an optional adapter over existing Ensemble REST operations. REST remains 
 - Federation and distributed service discovery.
 - Service mesh, message brokers, and distributed coordination.
 - A required generation model.
-- A prescribed database or vector-store technology.
 - Runtime dependency on either historical Claude Ensemble repository.
 
 ## 10. Implementation sequence
 
 1. Establish repository conventions and REST contract standards.
-2. Inventory POC capabilities through documented/supported REST interfaces and source behavior; do not disturb active services or data.
-3. Create a capability migration map: reference behavior, Ensemble contract, implementation status, and acceptance criteria.
-4. Define the minimum application and REST server skeleton.
-5. Implement a thin end-to-end vertical slice through Ensemble-owned contracts and implementations.
-6. Add retrieval channels, fusion, ranking, and reranking behind those contracts.
-7. Validate behavior and performance with the independent Evaluation project.
-8. Add broader partition enforcement and client integrations without changing the canonical contracts.
+2. Inventory reference capabilities through documented/supported REST interfaces and source behavior; do not disturb active services or data.
+3. Define the minimum application and REST server skeleton.
+4. Implement a thin end-to-end vertical slice through Ensemble-owned contracts and implementations.
+5. Add retrieval channels, fusion, ranking, and reranking behind those contracts.
+6. Validate behavior and performance with the independent Evaluation project.
+7. Add partition enforcement and client integrations without changing the canonical contracts.
 
 ## 11. Architectural acceptance test
 
 A capability can move from the initial co-located deployment to a separate process or host without changing its REST contract or consumer behavior.
 
-The platform is also independently usable without an AI client, MCP, or generation provider.
+The platform is independently usable without an AI client, MCP, or generation provider.
