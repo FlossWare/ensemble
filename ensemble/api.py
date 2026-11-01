@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from typing import Any
 from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -10,6 +11,10 @@ from .embeddings import configured_embedding_provider
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
 from .store import DocumentStore, SqlDocumentStore
+from .tokenization import PROFILES as TOKENIZATION_PROFILES, TokenizationError, describe_profiles, tokenize
+from .extraction import extract
+from .intent import RULES as INTENT_RULES, classify
+from .ranking import DEFAULT_K, fuse
 
 
 def _problem(request: Request, status: int, title: str, detail: str, code: str) -> JSONResponse:
@@ -82,7 +87,89 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
+            "capabilities": ["documents", "search", "tokenization", "extraction", "intent", "ranking"],
         }
+
+    @app.get("/api/v1/tokenization/health", tags=["tokenization"])
+    async def tokenization_health():
+        return {"ok": True, "service": "tokenization"}
+
+    @app.get("/api/v1/tokenization/ready", tags=["tokenization"])
+    async def tokenization_ready():
+        return {"ok": True, "ready": True, "profiles": sorted(TOKENIZATION_PROFILES)}
+
+    @app.get("/api/v1/tokenization/profiles", tags=["tokenization"])
+    async def tokenization_profiles():
+        return {"ok": True, "profiles": describe_profiles()}
+
+    @app.post("/api/v1/tokenization/tokenize", tags=["tokenization"])
+    async def tokenize_text(payload: dict[str, Any]):
+        try:
+            profile = payload.get("profile")
+            tokens = tokenize(profile, payload.get("text"))
+        except TokenizationError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        return {
+            "ok": True,
+            "profile": {"name": profile, "version": TOKENIZATION_PROFILES[profile]["version"]},
+            "tokens": tokens,
+        }
+
+    @app.get("/api/v1/extraction/health", tags=["extraction"])
+    async def extraction_health():
+        return {"ok": True, "service": "extraction"}
+
+    @app.get("/api/v1/extraction/ready", tags=["extraction"])
+    async def extraction_ready():
+        return {"ok": True, "ready": True}
+
+    @app.post("/api/v1/extraction/extract", tags=["extraction"])
+    async def extract_entities(payload: dict[str, Any]):
+        try:
+            entities = extract(payload.get("text"))
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "entities": entities}
+
+    @app.get("/api/v1/intent/health", tags=["intent"])
+    async def intent_health():
+        return {"ok": True, "service": "intent"}
+
+    @app.get("/api/v1/intent/ready", tags=["intent"])
+    async def intent_ready():
+        return {"ok": True, "ready": True, "labels": sorted(INTENT_RULES)}
+
+    @app.post("/api/v1/intent/classify", tags=["intent"])
+    async def classify_intent(payload: dict[str, Any]):
+        try:
+            result = classify(payload.get("text"))
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, **result}
+
+    @app.get("/api/v1/ranking/health", tags=["ranking"])
+    async def ranking_health():
+        return {"ok": True, "service": "ranking"}
+
+    @app.get("/api/v1/ranking/ready", tags=["ranking"])
+    async def ranking_ready():
+        return {"ok": True, "ready": True, "method": "reciprocal-rank-fusion"}
+
+    @app.post("/api/v1/ranking/rank", tags=["ranking"])
+    async def rank_candidates(payload: dict[str, Any]):
+        try:
+            results = fuse(
+                payload.get("lists"),
+                payload.get("top_k", 10),
+                payload.get("k", DEFAULT_K),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "results": results}
 
     @app.post("/api/v1/documents", response_model=DocumentOut, status_code=201, tags=["documents"])
     async def ingest_document(request: DocumentIn):
