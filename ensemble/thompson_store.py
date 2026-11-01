@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
 from datetime import datetime, timezone
@@ -22,6 +24,13 @@ thompson_models = Table(
     Column("calls", Integer, nullable=False),
     Column("last_updated", DateTime(timezone=True), nullable=False),
 )
+thompson_events = Table(
+    "ensemble_thompson_events", thompson_metadata,
+    Column("event_id", String(256), primary_key=True),
+    Column("model_name", String(256), nullable=False),
+    Column("payload_sha256", String(64), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
 
 
 class ThompsonStore(Protocol):
@@ -29,6 +38,7 @@ class ThompsonStore(Protocol):
     async def close(self) -> None: ...
     async def get_state(self) -> dict[str, Any]: ...
     async def record_outcome(self, model: str, success: bool, cost: float, tokens: int) -> bool: ...
+    async def record_outcome_once(self, event_id: str, model: str, success: bool, cost: float, tokens: int) -> bool: ...
     async def reset(self, model: str) -> bool: ...
 
 
@@ -43,7 +53,7 @@ class SqliteThompsonStore:
         async with self.engine.connect() as connection:
             from sqlalchemy import inspect
             names = await connection.run_sync(lambda conn: inspect(conn).get_table_names())
-        if "ensemble_thompson_models" not in names:
+        if not {"ensemble_thompson_models", "ensemble_thompson_events"}.issubset(names):
             raise RuntimeError("Thompson schema is not initialized; run 'alembic upgrade head'")
 
     async def close(self) -> None:
@@ -66,6 +76,46 @@ class SqliteThompsonStore:
         _validate_outcome(model, success, cost, tokens)
         now = datetime.now(timezone.utc)
         async with self.engine.begin() as connection:
+            statement = sqlite_insert(thompson_models).values(
+                model_name=model, successes=int(success), failures=int(not success),
+                total_cost=float(cost), total_tokens=tokens, calls=1, last_updated=now,
+            )
+            await connection.execute(statement.on_conflict_do_update(
+                index_elements=[thompson_models.c.model_name],
+                set_={
+                    "successes": thompson_models.c.successes + int(success),
+                    "failures": thompson_models.c.failures + int(not success),
+                    "total_cost": thompson_models.c.total_cost + float(cost),
+                    "total_tokens": thompson_models.c.total_tokens + tokens,
+                    "calls": thompson_models.c.calls + 1,
+                    "last_updated": now,
+                },
+            ))
+        return True
+
+    async def record_outcome_once(self, event_id: str, model: str, success: bool, cost: float, tokens: int) -> bool:
+        if not isinstance(event_id, str) or not event_id.strip() or len(event_id) > 256:
+            raise ValueError("event_id must be a non-empty string of at most 256 characters")
+        _validate_outcome(model, success, cost, tokens)
+        canonical = json.dumps(
+            {"model": model, "success": success, "cost": float(cost), "tokens": tokens},
+            sort_keys=True, separators=(",", ":"),
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            result = await connection.execute(
+                sqlite_insert(thompson_events).values(
+                    event_id=event_id, model_name=model, payload_sha256=digest, created_at=now
+                ).on_conflict_do_nothing(index_elements=[thompson_events.c.event_id])
+            )
+            if result.rowcount == 0:
+                existing = await connection.scalar(
+                    select(thompson_events.c.payload_sha256).where(thompson_events.c.event_id == event_id)
+                )
+                if existing != digest:
+                    raise ValueError("Thompson event_id already exists with different outcome")
+                return False
             statement = sqlite_insert(thompson_models).values(
                 model_name=model, successes=int(success), failures=int(not success),
                 total_cost=float(cost), total_tokens=tokens, calls=1, last_updated=now,
@@ -110,6 +160,7 @@ def _validate_outcome(model: Any, success: Any, cost: Any, tokens: Any) -> None:
 class InMemoryThompsonStore:
     def __init__(self):
         self.models: dict[str, dict[str, Any]] = {}
+        self.events: dict[str, str] = {}
 
     async def initialize(self) -> None:
         return None
@@ -137,6 +188,24 @@ class InMemoryThompsonStore:
         stats["total_tokens"] += tokens
         stats["calls"] += 1
         stats["last_updated"] = datetime.now(timezone.utc).isoformat()
+        return True
+
+    async def record_outcome_once(self, event_id: str, model: str, success: bool, cost: float, tokens: int) -> bool:
+        if not isinstance(event_id, str) or not event_id.strip() or len(event_id) > 256:
+            raise ValueError("event_id must be a non-empty string of at most 256 characters")
+        _validate_outcome(model, success, cost, tokens)
+        canonical = json.dumps(
+            {"model": model, "success": success, "cost": float(cost), "tokens": tokens},
+            sort_keys=True, separators=(",", ":"),
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        existing = self.events.get(event_id)
+        if existing is not None:
+            if existing != digest:
+                raise ValueError("Thompson event_id already exists with different outcome")
+            return False
+        self.events[event_id] = digest
+        await self.record_outcome(model, success, cost, tokens)
         return True
 
     async def reset(self, model: str) -> bool:
