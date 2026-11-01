@@ -130,14 +130,14 @@ class SqlDocumentStore:
             raise RuntimeError(
                 "Ensemble database schema is not initialized; run 'alembic upgrade head'"
             )
-        missing = {"ensemble_documents", "ensemble_chunks"} - set(tables)
+        missing = {"ensemble_documents", "ensemble_chunks", "ensemble_vector_collections", "ensemble_vector_records"} - set(tables)
         if missing:
             raise RuntimeError(
                 "Ensemble database schema is incomplete; run 'alembic upgrade head'"
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0001_initial":
+        if revision != "0002_vector_collections":
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )
