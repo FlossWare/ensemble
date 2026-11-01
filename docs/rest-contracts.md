@@ -1,6 +1,6 @@
 # REST Contract Conventions
 
-**Status:** Initial conventions. The running FastAPI application currently publishes its OpenAPI schema at `/openapi.json`; the schemas will be promoted to a reviewed, version-controlled OpenAPI artifact as the API stabilizes.
+**Status:** Initial conventions. The running FastAPI application publishes its OpenAPI schema at /openapi.json and interactive documentation at /docs.
 
 ## 1. Base path and media type
 
@@ -52,11 +52,13 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | Method | Path | Purpose |
 |---|---|---|
 | GET | /health | Liveness |
-| GET | /ready | Current application readiness |
-| POST | /api/v1/documents | Register a document, chunk it, optionally embed it, and store it |
+| GET | /ready | Application readiness and persistence configuration |
+| POST | /api/v1/documents | Register or replace a document revision, chunk it, optionally embed it, and durably store it |
 | POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |
 
-The current document and search implementation is an initial vertical slice, not the final complete capability surface. FastAPI publishes the current machine-readable schema at `/openapi.json`.
+Ingestion is idempotent for a given source identifier and revision. Re-ingesting that revision replaces its chunk set transactionally. Search returns only the highest registered revision for each source identifier; historical revisions remain stored but are not included in the active search view.
+
+The current document and search implementation remains an initial vertical slice, not the final complete capability surface. FastAPI publishes the machine-readable schema at /openapi.json.
 
 ## 8. Planned endpoint groups
 
