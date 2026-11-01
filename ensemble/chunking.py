@@ -13,7 +13,7 @@ PROFILES = {
     "markdown-v1": {"version": "1", "strategy": "markdown", "size": 2000},
     "message-v1": {"version": "1", "strategy": "message", "size": 20000},
 }
-HEADING = re.compile(r"^(#{1,6})\\s+(.*)$")
+HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 
 
 class ChunkingError(ValueError):
