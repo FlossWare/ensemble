@@ -50,7 +50,7 @@ Run tests:
 pytest
 ```
 
-API documentation is available at /docs; the OpenAPI document is at /openapi.json.
+The browser Control Center is available at /control. Its URI ingestion workflow fetches a public page, extracts readable text, previews it without writing data, and then ingests the page only after an explicit action. Discovered links are displayed but not crawled. API documentation is available at /docs; the OpenAPI document is at /openapi.json.
 
 ## Scope
 
