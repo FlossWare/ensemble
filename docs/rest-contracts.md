@@ -60,20 +60,27 @@ Ingestion is idempotent for a given source identifier and revision. Re-ingesting
 
 The current document and search implementation remains an initial vertical slice, not the final complete capability surface. FastAPI publishes the machine-readable schema at /openapi.json.
 
-## 8. Planned endpoint groups
+## 8. Required capability endpoint groups
 
-These are candidate groups, not a claim that they are implemented:
+The POC parity inventory in docs/poc-parity.md defines the complete capability baseline. All 13 POC capabilities are required in Ensemble; these endpoint groups are not optional candidates. The exact resource paths and schemas will be specified in versioned contract documents before implementation.
 
-| Group | Initial purpose |
+| Capability group | Required operations |
 |---|---|
-| /capabilities | Discover enabled capabilities and contract versions |
-| /ingestion | Submit and inspect ingestion work |
-| /embeddings | Generate embeddings through configured providers |
-| /rerank | Rerank an explicitly supplied authorized candidate set |
-| /memory | Store and recall scoped memories |
-| /graph | Inspect and traverse authorized relationships |
+| Embeddings | Model/provider discovery, health/readiness, document and query embedding |
+| Vector | Collection discovery, existing-ID lookup, upsert, query, superseded-revision deletion |
+| Lexical | Incremental document/session ingestion and ranked search |
+| Hybrid | Combined retrieval, knowledge-only retrieval, prompt/event capture and ingestion orchestration |
+| Reranking | Bounded cross-encoder reranking and model status |
+| Chunking | Profile discovery and deterministic chunk generation |
+| Tokenization | Analyzer profile discovery and deterministic tokenization |
+| Index | Revision decisions, tombstones, source lookup and bounded manifest listing |
+| Extraction | Exact identifier and uncertain entity extraction with evidence |
+| Intent | Explainable intent classification with confidence and evidence |
+| Ranking | Reciprocal-rank fusion with per-channel contributions |
+| Knowledge | Sourced record create/read/tombstone with revision and provenance |
+| Memory | Durable memory/event operations, retrieval and operational status |
 
-Do not create every endpoint merely because it appears in this candidate list.
+A Control Center is also a required product surface. It is served by the same application and consumes these REST contracts; it does not create a second backend or duplicate capability logic.
 
 ## 9. Search and reranking security
 
