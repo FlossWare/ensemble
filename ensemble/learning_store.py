@@ -7,7 +7,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
-from sqlalchemy import Column, DateTime, Float, Integer, JSON, MetaData, String, Table, Text, delete, insert, select, update
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, JSON, MetaData, String, Table, Text, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -25,8 +25,8 @@ learning_outcomes = Table(
     Column("payload_sha256", String(64), nullable=False),
     Column("timestamp", DateTime(timezone=True), nullable=False),
     Column("status", String(32), nullable=False),
-    Column("memory_recorded", Integer, nullable=False),
-    Column("thompson_recorded", Integer, nullable=False),
+    Column("memory_recorded", Boolean, nullable=False),
+    Column("thompson_recorded", Boolean, nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 learning_artifacts = Table(
