@@ -1183,8 +1183,6 @@ def create_app(
         return {"ok": True, "results": result}
 
     @app.get("/control", response_class=HTMLResponse, include_in_schema=False)
-
-    @app.get("/control", response_class=HTMLResponse, include_in_schema=False)
     async def control_panel():
         from pathlib import Path
         return HTMLResponse(Path(__file__).with_name("control_panel.html").read_text(encoding="utf-8"))
