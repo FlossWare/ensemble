@@ -64,6 +64,8 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | GET | /api/v1/intent/health, /ready | Intent capability status and labels |
 | POST | /api/v1/intent/classify | Evidence-backed intent classification |
 | GET | /api/v1/ranking/health, /ready | Ranking capability status |
+| GET | /api/v1/reranking/health, /ready | Local cross-encoder model readiness and provenance |
+| POST | /api/v1/reranking/rerank | Score a bounded candidate list with the configured cross-encoder |
 | POST | /api/v1/ranking/rank | Explainable reciprocal-rank fusion |
 
 Ingestion is idempotent for a given source identifier and revision. Re-ingesting that revision replaces its chunk set transactionally. Search returns only the highest registered revision for each source identifier; historical revisions remain stored but are not included in the active search view.
