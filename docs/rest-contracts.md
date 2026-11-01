@@ -63,6 +63,10 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/extraction/extract | Exact identifiers and uncertain entity candidates |
 | GET | /api/v1/intent/health, /ready | Intent capability status and labels |
 | POST | /api/v1/intent/classify | Evidence-backed intent classification |
+| GET | /api/v1/index/health, /ready | Index capability status |
+| POST | /api/v1/index/revisions | Record a revision and return accepted/duplicate/conflict/superseded/tombstoned decision |
+| POST | /api/v1/index/tombstones | Permanently tombstone a source at a revision sequence |
+| GET | /api/v1/index/sources/{source_id}, /manifest | Read source state and bounded source manifest |
 | GET | /api/v1/vector/health, /collections | Vector storage status and collection inventory |
 | POST | /api/v1/vector/collections/{name}/existing | Find existing record IDs |
 | POST | /api/v1/vector/collections/{name}/upsert | Idempotently insert or replace vectors and metadata |
