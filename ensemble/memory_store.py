@@ -76,6 +76,144 @@ def _canonical_payload(payload: dict[str, Any]) -> tuple[str, int]:
 
 
 
+
+def _vectorize_text(text: str) -> dict[str, float]:
+    terms = []
+    for token in re.findall(r"[^\\W_]+(?:[._:-][^\\W_]+)*", text.casefold(), re.UNICODE):
+        if len(token) > 2:
+            terms.append(token)
+        terms.extend(part for part in re.split(r"[._:-]+", token) if len(part) > 2)
+    counts = {}
+    for term in terms:
+        counts[term] = counts.get(term, 0) + 1
+    length = max(1, len(terms))
+    return {term: count / length for term, count in counts.items()}
+
+
+def _cosine(left: dict[str, float], right: dict[str, float]) -> float:
+    terms = set(left) | set(right)
+    dot = sum(left.get(term, 0.0) * right.get(term, 0.0) for term in terms)
+    norm_left = sum(value * value for value in left.values()) ** 0.5
+    norm_right = sum(value * value for value in right.values()) ** 0.5
+    return dot / (norm_left * norm_right) if norm_left and norm_right else 0.0
+
+
+def _chunk_markdown(content: str, max_chunk_size: int = 2000) -> list[dict[str, Any]]:
+    lines = content.splitlines(keepends=True)
+    chunks = []
+    current: list[str] = []
+    header = "intro"
+    start_line = 0
+    size = 0
+    for line_number, line in enumerate(lines):
+        if line.startswith("#"):
+            if current:
+                text = "".join(current)
+                chunks.append({"header": header, "start_line": start_line, "end_line": line_number,
+                               "content": text, "size": len(text)})
+            header = line.lstrip("#").strip()
+            current = [line]
+            start_line = line_number
+            size = len(line)
+            continue
+        current.append(line)
+        size += len(line)
+        if size > max_chunk_size:
+            text = "".join(current)
+            chunks.append({"header": header, "start_line": start_line, "end_line": line_number + 1,
+                           "content": text, "size": len(text)})
+            current, size, start_line = [], 0, line_number + 1
+    if current:
+        text = "".join(current)
+        chunks.append({"header": header, "start_line": start_line, "end_line": len(lines),
+                       "content": text, "size": len(text)})
+    return chunks
+
+
+def _keyword_search(documents: list[tuple[str, str]], active_knowledge: set[str], keywords: list[str], limit: int) -> list[dict[str, Any]]:
+    keyword_set = {word.casefold() for word in keywords if isinstance(word, str) and word.strip()}
+    if not keyword_set:
+        return []
+    terms_by_document = []
+    for name, content in documents:
+        if name.startswith("claude-code-") and name not in active_knowledge:
+            continue
+        chunks = _chunk_markdown(content) or [{"header": "full", "content": content}]
+        for chunk in chunks:
+            terms = [word.strip(".,!?;:").casefold() for word in chunk["content"].split() if len(word) > 2]
+            terms_by_document.append((name, chunk, terms, set(terms)))
+    doc_count = len(terms_by_document)
+    idf = {
+        term: math.log(doc_count / max(1, sum(1 for _, _, _, terms in terms_by_document if term in terms)))
+        for term in keyword_set
+    }
+    results = []
+    for name, chunk, terms, term_set in terms_by_document:
+        counts = {}
+        for term in terms:
+            counts[term] = counts.get(term, 0) + 1
+        score, matched = 0.0, []
+        for term in keyword_set:
+            if term in counts:
+                score += (counts[term] / max(1, len(terms))) * idf[term]
+                matched.append(term)
+        if score > 0:
+            results.append({
+                "file": name, "section": chunk["header"], "score": score,
+                "matched_keywords": len(matched), "size_bytes": len(chunk["content"].encode("utf-8")),
+            })
+    return sorted(results, key=lambda item: (-item["score"], item["file"], item["section"]))[:limit]
+
+
+def _semantic_search(
+    documents: list[tuple[str, str]], active_knowledge: set[str], query: str, top_k: int,
+    source: str | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(query, str) or not query.strip():
+        return []
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 100:
+        raise ValueError("top_k must be an integer between 1 and 100")
+    if source not in (None, "memory", "claude-code"):
+        raise ValueError("source must be 'memory' or 'claude-code'")
+    normalized = query.strip().casefold().rstrip(".,!?;")
+    query_vector = _vectorize_text(normalized)
+    if not query_vector:
+        return []
+    identifier = (
+        not any(char.isspace() for char in normalized)
+        and (
+            bool(re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", normalized))
+            or ":" in normalized
+            or (bool(re.search(r"[-._]", normalized)) and bool(re.search(r"\\d", normalized)))
+            or normalized.count(".") >= 2
+        )
+    )
+    pattern = re.compile(rf"(?<![\\w.-]){re.escape(normalized)}(?![\\w.-])", re.UNICODE)
+    results = []
+    for name, content in documents:
+        is_knowledge = name in active_knowledge
+        if name.startswith("claude-code-") and not is_knowledge:
+            continue
+        if source == "claude-code" and not is_knowledge:
+            continue
+        if source == "memory" and is_knowledge:
+            continue
+        for chunk in _chunk_markdown(content) or [{"header": "full", "content": content}]:
+            exact = bool(pattern.search(chunk["content"].casefold())) if identifier else normalized in chunk["content"].casefold()
+            if identifier and not exact:
+                continue
+            score = 1.0 if exact else _cosine(query_vector, _vectorize_text(chunk["content"]))
+            if exact or score > 0.1:
+                result = {
+                    "file": name, "section": chunk["header"], "score": score,
+                    "size_bytes": len(chunk["content"].encode("utf-8")), "content": content,
+                }
+                if is_knowledge:
+                    result["source"] = "claude-code"
+                results.append(result)
+    return sorted(results, key=lambda item: (-item["score"], item["file"], item["section"]))[:top_k]
+
+
 def _validate_ingest(source_path: Any, content: Any, sha256: Any, metadata: Any) -> tuple[str, dict[str, Any]]:
     if not isinstance(source_path, str) or not Path(source_path).is_absolute() or len(source_path) > 4096:
         raise ValueError("source_path must be an absolute path")
@@ -124,211 +262,51 @@ class MemoryStore(Protocol):
     async def append(self, name: str, payload: dict[str, Any], event_id: str | None = None) -> dict[str, str]: ...
     async def list_names(self) -> list[str]: ...
     async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]: ...
-    async def search(self, keywords: list[str], limit: int = 50) -> list[dict[str, Any]]: ...
-    async def ingest_claude_markdown(self, source_path: str, content: str, sha256: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]: ...
-    async def reconcile_claude_markdown(self, source: str, scope: str, paths: list[str]) -> dict[str, Any]: ...
-    async def knowledge_status(self) -> dict[str, Any]: ...
-
-
-class SqliteMemoryStore:
-    """SQLite-backed episodic memory and append-only event ledger."""
-
-    def __init__(self, database_url: str | None = None):
-        url_text = database_url or os.getenv("ENSEMBLE_DATABASE_URL", "sqlite+aiosqlite:///./.ensemble/ensemble.db")
-        url = make_url(url_text)
-        if url.get_backend_name() != "sqlite":
-            raise ValueError("Ensemble memory supports SQLite persistence only")
-        self.engine: AsyncEngine = create_async_engine(url_text, pool_pre_ping=True)
-
-    async def initialize(self) -> None:
-        async with self.engine.connect() as connection:
-            from sqlalchemy import inspect
-            names = await connection.run_sync(lambda conn: inspect(conn).get_table_names())
-        required = {"ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources"}
-        if not required.issubset(names):
-            raise RuntimeError("Memory schema is not initialized; run 'alembic upgrade head'")
-
-    async def close(self) -> None:
-        await self.engine.dispose()
-
-    async def check_ready(self) -> None:
-        async with self.engine.connect() as connection:
-            await connection.execute(select(1))
-            await connection.execute(select(memories.c.name).limit(1))
-
-    async def read(self, name: str) -> str | None:
-        validate_memory_name(name)
-        async with self.engine.connect() as connection:
-            return await connection.scalar(select(memories.c.content).where(memories.c.name == name))
-
-    async def write(self, name: str, content: str) -> None:
-        validate_memory_name(name)
-        if not isinstance(content, str):
-            raise ValueError("content must be a string")
-        if len(content) > MAX_CONTENT_CHARS:
-            raise OverflowError(f"content exceeds {MAX_CONTENT_CHARS} characters")
-        now = datetime.now(timezone.utc)
-        async with self.engine.begin() as connection:
-            await connection.execute(
-                sqlite_insert(memories)
-                .values(name=name, content=content, updated_at=now)
-                .on_conflict_do_update(
-                    index_elements=[memories.c.name],
-                    set_={"content": content, "updated_at": now},
-                )
-            )
-
-    async def append(self, name: str, payload: dict[str, Any], event_id: str | None = None) -> dict[str, str]:
-        validate_memory_name(name)
-        if not isinstance(payload, dict) or not payload:
-            raise ValueError("entry must be a non-empty JSON object")
-        record = dict(payload)
-        if event_id is not None:
-            if not isinstance(event_id, str) or not event_id.strip() or len(event_id) > 256:
-                raise ValueError("event_id must be a non-empty string of at most 256 characters")
-            if "event_id" in record and record["event_id"] != event_id:
-                raise ValueError("entry.event_id must match event_id")
-            if {"payload_sha256", "captured_at"}.intersection(record):
-                raise ValueError("entry contains reserved Memory metadata fields")
-            if "event_id" in record and record["event_id"] != event_id:
-                raise ValueError("entry.event_id must match event_id")
-            if {"payload_sha256", "captured_at"}.intersection(record):
-                raise ValueError("entry contains reserved Memory metadata fields")
-            record["event_id"] = event_id
-            canonical, _ = _canonical_payload(record)
-            digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        else:
-            digest = None
-        _canonical_payload(record)
-        now = datetime.now(timezone.utc)
-        record.setdefault("timestamp", now.isoformat().replace("+00:00", "Z"))
-        async with self.engine.begin() as connection:
-            await connection.execute(
-                sqlite_insert(memories)
-                .values(name=name, content="", updated_at=now)
-                .on_conflict_do_nothing(index_elements=[memories.c.name])
-            )
-            if event_id is None:
-                await connection.execute(insert(entries).values(
-                    name=name, event_id=None, payload_sha256=None, payload=record, created_at=now
-                ))
-                return {"status": "stored"}
-            statement = sqlite_insert(entries).values(
-                name=name, event_id=event_id, payload_sha256=digest, payload=record, created_at=now
-            ).on_conflict_do_nothing(index_elements=[entries.c.name, entries.c.event_id])
-            result = await connection.execute(statement)
-            if result.rowcount == 1:
-                return {"status": "stored", "event_id": event_id}
-            existing = (await connection.execute(
-                select(entries.c.payload_sha256).where(
-                    entries.c.name == name, entries.c.event_id == event_id
-                )
-            )).scalar_one()
-            if existing != digest:
-                raise ValueError("event_id already exists with different payload")
-            return {"status": "duplicate", "event_id": event_id}
-
-    async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]:
-        validate_memory_name(name)
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_ENTRIES:
-            raise ValueError(f"limit must be an integer between 1 and {MAX_ENTRIES}")
-        async with self.engine.connect() as connection:
-            rows = (await connection.execute(
-                select(entries.c.payload).where(entries.c.name == name)
-                .order_by(entries.c.id.desc()).limit(limit)
-            )).all()
-        return [row[0] for row in reversed(rows)]
-
-    async def list_names(self) -> list[str]:
-        async with self.engine.connect() as connection:
-            names = (await connection.execute(
-                select(memories.c.name).order_by(memories.c.name)
-            )).scalars().all()
-        return list(names)
-
     async def search(self, keywords: list[str], limit: int = 50) -> list[dict[str, Any]]:
         if not isinstance(keywords, list) or any(not isinstance(word, str) for word in keywords):
             raise ValueError("keywords must be a list of strings")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer between 1 and 100")
-        terms = list(dict.fromkeys(word.casefold() for word in keywords if word.strip()))
-        if not terms:
-            return []
         async with self.engine.connect() as connection:
-            docs = (await connection.execute(select(memories.c.name, memories.c.content))).all()
-            event_rows = (await connection.execute(select(entries.c.name, entries.c.payload))).all()
-        candidates: dict[str, str] = {name: content for name, content in docs}
-        for name, payload in event_rows:
-            candidates[name] = candidates.get(name, "") + "\n" + json.dumps(payload, ensure_ascii=False)
-        results = []
-        for name, content in candidates.items():
-            folded = content.casefold()
-            matched = [term for term in terms if term in folded]
-            if matched:
-                results.append({"name": name, "score": len(matched) / len(terms), "matched": matched})
-        return sorted(results, key=lambda item: (-item["score"], item["name"]))[:limit]
-
-    async def ingest_claude_markdown(
-        self, source_path: str, content: str, sha256: str, metadata: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        scope, meta = _validate_ingest(source_path, content, sha256, metadata)
-        document_name = "claude-code-" + hashlib.sha256(source_path.encode("utf-8")).hexdigest()[:32]
-        now = datetime.now(timezone.utc)
-        async with self.engine.begin() as connection:
-            existing = (await connection.execute(
-                select(memory_sources.c.sha256, memory_sources.c.stale)
-                .where(memory_sources.c.source_path == source_path)
-            )).first()
-            stored = await connection.scalar(select(memories.c.content).where(memories.c.name == document_name))
-            if existing and existing.sha256 == sha256 and not existing.stale and stored is not None:
-                if hashlib.sha256(stored.encode("utf-8")).hexdigest() == sha256:
-                    return {"status": "unchanged", "source_path": source_path, "sha256": sha256}
-            await connection.execute(
-                sqlite_insert(memories).values(name=document_name, content=content, updated_at=now)
-                .on_conflict_do_update(
-                    index_elements=[memories.c.name],
-                    set_={"content": content, "updated_at": now},
-                )
-            )
-            await connection.execute(
-                sqlite_insert(memory_sources).values(
-                    source_path=source_path, document_name=document_name, source="claude-code",
-                    scope=scope, sha256=sha256, metadata=meta, stale=False, updated_at=now,
-                ).on_conflict_do_update(
-                    index_elements=[memory_sources.c.source_path],
-                    set_={"document_name": document_name, "source": "claude-code", "scope": scope,
-                          "sha256": sha256, "metadata": meta, "stale": False, "updated_at": now},
-                )
-            )
-        return {"status": "ingested", "source_path": source_path, "sha256": sha256, "document": document_name}
-
-    async def reconcile_claude_markdown(self, source: str, scope: str, paths: list[str]) -> dict[str, Any]:
-        current = _validate_reconciliation(source, scope, paths)
-        async with self.engine.begin() as connection:
-            rows = (await connection.execute(
-                select(memory_sources.c.source_path).where(
-                    memory_sources.c.source == source, memory_sources.c.scope == scope,
-                    memory_sources.c.stale.is_(False),
+            documents = (await connection.execute(select(memories.c.name, memories.c.content))).all()
+            active = (await connection.execute(
+                select(memory_sources.c.document_name).where(
+                    memory_sources.c.source == "claude-code", memory_sources.c.stale.is_(False)
                 )
             )).scalars().all()
-            stale = sorted(path for path in rows if path not in current)
-            if stale:
-                await connection.execute(
-                    update(memory_sources).where(memory_sources.c.source_path.in_(stale))
-                    .values(stale=True, updated_at=datetime.now(timezone.utc))
-                )
-        return {"status": "reconciled", "stale": stale, "count": len(stale)}
+        return _keyword_search([(name, content) for name, content in documents], set(active), keywords, limit)
 
-    async def knowledge_status(self) -> dict[str, Any]:
+    async def search_semantic(self, query: str, top_k: int = 10, source: str | None = None) -> list[dict[str, Any]]:
         async with self.engine.connect() as connection:
-            count = await connection.scalar(
-                select(func.count()).select_from(memory_sources.join(
-                    memories, memory_sources.c.document_name == memories.c.name
-                )).where(memory_sources.c.source == "claude-code", memory_sources.c.stale.is_(False))
-            )
-        indexed = int(count or 0)
-        return {"source": "claude-code", "status": "available" if indexed else "empty",
-                "indexed_document_count": indexed}
+            documents = (await connection.execute(select(memories.c.name, memories.c.content))).all()
+            active = (await connection.execute(
+                select(memory_sources.c.document_name).where(
+                    memory_sources.c.source == "claude-code", memory_sources.c.stale.is_(False)
+                )
+            )).scalars().all()
+        return _semantic_search([(name, content) for name, content in documents], set(active), query, top_k, source)
+
+    async def search_hybrid(self, query: str, top_k: int = 10) -> list[dict[str, Any]]:
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 100:
+            raise ValueError("top_k must be an integer between 1 and 100")
+        keywords = query.casefold().split() if isinstance(query, str) else []
+        keyword_results = await self.search(keywords, limit=100)
+        semantic_results = await self.search_semantic(query, top_k=top_k)
+        merged: dict[tuple[str, str], dict[str, float]] = {}
+        for result in keyword_results:
+            key = (result["file"], result.get("section", "full"))
+            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
+            merged[key]["keyword_score"] = result["score"]
+        for result in semantic_results:
+            key = (result["file"], result.get("section", "full"))
+            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
+            merged[key]["semantic_score"] = result["score"]
+        results = [{
+            "file": name, "section": section,
+            "score": 0.4 * scores["keyword_score"] + 0.6 * scores["semantic_score"],
+            "keyword_score": scores["keyword_score"], "semantic_score": scores["semantic_score"],
+        } for (name, section), scores in merged.items()]
+        return sorted(results, key=lambda item: (-item["score"], item["file"], item["section"]))[:top_k]
 
     async def retrieve(self, name: str, context: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
         validate_memory_name(name)
@@ -456,52 +434,34 @@ class InMemoryMemoryStore:
             raise ValueError("keywords must be a list of strings")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer between 1 and 100")
-        terms = list(dict.fromkeys(word.casefold() for word in keywords if word.strip()))
-        results = []
-        for name in await self.list_names():
-            content = self._memories.get(name, "") + json.dumps(self._entries.get(name, []), ensure_ascii=False)
-            matched = [term for term in terms if term in content.casefold()]
-            if matched:
-                results.append({"name": name, "score": len(matched) / len(terms), "matched": matched})
-        return sorted(results, key=lambda item: (-item["score"], item["name"]))[:limit]
+        docs = list(self._memories.items())
+        active = {entry["document_name"] for entry in self.sources.values() if entry["source"] == "claude-code" and not entry["stale"]}
+        return _keyword_search(docs, active, keywords, limit)
 
-    async def ingest_claude_markdown(
-        self, source_path: str, content: str, sha256: str, metadata: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        scope, meta = _validate_ingest(source_path, content, sha256, metadata)
-        document_name = "claude-code-" + hashlib.sha256(source_path.encode("utf-8")).hexdigest()[:32]
-        existing = self.sources.get(source_path)
-        stored = self._memories.get(document_name)
-        if existing and existing["sha256"] == sha256 and not existing["stale"] and stored is not None:
-            if hashlib.sha256(stored.encode("utf-8")).hexdigest() == sha256:
-                return {"status": "unchanged", "source_path": source_path, "sha256": sha256}
-        now = datetime.now(timezone.utc).isoformat()
-        self._memories[document_name] = content
-        self.sources[source_path] = {
-            "source_path": source_path, "document_name": document_name, "source": "claude-code",
-            "scope": scope, "sha256": sha256, "metadata": meta, "stale": False, "updated_at": now,
-        }
-        return {"status": "ingested", "source_path": source_path, "sha256": sha256, "document": document_name}
+    async def search_semantic(self, query: str, top_k: int = 10, source: str | None = None) -> list[dict[str, Any]]:
+        active = {entry["document_name"] for entry in self.sources.values() if entry["source"] == "claude-code" and not entry["stale"]}
+        return _semantic_search(list(self._memories.items()), active, query, top_k, source)
 
-    async def reconcile_claude_markdown(self, source: str, scope: str, paths: list[str]) -> dict[str, Any]:
-        current = _validate_reconciliation(source, scope, paths)
-        stale = []
-        for source_path, entry in self.sources.items():
-            if entry["source"] == source and entry["scope"] == scope and not entry["stale"] and source_path not in current:
-                entry["stale"] = True
-                entry["updated_at"] = datetime.now(timezone.utc).isoformat()
-                stale.append(source_path)
-        stale.sort()
-        return {"status": "reconciled", "stale": stale, "count": len(stale)}
-
-    async def knowledge_status(self) -> dict[str, Any]:
-        indexed = sum(
-            1 for entry in self.sources.values()
-            if entry["source"] == "claude-code" and not entry["stale"]
-            and entry["document_name"] in self._memories
-        )
-        return {"source": "claude-code", "status": "available" if indexed else "empty",
-                "indexed_document_count": indexed}
+    async def search_hybrid(self, query: str, top_k: int = 10) -> list[dict[str, Any]]:
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 100:
+            raise ValueError("top_k must be an integer between 1 and 100")
+        keyword_results = await self.search(query.casefold().split() if isinstance(query, str) else [], limit=100)
+        semantic_results = await self.search_semantic(query, top_k=top_k)
+        merged: dict[tuple[str, str], dict[str, float]] = {}
+        for result in keyword_results:
+            key = (result["file"], result.get("section", "full"))
+            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
+            merged[key]["keyword_score"] = result["score"]
+        for result in semantic_results:
+            key = (result["file"], result.get("section", "full"))
+            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
+            merged[key]["semantic_score"] = result["score"]
+        results = [{
+            "file": name, "section": section,
+            "score": 0.4 * scores["keyword_score"] + 0.6 * scores["semantic_score"],
+            "keyword_score": scores["keyword_score"], "semantic_score": scores["semantic_score"],
+        } for (name, section), scores in merged.items()]
+        return sorted(results, key=lambda item: (-item["score"], item["file"], item["section"]))[:top_k]
 
     async def retrieve(self, name: str, context: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
         validate_memory_name(name)
