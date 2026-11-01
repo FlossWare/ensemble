@@ -38,7 +38,7 @@ Known limitations:
 - Vector similarity is limited to lexical candidates; semantically related documents without lexical overlap can be missed.
 - Search candidate pagination is not yet exposed; requests are bounded to at most 1,000 candidates.
 - Chunking is character-window based, not token-aware.
-- Authentication, tenant/partition enforcement, sharing policy, and authorization-aware retrieval are not implemented. Do not expose this as a multi-user shared service until those controls exist.
+- API-key authentication, read/write permissions, and partition enforcement are implemented. API keys are configured through `ENSEMBLE_API_KEYS`; health/readiness are public, while all `/api/v1` routes require bearer authentication. Key rotation, audit logging, rate limiting, and external identity-provider integration remain future hardening.
 - Reranking, graph, memory-specific APIs, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging remain future work.
 
 ## Compatibility and migration

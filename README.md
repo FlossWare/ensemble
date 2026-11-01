@@ -23,6 +23,16 @@ The Python application provides health/readiness, durable document ingestion, ch
 
 SQLite is the default local database. PostgreSQL is supported for a shared deployment. The storage adapter is private to the implementation; REST contracts expose neither database choice nor schema. Database schema changes are managed with Alembic migrations.
 
+## Authentication and partitions
+
+Every `/api/v1` request requires a bearer API key. Configure `ENSEMBLE_API_KEYS` as a JSON object keyed by the secret API key. Each entry declares a subject, allowed partitions, and permissions. Example (replace the placeholder secret):
+
+```bash
+export ENSEMBLE_API_KEYS='{"replace-with-a-long-random-secret":{"subject":"local-client","partitions":["default"],"permissions":["read","write"]}}'
+```
+
+Send `Authorization: Bearer <key>` and `X-Ensemble-Partition: <partition>` with API requests. If a key is limited to exactly one partition, the partition header may be omitted. Health and readiness endpoints are public; all versioned API and capability routes require authentication. Keys are never stored in the database. The configured partition is enforced in document identity, ingestion, lexical retrieval, and vector retrieval.
+
 ## Run locally
 
 Python 3.12 or newer is required.

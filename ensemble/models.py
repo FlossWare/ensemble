@@ -16,6 +16,7 @@ class DocumentOut(BaseModel):
     id: UUID
     source_id: str
     revision: int
+    partition_id: str
     title: str
     chunk_count: int
     embedded: bool
@@ -41,17 +42,24 @@ class SearchHit(BaseModel):
 
 
 class Document:
-    def __init__(self, source_id: str, revision: int, title: str, content: str):
+    def __init__(
+        self, source_id: str, revision: int, title: str, content: str,
+        partition_id: str = "default",
+    ):
         self.id = uuid4()
         self.source_id = source_id.strip()
         self.revision = revision
         self.title = title.strip()
         self.content = content
+        self.partition_id = partition_id
         self.created_at = datetime.now(timezone.utc)
 
 
 class Chunk:
-    def __init__(self, document_id: UUID, ordinal: int, content: str, embedding: list[float] | None = None):
+    def __init__(
+        self, document_id: UUID, ordinal: int, content: str,
+        embedding: list[float] | None = None,
+    ):
         self.id = uuid4()
         self.document_id = document_id
         self.ordinal = ordinal

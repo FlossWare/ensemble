@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from .auth import authenticate, load_api_keys
 from .capabilities import (
     CapabilityClient, ChunkRequest, EmbeddingRequest, IndexDocumentRequest,
     create_capability_router,
@@ -33,6 +34,7 @@ def _problem(request: Request, status: int, title: str, detail: str, code: str) 
 
 def create_app(database_url: str | None = None, store: DocumentStore | None = None) -> FastAPI:
     document_store = store or SqlDocumentStore(database_url)
+    api_keys = load_api_keys()
     embeddings = configured_embedding_provider()
 
     @asynccontextmanager
@@ -52,7 +54,7 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
     app.state.embedding_provider = embeddings
     app.include_router(create_capability_router(document_store, embeddings), prefix="/api/v1")
 
-    client = CapabilityClient(app)
+
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -63,6 +65,42 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
     @app.exception_handler(RequestValidationError)
     async def validation_problem(request: Request, exc: RequestValidationError):
         return _problem(request, 422, "Unprocessable Content", "Request validation failed", "request-validation-failed")
+
+    @app.middleware("http")
+    async def authenticate_api_requests(request: Request, call_next):
+        if not request.url.path.startswith("/api/v1/"):
+            return await call_next(request)
+        if not api_keys:
+            return _problem(
+                request, 503, "Service Unavailable",
+                "API authentication is not configured", "authentication-not-configured",
+            )
+        authorization = request.headers.get("authorization", "")
+        scheme, _, token = authorization.partition(" ")
+        principal = authenticate(token, api_keys) if scheme.lower() == "bearer" and token else None
+        if principal is None:
+            return _problem(request, 401, "Unauthorized", "A valid bearer API key is required", "invalid-api-key")
+        path = request.url.path
+        read_only = (
+            path.endswith("/search")
+            or path.endswith("/search-candidates")
+            or path.endswith("/vector-search")
+            or path.endswith("/embeddings")
+        )
+        required = "read" if read_only else "write"
+        if required not in principal.permissions and "admin" not in principal.permissions:
+            return _problem(request, 403, "Forbidden", f"{required} permission is required", "insufficient-permission")
+        partition_id = request.headers.get("x-ensemble-partition")
+        if not partition_id:
+            if len(principal.partitions) == 1 and "*" not in principal.partitions:
+                partition_id = next(iter(principal.partitions))
+            else:
+                return _problem(request, 400, "Bad Request", "X-Ensemble-Partition is required", "partition-required")
+        if "*" not in principal.partitions and partition_id not in principal.partitions:
+            return _problem(request, 403, "Forbidden", "The API key is not authorized for this partition", "partition-forbidden")
+        request.state.principal = principal
+        request.state.partition_id = partition_id
+        return await call_next(request)
 
     @app.get("/health", tags=["operations"])
     async def health():
@@ -77,14 +115,18 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
         return {"status": "ready", "persistence": "durable", "embeddings": embeddings.available}
 
     @app.post("/api/v1/documents", response_model=DocumentOut, status_code=201, tags=["documents"])
-    async def ingest_document(request: DocumentIn):
+    async def ingest_document(document_request: DocumentIn, request: Request):
+        client = CapabilityClient(
+            app, request.headers["authorization"], request.state.partition_id
+        )
         try:
-            chunks = await client.split(request.content)
+            chunks = await client.split(document_request.content)
             if not chunks:
                 raise HTTPException(status_code=400, detail="document content contains no usable text")
             vectors = await client.embed(chunks)
             return await client.index_document(
-                request.source_id, request.revision, request.title, request.content, chunks, vectors
+                document_request.source_id, document_request.revision,
+                document_request.title, document_request.content, chunks, vectors
             )
         except HTTPException:
             raise
@@ -94,11 +136,14 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
             raise HTTPException(status_code=502, detail="document ingestion failed") from exc
 
     @app.post("/api/v1/search", response_model=list[SearchHit], tags=["search"])
-    async def search_documents(request: SearchIn):
+    async def search_documents(search_request: SearchIn, request: Request):
+        client = CapabilityClient(
+            app, request.headers["authorization"], request.state.partition_id
+        )
         try:
-            candidate_limit = min(max(request.limit * 20, 100), 1000)
-            lexical = await client.indexed_chunks(request.query, candidate_limit)
-            query_vectors = await client.embed([request.query])
+            candidate_limit = min(max(search_request.limit * 20, 100), 1000)
+            lexical = await client.indexed_chunks(search_request.query, candidate_limit)
+            query_vectors = await client.embed([search_request.query])
             query_vector = query_vectors[0] if query_vectors else []
             vector = (
                 await client.vector_candidates(query_vector, candidate_limit)
@@ -107,7 +152,7 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
             candidates = {item.chunk.id: item for item in lexical}
             candidates.update({item.chunk.id: item for item in vector})
             return search_indexed(
-                list(candidates.values()), request.query, request.limit, query_vector
+                list(candidates.values()), search_request.query, search_request.limit, query_vector
             )
         except httpx.HTTPStatusError as exc:
             raise HTTPException(status_code=502, detail="search capability request failed") from exc

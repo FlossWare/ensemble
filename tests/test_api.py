@@ -6,13 +6,18 @@ from fastapi.testclient import TestClient
 from ensemble.api import create_app
 
 
+@pytest.fixture(autouse=True)
+def configure_api_keys(monkeypatch):
+    monkeypatch.setenv("ENSEMBLE_API_KEYS", '{"test-key":{"subject":"test-user","partitions":["default"],"permissions":["read","write"]},"other-key":{"subject":"other-user","partitions":["other"],"permissions":["read","write"]}}')
+
+
 def _client(tmp_path):
     database = tmp_path / "ensemble.db"
     database_url = f"sqlite+aiosqlite:///{database}"
     migration_config = Config("alembic.ini")
     migration_config.set_main_option("sqlalchemy.url", database_url)
     command.upgrade(migration_config, "head")
-    return TestClient(create_app(database_url=database_url))
+    return TestClient(create_app(database_url=database_url), headers={"Authorization": "Bearer test-key", "X-Ensemble-Partition": "default"})
 
 
 def test_startup_rejects_unmigrated_database(tmp_path):
@@ -133,3 +138,45 @@ def test_reingest_is_idempotent_and_latest_revision_is_searchable(tmp_path):
         still_current = client.post("/api/v1/search", json={"query": "indexing behavior"}).json()
         assert len(still_current) == 1
         assert still_current[0]["revision"] == 2
+
+
+
+def test_api_rejects_missing_credentials(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'auth.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    with TestClient(create_app(database_url=database_url)) as client:
+        response = client.post("/api/v1/search", json={"query": "private"})
+        assert response.status_code == 401
+        assert response.json()["code"] == "invalid-api-key"
+
+
+def test_partitions_are_isolated_for_same_source_revision(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'partitions.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    with TestClient(create_app(database_url=database_url)) as client:
+        default_headers = {"Authorization": "Bearer test-key", "X-Ensemble-Partition": "default"}
+        other_headers = {"Authorization": "Bearer other-key", "X-Ensemble-Partition": "other"}
+        first = client.post("/api/v1/documents", headers=default_headers, json={
+            "source_id": "shared-source", "revision": 1, "title": "Default",
+            "content": "Default partition confidential phrase",
+        })
+        second = client.post("/api/v1/documents", headers=other_headers, json={
+            "source_id": "shared-source", "revision": 1, "title": "Other",
+            "content": "Other partition confidential phrase",
+        })
+        assert first.status_code == 201
+        assert second.status_code == 201
+        default_hits = client.post("/api/v1/search", headers=default_headers, json={
+            "query": "confidential phrase",
+        }).json()
+        other_hits = client.post("/api/v1/search", headers=other_headers, json={
+            "query": "confidential phrase",
+        }).json()
+        assert len(default_hits) == 1
+        assert len(other_hits) == 1
+        assert default_hits[0]["title"] == "Default"
+        assert other_hits[0]["title"] == "Other"

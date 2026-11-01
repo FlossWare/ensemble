@@ -2,6 +2,10 @@
 
 **Status:** Initial versioned contracts. FastAPI publishes OpenAPI at `/openapi.json` and interactive documentation at `/docs`.
 
+## Authentication and partition scope
+
+Every `/api/v1` endpoint requires `Authorization: Bearer <api-key>`. `ENSEMBLE_API_KEYS` maps each secret key to a subject, allowed partition list, and `read`/`write`/`admin` permissions. Requests use `X-Ensemble-Partition` to select a partition. If a key has exactly one permitted partition, the header can be omitted. A requested partition outside the key's allow-list returns 403. Health and readiness endpoints are public. Internal capability calls propagate the authenticated caller identity and partition rather than bypassing the boundary.
+
 ## Conventions
 
 - Base path: `/api/v1`; JSON request/response bodies use UTF-8.
@@ -26,7 +30,7 @@
 | POST | `/api/v1/capabilities/index/documents` | Persist a document and its chunks |
 | GET | `/api/v1/capabilities/index/chunks` | Return current indexed chunks with provenance |
 
-Capability routes are independently addressable and called over HTTP by ingestion/search orchestration. They are co-hosted today. Authentication is not implemented, so do not expose these routes as a trusted multi-user service.
+Capability routes are independently addressable and called over HTTP by ingestion/search orchestration. They are co-hosted today. All versioned routes require authentication and enforce partition membership. The initial key provider is environment-backed; use TLS at the deployment edge and rotate keys through deployment configuration.
 
 Ingestion is idempotent for a source identifier and revision. Re-ingesting that revision replaces its chunk set transactionally. Search returns only the highest registered revision for each source identifier.
 
@@ -36,4 +40,4 @@ Memory, graph, reranking, tokenization, extraction, and ingestion jobs remain pl
 
 ## Security requirements
 
-The target design resolves authorized scope server-side, applies scope in every retrieval channel, filters candidates before fusion/reranking, and scopes caches. These controls are not implemented in the initial vertical slice.
+Authorized scope is resolved from the API key allow-list and `X-Ensemble-Partition`; it is applied at the persistence query boundary for lexical and vector retrieval before fusion. Future caches and rerankers must preserve this scope.

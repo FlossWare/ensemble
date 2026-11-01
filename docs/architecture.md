@@ -28,7 +28,7 @@ Public ingestion and search orchestrate these contracts. Capability implementati
 
 Decorators may wrap capability REST clients while preserving contracts. Expected concerns include logging, metrics, tracing, timeouts, bounded retries, caching, provider routing, policy, authorization, and partition-aware access enforcement.
 
-Decorators are not the sole security boundary. Authorization must also be enforced at storage/query boundaries. The current vertical slice does not implement authentication or partition enforcement and must not be treated as a multi-tenant security boundary.
+Decorators are not the sole security boundary. Authorization must also be enforced at storage/query boundaries. The current implementation requires bearer API keys configured through `ENSEMBLE_API_KEYS`, checks read/write permissions, and enforces allowed partition membership on every versioned API and capability route. Partition scope is stored with document identity and applied to ingestion, lexical candidate retrieval, and vector candidate retrieval. Health/readiness remain public. Key rotation is performed by updating the deployment environment and restarting the service; secrets are not stored in the database.
 
 ## Retrieval
 

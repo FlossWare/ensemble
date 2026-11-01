@@ -34,12 +34,13 @@ documents = Table(
     metadata,
     Column("id", String(36), primary_key=True),
     Column("source_id", String(1024), nullable=False),
+    Column("partition_id", String(255), nullable=False),
     Column("revision", Integer, nullable=False),
     Column("title", String(2048), nullable=False),
     Column("content", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("is_current", Boolean, nullable=False, default=True),
-    UniqueConstraint("source_id", "revision", name="uq_ensemble_document_source_revision"),
+    UniqueConstraint("partition_id", "source_id", "revision", name="uq_ensemble_document_partition_source_revision"),
 )
 chunks = Table(
     "ensemble_chunks",
@@ -67,15 +68,15 @@ class DocumentStore(Protocol):
     async def close(self) -> None: ...
     async def check_ready(self) -> None: ...
     async def save(self, document: Document, chunks: list[Chunk]) -> Document: ...
-    async def all_chunks(self, query: str | None = None, limit: int | None = None) -> list[IndexedChunk]: ...
-    async def vector_candidates(self, vector: list[float], limit: int) -> list[IndexedChunk]: ...
+    async def all_chunks(self, query: str | None = None, limit: int | None = None, partition_id: str = "default") -> list[IndexedChunk]: ...
+    async def vector_candidates(self, vector: list[float], limit: int, partition_id: str = "default") -> list[IndexedChunk]: ...
 
 
 class InMemoryDocumentStore:
     """Non-durable adapter retained for isolated tests and development."""
 
     def __init__(self):
-        self._documents: dict[tuple[str, int], Document] = {}
+        self._documents: dict[tuple[str, str, int], Document] = {}
         self._chunks: dict[UUID, list[Chunk]] = {}
 
     async def initialize(self) -> None:
@@ -88,7 +89,7 @@ class InMemoryDocumentStore:
         return None
 
     async def save(self, document: Document, chunks: list[Chunk]) -> Document:
-        key = (document.source_id, document.revision)
+        key = (document.partition_id, document.source_id, document.revision)
         previous = self._documents.get(key)
         if previous is not None:
             document.id = previous.id
@@ -98,15 +99,17 @@ class InMemoryDocumentStore:
         self._chunks[document.id] = list(chunks)
         return document
 
-    async def all_chunks(self, query: str | None = None, limit: int | None = None) -> list[IndexedChunk]:
-        latest: dict[str, Document] = {}
+    async def all_chunks(self, query: str | None = None, limit: int | None = None, partition_id: str = "default") -> list[IndexedChunk]:
+        latest: dict[tuple[str, str], Document] = {}
         for document in self._documents.values():
-            current = latest.get(document.source_id)
+            current = latest.get((document.partition_id, document.source_id))
             if current is None or document.revision > current.revision:
-                latest[document.source_id] = document
+                latest[(document.partition_id, document.source_id)] = document
         terms = {term.casefold() for term in (query or "").split() if term}
         result: list[IndexedChunk] = []
         for document in latest.values():
+            if document.partition_id != partition_id:
+                continue
             for chunk in self._chunks.get(document.id, []):
                 if terms and not any(term in chunk.content.casefold() for term in terms):
                     continue
@@ -114,8 +117,8 @@ class InMemoryDocumentStore:
         result.sort(key=lambda item: (item.document.source_id, item.chunk.ordinal))
         return result[:limit] if limit is not None else result
 
-    async def vector_candidates(self, vector: list[float], limit: int) -> list[IndexedChunk]:
-        candidates = await self.all_chunks()
+    async def vector_candidates(self, vector: list[float], limit: int, partition_id: str = "default") -> list[IndexedChunk]:
+        candidates = await self.all_chunks(partition_id=partition_id)
         return sorted(
             candidates, key=lambda item: _cosine_distance(vector, item.chunk.embedding)
         )[:limit]
@@ -153,7 +156,7 @@ class SqlDocumentStore:
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0002_vector_index":
+        if revision != "0003_partition_scope":
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )
@@ -178,17 +181,19 @@ class SqlDocumentStore:
             statement = dialect_insert(self.documents).values(
                 id=str(document.id),
                 source_id=document.source_id,
+                partition_id=document.partition_id,
                 revision=document.revision,
                 title=document.title,
                 content=document.content,
                 created_at=document.created_at,
                 is_current=False,
-            ).on_conflict_do_nothing(index_elements=["source_id", "revision"])
+            ).on_conflict_do_nothing(index_elements=["partition_id", "source_id", "revision"])
             await connection.execute(statement)
 
             existing = (
                 await connection.execute(
                     select(self.documents).where(
+                        self.documents.c.partition_id == document.partition_id,
                         self.documents.c.source_id == document.source_id,
                         self.documents.c.revision == document.revision,
                     )
@@ -204,17 +209,22 @@ class SqlDocumentStore:
             )
             await connection.execute(
                 update(self.documents)
-                .where(self.documents.c.source_id == document.source_id)
+                .where(
+                    self.documents.c.partition_id == document.partition_id,
+                    self.documents.c.source_id == document.source_id,
+                )
                 .values(is_current=False)
             )
             latest_revision = await connection.scalar(
                 select(func.max(self.documents.c.revision)).where(
-                    self.documents.c.source_id == document.source_id
+                    self.documents.c.partition_id == document.partition_id,
+                    self.documents.c.source_id == document.source_id,
                 )
             )
             await connection.execute(
                 update(self.documents)
                 .where(
+                    self.documents.c.partition_id == document.partition_id,
                     self.documents.c.source_id == document.source_id,
                     self.documents.c.revision == latest_revision,
                 )
@@ -241,7 +251,7 @@ class SqlDocumentStore:
         result: list[IndexedChunk] = []
         for row in rows:
             document = Document(
-                row["source_id"], row["revision"], row["title"], row["document_content"]
+                row["source_id"], row["revision"], row["title"], row["document_content"], row["partition_id"]
             )
             document.id = UUID(row["document_id"])
             document.created_at = row["created_at"]
@@ -252,11 +262,12 @@ class SqlDocumentStore:
             result.append(IndexedChunk(document, chunk))
         return result
 
-    def _chunk_select(self):
+    def _chunk_select(self, partition_id: str):
         return (
             select(
                 self.documents.c.id.label("document_id"),
                 self.documents.c.source_id,
+                self.documents.c.partition_id,
                 self.documents.c.revision,
                 self.documents.c.title,
                 self.documents.c.content.label("document_content"),
@@ -267,11 +278,14 @@ class SqlDocumentStore:
                 self.chunks.c.embedding,
             )
             .join(self.chunks, self.documents.c.id == self.chunks.c.document_id)
-            .where(self.documents.c.is_current.is_(True))
+            .where(
+                self.documents.c.is_current.is_(True),
+                self.documents.c.partition_id == partition_id,
+            )
         )
 
-    async def all_chunks(self, query: str | None = None, limit: int | None = None) -> list[IndexedChunk]:
-        statement = self._chunk_select().order_by(
+    async def all_chunks(self, query: str | None = None, limit: int | None = None, partition_id: str = "default") -> list[IndexedChunk]:
+        statement = self._chunk_select(partition_id).order_by(
             self.documents.c.source_id, self.chunks.c.ordinal
         )
         if query and query.strip():
@@ -286,12 +300,12 @@ class SqlDocumentStore:
             rows = (await connection.execute(statement)).mappings().all()
         return self._indexed_rows(rows)
 
-    async def vector_candidates(self, vector: list[float], limit: int) -> list[IndexedChunk]:
+    async def vector_candidates(self, vector: list[float], limit: int, partition_id: str = "default") -> list[IndexedChunk]:
         if not vector:
             return []
         if self.engine.url.get_backend_name() == "postgresql":
             statement = (
-                self._chunk_select()
+                self._chunk_select(partition_id)
                 .where(self.chunks.c.embedding_vector.is_not(None))
                 .order_by(self.chunks.c.embedding_vector.cosine_distance(vector))
                 .limit(limit)
@@ -299,7 +313,7 @@ class SqlDocumentStore:
             async with self.engine.connect() as connection:
                 rows = (await connection.execute(statement)).mappings().all()
             return self._indexed_rows(rows)
-        candidates = await self.all_chunks()
+        candidates = await self.all_chunks(partition_id=partition_id)
         return sorted(
             candidates, key=lambda item: _cosine_distance(vector, item.chunk.embedding)
         )[:limit]
