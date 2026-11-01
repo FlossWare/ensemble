@@ -10,6 +10,7 @@ Implemented:
 - SQLAlchemy 2 asynchronous persistence adapter.
 - SQLite is the default local durable store at .ensemble/ensemble.db.
 - PostgreSQL is supported through the same adapter using asyncpg and ENSEMBLE_DATABASE_URL.
+- Alembic-managed, versioned schema migrations; application startup rejects an unmigrated or incomplete database.
 - Document and chunk records are stored transactionally.
 - Stable document identity for repeated ingestion of the same source and revision.
 - Stable chunk identities for a given document revision and ordinal.
@@ -18,8 +19,6 @@ Implemented:
 - An older revision arriving late cannot replace a newer revision in the active search view.
 - Persistence survives application restart.
 - Storage details remain behind the document-store interface and do not appear in REST requests or responses.
-
-The initial schema is created at application startup. Schema versioning and managed migrations are the next persistence-hardening task before production deployment.
 
 ## First vertical slice
 
@@ -31,11 +30,10 @@ Implemented:
 - Lexical retrieval and reciprocal-rank fusion
 - Vector similarity over stored chunk embeddings when embeddings are enabled
 - Document and chunk provenance in search responses
-- Unit and API-level tests
+- Tests for API behavior, migration setup, restart durability, and revision replacement
 - Python 3.12 GitHub Actions test workflow
 
 Not yet implemented:
-- Managed database schema migrations
 - Dedicated vector index
 - Token-aware chunking
 - Reranking
