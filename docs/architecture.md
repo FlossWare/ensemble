@@ -1,119 +1,115 @@
 # Ensemble Architecture
 
-**Status:** Initial architectural direction accepted; implementation and detailed contracts remain to be designed.
+**Status:** Foundational direction. Contracts are being established before implementation.
 
-## 1. Purpose and ownership
+## 1. Purpose and scope
 
-Ensemble is the shared, standalone platform for reusable intelligence capabilities. It is built first.
+Ensemble is the standalone platform for reusable intelligence capabilities: memory, knowledge, retrieval, embeddings, ranking, reranking, and related operations.
 
-The platform owns the reusable capabilities and their service contracts. Client-specific repositories own only their client integration and workflows.
+This repository owns the platform and its implementations. Client-specific integrations and workflows belong in separate consumer repositories.
 
-- ensemble: shared platform and capabilities.
-- ensemble-claude: Claude-specific integration consuming Ensemble.
-- Claude, Codex, Cursor, Crush, and other applications are optional clients.
-- The historical claude-ensemble and poc-claude-ensemble repositories are source material to assess and consolidate, not assumed to be the long-term platform boundary.
+The scope is Ensemble only. This is not a plan to consolidate the wider FlossWare ecosystem.
 
-Ensemble must start and operate without Claude Code, Codex, Cursor, MCP clients, or any other AI coding assistant.
+The historical claude-ensemble and poc-claude-ensemble repositories are reference material. They help identify useful behavior, algorithms, and API contracts. They are not runtime dependencies and are not the implementation target.
 
-## 2. REST is the service contract
+Ensemble must operate without Claude Code, Codex, Cursor, Crush, MCP, or any other AI client.
 
-REST is the canonical interface for external consumers and internal service-to-service communication.
+## 2. Deployment shape
 
-The initial deployment is:
+The initial deployment is deliberately simple:
 
 - One application.
 - One REST server/listener.
 - Multiple versioned endpoint groups.
 - Independently addressable logical capabilities.
+- Pluggable implementations behind stable contracts.
 
-A capability invokes another capability through its REST contract, even when both happen to run in the same deployment. Do not substitute in-process calls as the normal service boundary.
+Capabilities may share a process and deployment initially. They retain independent REST contracts and ownership so they can be moved to another process or host later without changing consumers.
 
-This makes service location a deployment/configuration concern rather than a different programming model.
+Do not introduce federation, service discovery, service meshes, brokers, distributed coordination, or a microservice fleet without a concrete requirement.
 
-## 3. Co-located first; federation-ready
+## 3. REST is the canonical boundary
 
-The initial deployment should remain simple. Capabilities may share one process and one server while retaining independent REST contracts and ownership.
+REST/HTTP is the canonical contract for both external consumers and internal capability-to-capability communication.
 
-The architecture should permit a capability to move to another host or deployment without changing its consumers or service contract.
+A capability calls another capability through its REST contract, even when both are co-located. Do not make direct in-process calls the normal service boundary. This keeps deployment topology from changing the programming model.
 
-Federation is a future possibility, not an initial subsystem. Do not introduce service discovery, distributed registries, service meshes, brokers, distributed coordination, or federation protocols until a concrete requirement warrants them.
+Contracts are language-neutral. Implementations may use the language and runtime best suited to the capability, but clients must not depend on implementation language or framework.
 
-## 4. Decorator composition over REST
+See [REST contract conventions](rest-contracts.md).
 
-Service contracts should support decorator composition without coupling consumers to a particular implementation or location.
+## 4. Composition and decorators
 
-A decorator may wrap a REST client/implementation while preserving the same service contract. Examples of potential decorators include logging, metrics, tracing, retry, timeout, caching, policy, routing, and failover. These are examples, not a mandate to implement all of them initially.
+Implementations sit behind capability contracts. Decorators may wrap a REST client or implementation while preserving the same contract.
 
-Provider selection can compose multiple implementations behind one capability. For example, an embedding capability may route requests to multiple independently hosted embedding servers based on model, dimensions, workload, policy, or availability.
+Expected cross-cutting concerns include logging, metrics, tracing, timeouts, bounded retries, caching, provider selection and routing, policy, authorization, and partition-aware access enforcement.
 
-## 5. RAG and MCP
+Decorators are composition mechanisms, not the sole security boundary. Authorization must also be enforced at the storage/query boundary where applicable. A capability must not become less secure because a decorator was accidentally omitted.
 
-### RAG
+## 5. Retrieval and RAG
 
-RAG is a first-class Ensemble capability. Retrieval must be independently usable through REST without requiring a generation model or AI client.
+Retrieval is a first-class, independently callable capability. It must work without a generation model or AI client.
 
-The platform can expose ingestion, extraction, chunking, embedding, lexical/vector retrieval, graph expansion, ranking, reranking, and sourced results as appropriate contracts. Generation is optional and uses a separately configured provider.
+The retrieval pipeline may combine lexical retrieval, vector retrieval, graph expansion, candidate fusion, ranking and reranking, and source metadata and citations.
 
-### MCP
+Reranking receives only candidates that the caller is authorized to access. Authorization is applied before candidate fusion and reranking, and checked again at trust boundaries. Unauthorized content must never be sent to a reranker or external model provider.
 
-MCP is an optional adapter over existing Ensemble REST capabilities.
+Generation is optional and provider-backed. It is not a prerequisite for search or retrieval.
 
-- REST remains canonical.
-- MCP tools map to existing capability operations.
-- MCP contains no duplicate business logic.
-- Ensemble remains fully usable when MCP is disabled.
+## 6. Data partitions and access control
 
-## 6. Storage and active POC ingestion
+The architecture must accommodate multiple users and isolated data partitions without requiring a redesign.
 
-The initial storage foundation reuses the existing POC data and storage:
+The intended model includes tenant or owner identity, partition identity, classification and sharing policy, membership and explicit sharing grants, and authorized scope carried through ingestion, storage, retrieval, graph traversal, reranking, caching, and response generation.
 
-- ChromaDB for existing vector collections.
-- SQLite for existing lexical/index/metadata responsibilities.
+Access is deny-by-default. A missing classification is not implicitly shareable.
 
-PostgreSQL is not part of the current design.
+Logical partitioning and physical isolation are both possible implementation strategies. Sensitive or proprietary information may require a separate deployment and storage boundary rather than relying solely on logical filters.
 
-The POC ingestion pipeline is actively running. Preserve its operation and existing data. Do not stop ingestion, relocate active storage, re-ingest documents, regenerate embeddings, or create a parallel storage system as an architectural prerequisite.
+The full multi-user sharing and partition implementation is a later capability. The initial contracts and metadata model must not prevent it.
 
-Before changing storage ownership, inventory the actual deployed databases, collections, schemas, paths, record counts, and write ownership. Avoid assuming database boundaries beyond what the running implementation demonstrates. In particular, avoid having independent processes write to the same ChromaDB persistence directory without a deliberate consistency/ownership design.
+## 7. Storage and migration
 
-Reuse existing data first; assess and consolidate implementation behind Ensemble contracts afterward.
+Storage technology is not part of the public REST contract and is not selected by this architecture document.
 
-## 7. Capability consolidation
+Ensemble will own its implementations and data access. It must not depend on POC database files, persistence directories, process internals, or direct database sharing.
 
-Existing POC and related work should be assessed as candidate Ensemble capabilities rather than automatically retained as separate platforms or repositories. Candidate areas include:
+Use the POC's supported REST endpoints as a behavioral and contract reference when useful. Do not inspect or couple to its physical storage as a prerequisite for building Ensemble.
 
-- Memory
-- Graph
-- Knowledge
-- Retrieval and RAG
-- Embeddings and provider routing
-- Reranking and ranking
-- Chunking and tokenization
-- Ingestion and extraction
-- Indexing and source revision tracking
+Existing POC services and data are active and must be preserved. Do not stop ingestion, relocate storage, re-ingest documents, regenerate embeddings, or run destructive experiments against the POC.
 
-This is an inventory for assessment, not a claim that every capability is complete or that each requires a separate process.
+If existing data is needed, define a deliberate migration using a supported API or explicit export/import contract. Data migration is separate from implementing Ensemble's capabilities.
 
-## 8. Explicitly deferred
+## 8. Providers and adapters
 
-- Messaging endpoint/service.
-- Federation infrastructure and distributed service discovery.
-- Service mesh, message broker, and distributed coordination.
-- Mandatory MCP support.
-- Dependency on any particular AI client or model vendor.
+Embedding, reranking, and optional generation providers are pluggable behind Ensemble-owned contracts. Provider-specific behavior must not leak into public API contracts.
 
-## 9. Initial implementation sequence
+MCP is an optional adapter over existing Ensemble REST operations. REST remains canonical; MCP tools map to existing operations; MCP contains no duplicate business logic; and Ensemble remains fully usable when MCP is disabled.
 
-1. Establish the repository architecture and REST contract conventions.
-2. Inventory the active POC storage and ingestion without interrupting it.
-3. Map existing capabilities, implementations, data ownership, and dependencies into Ensemble boundaries.
-4. Define the minimum server and endpoint skeleton.
-5. Reuse existing ChromaDB/SQLite data through Ensemble REST contracts.
-6. Consolidate capabilities incrementally and validate against existing data.
-7. Build ensemble-claude and other clients as independent consumers.
+## 9. Explicitly out of scope initially
 
-## 10. Architectural test
+- The broader FlossWare ecosystem.
+- Client-specific workflows inside the Ensemble platform.
+- A mandatory MCP server.
+- Federation and distributed service discovery.
+- Service mesh, message brokers, and distributed coordination.
+- A required generation model.
+- A prescribed database or vector-store technology.
+- Runtime dependency on either historical Claude Ensemble repository.
 
-Can a capability move from the initial co-located Ensemble deployment to another host without changing its consumers or its REST contract?
+## 10. Implementation sequence
 
-If yes, the architecture supports the intended future federation without requiring federation machinery today.
+1. Establish repository conventions and REST contract standards.
+2. Inventory POC capabilities through documented/supported REST interfaces and source behavior; do not disturb active services or data.
+3. Create a capability migration map: reference behavior, Ensemble contract, implementation status, and acceptance criteria.
+4. Define the minimum application and REST server skeleton.
+5. Implement a thin end-to-end vertical slice through Ensemble-owned contracts and implementations.
+6. Add retrieval channels, fusion, ranking, and reranking behind those contracts.
+7. Validate behavior and performance with the independent Evaluation project.
+8. Add broader partition enforcement and client integrations without changing the canonical contracts.
+
+## 11. Architectural acceptance test
+
+A capability can move from the initial co-located deployment to a separate process or host without changing its REST contract or consumer behavior.
+
+The platform is also independently usable without an AI client, MCP, or generation provider.
