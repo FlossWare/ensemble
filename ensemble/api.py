@@ -17,6 +17,7 @@ from .vector_store import SqliteVectorStore, VectorStore
 from .vector_memory import InMemoryVectorStore
 from .index_store import IndexStore, SqliteIndexStore
 from .index_memory import InMemoryIndexStore
+from .knowledge_store import KnowledgeStore, SqliteKnowledgeStore, InMemoryKnowledgeStore
 from .tokenization import PROFILES as TOKENIZATION_PROFILES, TokenizationError, describe_profiles, tokenize
 from .extraction import extract
 from .intent import RULES as INTENT_RULES, classify
@@ -52,6 +53,7 @@ def create_app(
     embedding_provider: EmbeddingProvider | None = None,
     vector_store: VectorStore | None = None,
     index_store: IndexStore | None = None,
+    knowledge_store: KnowledgeStore | None = None,
 ) -> FastAPI:
     document_store = store or SqlDocumentStore(database_url)
     embeddings = embedding_provider or configured_embedding_provider()
@@ -64,6 +66,10 @@ def create_app(
         InMemoryIndexStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteIndexStore(database_url)
     )
+    active_knowledge_store = knowledge_store or (
+        InMemoryKnowledgeStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteKnowledgeStore(database_url)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -71,8 +77,10 @@ def create_app(
             await document_store.initialize()
             await active_vector_store.initialize()
             await active_index_store.initialize()
+            await active_knowledge_store.initialize()
             yield
         finally:
+            await active_knowledge_store.close()
             await active_index_store.close()
             await active_vector_store.close()
             await document_store.close()
@@ -91,6 +99,7 @@ def create_app(
     app.state.reranker = active_reranker
     app.state.vector_store = active_vector_store
     app.state.index_store = active_index_store
+    app.state.knowledge_store = active_knowledge_store
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -119,7 +128,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "tokenization", "extraction", "intent", "ranking", "reranking"],
+            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
@@ -161,6 +170,82 @@ def create_app(
             "dimensions": dimensions,
             "embeddings": vectors,
         }
+
+    @app.get("/api/v1/knowledge/health", tags=["knowledge"])
+    async def knowledge_health():
+        return {"ok": True, "service": "knowledge"}
+
+    @app.get("/api/v1/knowledge/ready", tags=["knowledge"])
+    async def knowledge_ready():
+        try:
+            await active_knowledge_store.get("__readiness_probe__")
+            await active_index_store.list_sources(1)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="knowledge or index persistence unavailable") from exc
+        return {"ok": True, "ready": True, "index": "available"}
+
+    @app.post("/api/v1/knowledge/records", tags=["knowledge"])
+    async def knowledge_put(payload: dict[str, Any], request: Request):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > 8 * 1_048_576:
+            raise HTTPException(status_code=413, detail="request body exceeds 8 MiB")
+        source_id = payload.get("source_id")
+        revision_id = payload.get("revision_id")
+        sequence = payload.get("revision_sequence")
+        title, content = payload.get("title"), payload.get("content")
+        provenance, profiles = payload.get("provenance"), payload.get("profiles")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        if not isinstance(revision_id, str) or not revision_id or len(revision_id) > 512:
+            raise HTTPException(status_code=400, detail="revision_id must be a non-empty string of at most 512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
+        if not isinstance(title, str) or not title or len(title) > 2048:
+            raise HTTPException(status_code=400, detail="title must be a non-empty string of at most 2048 characters")
+        if not isinstance(content, str) or not content:
+            raise HTTPException(status_code=400, detail="content must be a non-empty string")
+        if len(content) > 4_000_000:
+            raise HTTPException(status_code=413, detail="content is limited to 4000000 characters")
+        if not isinstance(provenance, dict) or not isinstance(provenance.get("origin"), str) or not isinstance(provenance.get("locator"), str):
+            raise HTTPException(status_code=400, detail="provenance must include string origin and locator")
+        if not isinstance(profiles, dict) or not profiles:
+            raise HTTPException(status_code=400, detail="profiles must be a non-empty object")
+        decision = await active_index_store.record_revision(source_id, sequence, revision_id, profiles)
+        if decision["decision"] not in {"accepted", "duplicate"}:
+            return {"ok": True, "decision": decision["decision"], "source_id": source_id, "stored": False}
+        digest = await active_knowledge_store.put({
+            "source_id": source_id,
+            "revision_sequence": sequence,
+            "revision_id": revision_id,
+            "title": title,
+            "content": content,
+            "origin": provenance["origin"],
+            "locator": provenance["locator"],
+            "profiles": profiles,
+        })
+        return {
+            "ok": True, "decision": decision["decision"], "source_id": source_id,
+            "stored": True, "content_sha256": digest,
+        }
+
+    @app.get("/api/v1/knowledge/records/{source_id}", tags=["knowledge"])
+    async def knowledge_get(source_id: str):
+        record = await active_knowledge_store.get(source_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="unknown record")
+        return {"ok": True, "record": record}
+
+    @app.post("/api/v1/knowledge/records/{source_id}/tombstone", tags=["knowledge"])
+    async def knowledge_tombstone(source_id: str, payload: dict[str, Any]):
+        sequence = payload.get("revision_sequence")
+        if not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
+        decision = await active_index_store.record_tombstone(source_id, sequence)
+        if decision["decision"] == "tombstoned":
+            await active_knowledge_store.tombstone(source_id)
+        return {"ok": True, "decision": decision["decision"], "source_id": source_id}
 
     @app.get("/api/v1/index/health", tags=["index"])
     async def index_health():
