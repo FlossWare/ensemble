@@ -64,7 +64,61 @@ def test_documents_survive_application_restart(tmp_path):
         assert hits[0]["document_id"] == first["id"]
 
 
+def test_reingest_replaces_chunk_content_for_same_revision(tmp_path):
+    with _client(tmp_path) as client:
+        original = {
+            "source_id": "mutable-source",
+            "revision": 1,
+            "title": "Mutable source",
+            "content": "The original content contains obsolete terminology.",
+        }
+        first = client.post("/api/v1/documents", json=original).json()
+        replacement = {
+            **original,
+            "content": "The replacement content contains current terminology.",
+        }
+        second = client.post("/api/v1/documents", json=replacement).json()
+        assert second["id"] == first["id"]
+
+        old_hits = client.post("/api/v1/search", json={"query": "obsolete terminology"}).json()
+        new_hits = client.post("/api/v1/search", json={"query": "current terminology"}).json()
+        assert old_hits == []
+        assert len(new_hits) == 1
+        assert new_hits[0]["text"] == replacement["content"]
+
+
 def test_reingest_is_idempotent_and_latest_revision_is_searchable(tmp_path):
+    with _client(tmp_path) as client:
+        original = {
+            "source_id": "versioned-note",
+            "revision": 1,
+            "title": "First revision",
+            "content": "The original document discusses obsolete indexing behavior.",
+        }
+        first = client.post("/api/v1/documents", json=original).json()
+        again = client.post("/api/v1/documents", json=original).json()
+        assert again["id"] == first["id"]
+
+        revised = {
+            "source_id": "versioned-note",
+            "revision": 2,
+            "title": "Second revision",
+            "content": "The current document discusses durable indexing behavior.",
+        }
+        second = client.post("/api/v1/documents", json=revised).json()
+        assert second["id"] != first["id"]
+
+        current = client.post("/api/v1/search", json={"query": "indexing behavior"}).json()
+        assert len(current) == 1
+        assert current[0]["revision"] == 2
+        assert current[0]["document_id"] == second["id"]
+
+        historical = client.post("/api/v1/documents", json=original).json()
+        assert historical["id"] == first["id"]
+        still_current = client.post("/api/v1/search", json={"query": "indexing behavior"}).json()
+        assert len(still_current) == 1
+        assert still_current[0]["revision"] == 2
+
     with _client(tmp_path) as client:
         original = {
             "source_id": "versioned-note",
