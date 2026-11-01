@@ -1,10 +1,16 @@
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from ensemble.api import create_app
 
 
 def _client(tmp_path):
     database = tmp_path / "ensemble.db"
-    return TestClient(create_app(database_url=f"sqlite+aiosqlite:///{database}"))
+    database_url = f"sqlite+aiosqlite:///{database}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    return TestClient(create_app(database_url=database_url))
 
 
 def test_health_and_ready(tmp_path):
