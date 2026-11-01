@@ -11,6 +11,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from ensemble.store import metadata
+from ensemble.vector_store import vector_metadata
+from ensemble.index_store import index_metadata
 
 config = context.config
 environment_url = os.getenv("ENSEMBLE_DATABASE_URL")
@@ -26,7 +28,7 @@ if database_url.database not in (None, "", ":memory:"):
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = metadata
+target_metadata = [metadata, vector_metadata, index_metadata]
 
 
 def run_migrations_offline() -> None:
