@@ -34,7 +34,7 @@ ENSEMBLE_PERSISTENCE_ROOT=/var/lib/ensemble
 - ENSEMBLE_HOST controls the bind address. The default is loopback-only.
 - ENSEMBLE_PORT controls the HTTP port. The default is 8090.
 - ENSEMBLE_PERSISTENCE_ROOT is the root for durable data. The default is /var/lib/ensemble for installed deployments and ./.ensemble for a source checkout.
-- ENSEMBLE_DATABASE_URL is an optional SQLite URL override. If unset, the database is <persistence-root>/ensemble.db. Non-SQLite URLs are rejected.
+- ENSEMBLE_DATABASE_URL is an optional SQLite URL override. If unset, the database is <persistence-root>/ensemble.db. Non-SQLite URLs are rejected. For the systemd installer, the database file must remain beneath ENSEMBLE_PERSISTENCE_ROOT so the service can be safely confined to that directory.
 
 Command-line options to python -m ensemble override the corresponding environment values: --host, --port, --persistence-root and --database-url.
 
