@@ -10,7 +10,7 @@ This repository owns the platform and its implementations. Client-specific integ
 
 The scope is Ensemble only. This is not a plan to consolidate the wider FlossWare ecosystem.
 
-The historical claude-ensemble and poc-claude-ensemble repositories are reference material. They help identify useful behavior, algorithms, and API contracts. They are not runtime dependencies and are not the implementation target.
+The historical claude-ensemble and poc-claude-ensemble repositories are functional references. The POC is the capability baseline: every service/capability in its catalog must be accounted for in Ensemble parity. The POC's algorithms and behavior are evidence; its process topology, storage choices, and implementation details are not binding.
 
 Ensemble must operate without Claude Code, Codex, Cursor, Crush, MCP, or any other AI client.
 
@@ -72,9 +72,9 @@ The full multi-user sharing and partition implementation is a later capability. 
 
 Storage technology is not part of the public REST contract.
 
-Ensemble owns its persistence and data access. It must not depend on POC database files, persistence directories, process internals, or direct database sharing.
+Ensemble owns its own SQLite persistence implementation. SQLite is the only persistence implementation in this repository and is used for local and initial single-instance deployments. PostgreSQL, other alternative persistence implementations, and shared persistence infrastructure belong to FlossWare proper; they are not planned or implemented here.
 
-The current adapter uses SQLAlchemy with portable relational tables. SQLite is the default for local development and a single-instance deployment. PostgreSQL is supported through the same adapter and is the intended backend for a shared multi-client deployment. Embeddings are stored as portable JSON values for now; this does not commit the public contract to a vector database or vector extension.
+Ensemble must not depend on POC database files, persistence directories, process internals, or direct database sharing.
 
 Schema changes are versioned with Alembic and applied as a deployment step before the application starts. Application startup checks that the migration table and required Ensemble tables exist; it does not create or silently upgrade production schemas.
 
@@ -92,7 +92,7 @@ MCP is an optional adapter over existing Ensemble REST operations. REST remains 
 
 ## 9. Explicitly out of scope initially
 
-- The broader FlossWare ecosystem.
+- The broader FlossWare ecosystem and its shared infrastructure implementations.
 - Client-specific workflows inside the Ensemble platform.
 - A mandatory MCP server.
 - Federation and distributed service discovery.
@@ -103,15 +103,15 @@ MCP is an optional adapter over existing Ensemble REST operations. REST remains 
 ## 10. Implementation sequence
 
 1. Establish repository conventions and REST contract standards.
-2. Inventory reference capabilities through documented/supported REST interfaces and source behavior; do not disturb active services or data.
-3. Define the minimum application and REST server skeleton.
-4. Implement a thin end-to-end vertical slice through Ensemble-owned contracts and implementations.
-5. Add retrieval channels, fusion, ranking, and reranking behind those contracts.
+2. Inventory every POC capability, endpoint, behavior, test, dependency, and operational assumption without disturbing active services or data.
+3. Define parity acceptance criteria and map each capability to an Ensemble contract and implementation.
+4. Implement the complete capability surface inside the one-app/one-REST-server architecture.
+5. Deliver the Control Center web interface against the same REST contracts.
 6. Validate behavior and performance with the independent Evaluation project.
-7. Add partition enforcement and client integrations without changing the canonical contracts.
+7. Add partition enforcement and client integrations without changing canonical contracts.
 
 ## 11. Architectural acceptance test
 
 A capability can move from the initial co-located deployment to a separate process or host without changing its REST contract or consumer behavior.
 
-The platform is independently usable without an AI client, MCP, or generation provider.
+The platform is independently usable without an AI client, MCP, or generation provider. Capability parity is demonstrated by contract-level regression tests against the POC's documented behavior, not by matching its process layout.
