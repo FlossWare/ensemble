@@ -20,6 +20,7 @@ def test_control_panel_is_served_by_the_api():
         assert "Start GA run" in response.text
         assert "Thompson Router" in response.text
         assert "Learning" in response.text
+        assert "Runtime Configuration" in response.text
         assert "Reset Learning outcomes" in response.text
         script = client.get("/control.js")
         assert script.status_code == 200
