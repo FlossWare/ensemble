@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ensemble Control Center</title></head>
+<body>
+<h1>Ensemble Control Center</h1>
+<p><a href="/docs">REST API</a></p>
+<h2>URI ingestion</h2>
+<form id="scrape-form">
+<label for="uri">Public page URI</label>
+<input id="uri" type="url" required placeholder="https://example.org/docs">
+<button type="submit">Preview page</button>
+</form>
+<p id="status">Preview first. Ingestion is a separate explicit action.</p>
+<section id="preview" hidden>
+<h2 id="title"></h2><p id="metadata"></p><pre id="body"></pre>
+<button id="ingest" type="button">Ingest this page</button>
+</section>
+<script src="/control.js"></script>
+</body></html>
