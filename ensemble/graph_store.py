@@ -92,8 +92,8 @@ class SqliteGraphStore:
         if len(identifier) > 256:
             raise ValueError("id must be at most 256 characters")
         async with self.engine.begin() as connection:
-            found = (await connection.execute(select(nodes.c.id).where(nodes.c.id.in_([source, target])))).scalars().all()
-            if len(set(found)) != 2:
+            found = set((await connection.execute(select(nodes.c.id).where(nodes.c.id.in_({source, target})))).scalars().all())
+            if found != {source, target}:
                 raise KeyError("source and target nodes must exist")
             existing = (await connection.execute(select(edges).where(edges.c.id == identifier))).mappings().first()
             record = {"id": identifier, "source": source, "target": target, "type": edge_type, "properties": properties}
@@ -123,7 +123,6 @@ class SqliteGraphStore:
         ]
 
     async def query_edges(self, from_type: str | None = None, to_type: str | None = None, relationship: str | None = None) -> list[dict[str, Any]]:
-        query = select(edges, nodes.alias("source_node").c.node_type.label("from_type"), nodes.alias("target_node").c.node_type.label("to_type"))
         source_node, target_node = nodes.alias("source_node"), nodes.alias("target_node")
         query = select(edges, source_node.c.node_type.label("from_type"), target_node.c.node_type.label("to_type")).join(source_node, edges.c.source_id == source_node.c.id).join(target_node, edges.c.target_id == target_node.c.id)
         if from_type is not None:
