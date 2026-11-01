@@ -8,8 +8,7 @@ Ensemble is implemented in Python. This is an Ensemble-specific choice and does 
 
 Implemented:
 - SQLAlchemy 2 asynchronous persistence adapter.
-- SQLite is the default local durable store at .ensemble/ensemble.db.
-- PostgreSQL is supported through the same adapter using asyncpg and ENSEMBLE_DATABASE_URL.
+- SQLite is the only persistence implementation in this repository; the default durable store is .ensemble/ensemble.db.
 - Alembic-managed, versioned schema migrations; application startup rejects an unmigrated or incomplete database.
 - Document and chunk records are stored transactionally.
 - Stable document identity for repeated ingestion of the same source and revision.
@@ -20,25 +19,32 @@ Implemented:
 - Persistence survives application restart.
 - Storage details remain behind the document-store interface and do not appear in REST requests or responses.
 
+PostgreSQL and other alternative persistence implementations are not part of Ensemble's scope. FlossWare proper owns shared infrastructure and alternative persistence implementations.
+
 ## First vertical slice
 
 Implemented:
-- FastAPI application with generated OpenAPI documentation at /docs
-- Durable SQLite/PostgreSQL document and chunk storage
-- Deterministic character-window chunking with overlap
-- Optional OpenAI-compatible embedding provider
-- Lexical retrieval and reciprocal-rank fusion
-- Vector similarity over stored chunk embeddings when embeddings are enabled
-- Document and chunk provenance in search responses
-- Tests for API behavior, migration setup, restart durability, and revision replacement
-- Python 3.12 GitHub Actions test workflow
+- FastAPI application with generated OpenAPI documentation at /docs.
+- Durable SQLite document and chunk storage.
+- Deterministic character-window chunking with overlap.
+- Optional OpenAI-compatible embedding provider.
+- Lexical retrieval and reciprocal-rank fusion.
+- Vector similarity over stored chunk embeddings when embeddings are enabled.
+- Document and chunk provenance in search responses.
+- Tests for API behavior, migration setup, restart durability, and revision replacement.
+- Python 3.12 GitHub Actions test workflow.
 
 Not yet implemented:
-- Dedicated vector index
-- Token-aware chunking
-- Reranking
-- Authentication and partition enforcement
-- Ingestion connectors and background jobs
-- Production observability, rate limits, and deployment packaging
+- The remaining POC capability surface listed in [POC capability parity](poc-parity.md).
+- Versioned tokenization/analyzer profiles.
+- Versioned chunk profiles (Markdown and message profiles).
+- Dedicated scalable vector index and vector-store operations.
+- Cross-encoder reranking.
+- Full POC hybrid-search orchestration and degraded-dependency behavior.
+- Source manifest, revision sequencing, and tombstones as a distinct index capability.
+- Exact identifier/entity extraction and evidence-backed intent classification.
+- Sourced knowledge records and durable episodic memory/session-event ledger.
+- Control Center web interface and operational controls.
+- Authentication, partition enforcement, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging.
 
-The default SQLite database is suitable for local development and single-instance use. PostgreSQL is the intended backend for a shared multi-client deployment. Vector values are currently stored as portable JSON and scored in the application; this is not yet a scalable vector index.
+SQLite is the only persistence implementation in this repository. Embeddings are currently stored as JSON and scored in the application; this is not a scalable vector index.
