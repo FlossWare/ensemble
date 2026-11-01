@@ -213,9 +213,16 @@ The POC GA evolves parameter sets for five evaluators:
 
 The reference engine uses population-based evolution, tournament selection, crossover, Gaussian mutation, elite preservation, bounded parameter schemas, reproducible runs, fitness history, and best-parameter artifacts. The POC also includes a GA tuning dashboard, a scheduled runner/workflow, parameter extraction/application support, evaluator-specific tests, and recovery/scheduler contract tests.
 
-Ensemble parity must cover the optimizer and evaluator contracts, versioned parameter/result schemas, run configuration, bounded execution, deterministic/reproducible behavior, persisted run status and artifacts, inspectable fitness history and best candidates, and safe parameter promotion. A browser Control Center must be able to configure and launch a run, inspect progress/results, compare candidates, and explicitly approve promotion. Candidate parameters must never be silently applied to live behavior.
+Ensemble's initial GA implementation is now available through the existing REST application:
+- `GET /api/v1/ga/health`, `/ready`, and `/optimizers`.
+- `POST /api/v1/ga/runs` starts a bounded background run; `GET /api/v1/ga/runs` and `/runs/{id}` expose status, configuration, results, fitness history and best candidates.
+- `POST /api/v1/ga/runs/{id}/promote` requires explicit approval and records a candidate for export only. It never applies live settings.
+- SQLite migration `0007_ga_runs` persists run configuration, status, results and promotion records.
+- The initial engine implements seeded reproducible population evolution, tournament selection, crossover, Gaussian mutation, elite preservation, and five synthetic local evaluator families.
 
-The existing POC evaluators use local evaluation and synthetic or configured corpora; do not imply their fitness scores establish production quality. Any evaluator that depends on unavailable RH-only data or consumers must report that limitation rather than fabricate a successful evaluation. GA is a first-class Ensemble capability but remains SQLite-backed and hosted by the single Ensemble REST application; no second server is introduced.
+This is an initial implementation, not yet a parity certification. The five evaluators are adapted synthetic-local implementations and their scoring behavior still needs comparison against the POC's evaluator tests and edge cases. Scheduled execution/recovery, portable learning artifacts, and Control Center configuration/progress/candidate comparison remain outstanding. The GA Thompson evaluator is separate from the standalone Thompson service, which remains a separate parity obligation.
+
+The POC evaluators use local evaluation and synthetic or configured corpora; do not imply their fitness scores establish production quality. Any evaluator that depends on unavailable RH-only data or consumers must report that limitation rather than fabricate a successful evaluation. GA is a first-class Ensemble capability but remains SQLite-backed and hosted by the single Ensemble REST application; no second server is introduced.
 
 
 ## Initial Memory implementation
