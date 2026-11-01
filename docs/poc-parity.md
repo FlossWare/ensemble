@@ -81,6 +81,7 @@ The POC capability set must be inspectable and operable from a real browser UI, 
 | Models and Providers | Inspect embedding/reranking model IDs, revisions, dimensions, runtime/device/precision, configured providers and failures |
 | Configuration | View and safely change supported chunking, tokenization, retrieval, ranking, provider and timeout settings |
 | GA Tuning | Configure and launch bounded runs, inspect fitness history and candidate parameters, compare candidates, and explicitly approve export without automatic live application |
+| Thompson | Inspect model statistics, request cost-constrained model selection, and explicitly reset per-model learning state |
 | Operations | Trigger permitted ingestion/reindex/maintenance operations, inspect jobs/results, confirm destructive actions |
 | Diagnostics | Structured logs, correlation IDs, dependency failures, latency breakdowns, persistence health and exportable diagnostics |
 
@@ -231,3 +232,10 @@ The POC evaluators use local evaluation and synthetic or configured corpora; do 
 Alembic migration `0006_memory` adds SQLite-backed named memory documents and append-only event records. The implementation exposes Memory through the existing FastAPI application; it does not start another process or listener. Append-once uses a unique (memory name, event ID) key and a canonical JSON SHA-256 digest: retries with identical content return duplicate, while reuse with different content conflicts. Execution-context recall prioritizes parent, ancestor, same-request and related-lineage records and excludes descendants. The initial lexical search and deterministic character chunking are deliberately limited; they do not claim semantic-search parity.
 
 The initial REST operations are `/api/v1/memory/health`, `/ready`, `/read`, `/write`, `/append`, `/append-once`, `/entries`, `/retrieve`, `/list`, `/search`, and `/chunk`. Semantic/hybrid search, embedding-backed index warm-up, Markdown ingest/reconciliation, knowledge status, and complete event-ledger compatibility remain open parity work. Tests cover REST behavior, append-once idempotency/conflict handling, context recall, validation, and chunking; the CI run for the initial Memory API/test commit passed.
+
+
+## Initial standalone Thompson implementation
+
+The POC Thompson router is a distinct capability from the GA Thompson evaluator. Ensemble exposes it through the existing listener at `/api/v1/thompson`: health/readiness, ping, model selection, outcome recording, state inspection and model reset. The POC action-style POST contract is retained as a compatibility endpoint while explicit REST routes are also available. Selection samples Beta(successes + 1, failures + 1) for each model, filters by observed average cost while allowing untested models, and falls back to the cheapest model if all tested models exceed the cost limit. Empty state falls back to `haiku`.
+
+SQLite migration `0008_thompson` persists per-model successes, failures, cost, tokens, calls and last-update time. Outcome increments are atomic. The browser Control Center can inspect statistics, request a model selection, and reset a model after confirmation. The POC's `task_type` and `required_capability` inputs are retained but not used by its current selection algorithm; no capability matrix filtering is claimed. A dedicated Thompson client/circuit-breaker library and integration with Learning outcome recording remain outstanding.
