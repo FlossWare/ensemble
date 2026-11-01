@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -75,7 +76,7 @@ class SqliteMemoryStore:
     """SQLite-backed episodic memory and append-only event ledger."""
 
     def __init__(self, database_url: str | None = None):
-        url_text = database_url or "sqlite+aiosqlite:///./.ensemble/ensemble.db"
+        url_text = database_url or os.getenv("ENSEMBLE_DATABASE_URL", "sqlite+aiosqlite:///./.ensemble/ensemble.db")
         url = make_url(url_text)
         if url.get_backend_name() != "sqlite":
             raise ValueError("Ensemble memory supports SQLite persistence only")
@@ -127,6 +128,10 @@ class SqliteMemoryStore:
         if event_id is not None:
             if not isinstance(event_id, str) or not event_id.strip() or len(event_id) > 256:
                 raise ValueError("event_id must be a non-empty string of at most 256 characters")
+            if "event_id" in record and record["event_id"] != event_id:
+                raise ValueError("entry.event_id must match event_id")
+            if {"payload_sha256", "captured_at"}.intersection(record):
+                raise ValueError("entry contains reserved Memory metadata fields")
             if "event_id" in record and record["event_id"] != event_id:
                 raise ValueError("entry.event_id must match event_id")
             if {"payload_sha256", "captured_at"}.intersection(record):
@@ -234,6 +239,8 @@ class SqliteMemoryStore:
                 relation, rank = "parent", 100
             elif prior_lineage and len(prior_lineage) < len(lineage) and list(lineage[:len(prior_lineage)]) == list(prior_lineage) and prior_id == prior_lineage[-1]:
                 relation, rank = "ancestor", 90
+            elif prior_lineage and len(prior_lineage) > len(lineage) and list(prior_lineage[:len(lineage)]) == list(lineage) and prior_id == prior_lineage[-1]:
+                continue
             elif prior_lineage and lineage and prior_lineage[0] == lineage[0]:
                 relation, rank = "related-lineage", 60
             else:
