@@ -63,7 +63,7 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/ingest/transcripts | Parse caller-supplied JSONL transcript slices and return a UTF-8 byte checkpoint |
 | GET | /api/v1/chunking/health, /ready, /profiles | Chunking capability status and versioned profiles |
 | POST | /api/v1/chunking/chunk | Generate deterministic chunks with offsets and provenance |
-| POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |
+| POST | /api/v1/search | Default retrieval using lexical and configured vector channels |
 | GET | /api/v1/search/lexical/health, /api/v1/search/lexical/ready | Lexical retrieval capability status |
 | POST | /api/v1/search/lexical | Explicit lexical-only retrieval strategy |
 | POST | /api/v1/lexical/documents | Existing lexical ingestion convenience; placement remains under audit |
