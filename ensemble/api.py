@@ -1287,11 +1287,11 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail="scrape ingestion failed") from exc
 
-    @app.get("/api/v1/search/lexical/health", tags=["lexical"])
+    @app.get("/api/v1/search/lexical/health", tags=["search"])
     async def lexical_health():
         return {"ok": True, "service": "lexical", "backend": "document-store"}
 
-    @app.get("/api/v1/search/lexical/ready", tags=["lexical"])
+    @app.get("/api/v1/search/lexical/ready", tags=["search"])
     async def lexical_ready():
         try:
             await document_store.check_ready()
@@ -1299,7 +1299,7 @@ def create_app(
             raise HTTPException(status_code=503, detail="lexical document store unavailable") from exc
         return {"ok": True, "ready": True}
 
-    @app.post("/api/v1/lexical/documents", status_code=201, tags=["lexical"])
+    @app.post("/api/v1/lexical/documents", status_code=201, tags=["search"])
     async def lexical_ingest_document(payload: dict[str, Any], request: Request, response: Response):
         # The POC contract accepts a session plus messages. The document form is
         # retained as a convenience for callers that already have a document.
@@ -1316,7 +1316,7 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail="lexical document ingestion failed") from exc
 
-    @app.post("/api/v1/search/lexical", tags=["lexical"])
+    @app.post("/api/v1/search/lexical", tags=["search"])
     async def lexical_search(request: SearchIn):
         try:
             results = await search.lexical_search(request.query, request.limit)
