@@ -74,10 +74,12 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/memory/events | Capture an idempotent prompt event in the Memory event ledger |
 | GET | /api/v1/tokenization/health, /ready, /profiles | Tokenization capability status and analyzer profiles |
 | POST | /api/v1/tokenization/tokenize | Versioned deterministic text analysis |
-| GET | /api/v1/extraction/health, /ready | Extraction capability status |
-| POST | /api/v1/extraction/extract | Exact identifiers and uncertain entity candidates |
-| GET | /api/v1/intent/health, /ready | Intent capability status and labels |
-| POST | /api/v1/intent/classify | Evidence-backed intent classification |
+| GET | /api/v1/entities/health, /ready | Entity extraction and Graph-backed identity resolution status |
+| POST | /api/v1/entities/extract | Extract typed entity candidates with normalized values, confidence, source offsets, and provenance |
+| POST | /api/v1/entities/resolve | Resolve candidates to stable canonical Graph identities; report ambiguous matches |
+| POST | /api/v1/entities/link | Create an idempotent typed relationship between two canonical entity identities |
+| GET | /api/v1/intent/health, /ready | Intent capability status and supported labels |
+| POST | /api/v1/intent/classify | Multi-intent classification with evidence, confidence, constraints, and required capabilities |
 | GET | /api/v1/knowledge/health, /ready | Knowledge capability status and Index dependency readiness |
 | POST | /api/v1/knowledge/records | Publish a sourced record only after Index accepts or confirms its revision |
 | GET | /api/v1/knowledge/records/{source_id} | Read the current sourced record and provenance |
@@ -193,3 +195,16 @@ All source types converge on the same document, chunking, embedding, indexing an
 The JSONL endpoint does not open a caller-supplied server filesystem path. The caller reads the file and submits content plus its current byte offset; the response returns next_offset. Persisting and coordinating checkpoints across clients remains a separate durable-job concern.
 
 Planned source adapters include DOCX, HTML/URL crawl jobs, source-code repositories, email exports, and structured JSON/CSV. OCR, JavaScript-rendered web pages, authenticated sites, broad crawling, and scheduled refresh are not claimed by the current implementation.
+
+
+## Intent and entity contracts
+
+Intent classification is deterministic and explainable. The response retains the primary `label`, `confidence`, `evidence`, and per-label `scores` fields while adding an ordered `intents` collection, extracted `constraints`, `required_capabilities`, and a `classification` method marker. A caller may use the primary label for simple routing or inspect multiple intents and evidence when a request has more than one purpose. Rule-based confidence is a heuristic, not a calibrated probability.
+
+Entity extraction is stateless. Each candidate includes a type, original text, normalized value, stable candidate identifier, character offsets, exact/uncertain marker, confidence, and source provenance when supplied. Candidate identifiers are not canonical entity identities.
+
+Entity resolution uses the Graph capability as its durable identity store. Exact normalized matches resolve to existing canonical entity nodes; otherwise a deterministic canonical node is created. Ambiguous duplicate matches are returned as ambiguous and are not silently selected. The initial resolver performs deterministic exact normalization, not fuzzy or model-based entity resolution.
+
+Entity linking accepts two canonical entity node IDs and a typed relationship. Both endpoints must exist and be entity nodes. Graph remains responsible for durable relationships and traversal. Extraction does not write to Graph, and resolution does not create relationships.
+
+Hybrid Search includes the richer intent result and extracted entity candidates in its response. It does not automatically resolve or persist query entities; callers explicitly invoke resolution when durable identity is required.
