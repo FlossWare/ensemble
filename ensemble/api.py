@@ -198,7 +198,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "memory", "ga", "thompson", "learning"],
+            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "memory", "ga", "thompson", "learning"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
