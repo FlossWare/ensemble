@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from ensemble.api import create_app
 from ensemble.store import InMemoryDocumentStore
 from ensemble.graph_memory import InMemoryGraphStore
+from ensemble.index_memory import InMemoryIndexStore
 from ensemble.vector_memory import InMemoryVectorStore
 from ensemble.memory_store import InMemoryMemoryStore
 
@@ -353,6 +354,47 @@ def test_index_tombstone_prunes_vectors_from_every_collection():
         assert retry.json()["decision"] == "tombstoned"
         collections = {item["name"]: item["count"] for item in asyncio.run(vector_store.list_collections())}
         assert collections == {"knowledge_chunks": 0, "transcript_text": 0}
+
+
+def test_hybrid_knowledge_search_excludes_stale_and_tombstoned_vectors():
+    index_store = InMemoryIndexStore()
+    asyncio.run(index_store.record_revision("active-source", 2, "rev-2", {"chunk": "window-v1"}))
+    asyncio.run(index_store.record_revision("stale-source", 2, "rev-2", {"chunk": "window-v1"}))
+    asyncio.run(index_store.record_tombstone("deleted-source", 2))
+
+    vector_store = InMemoryVectorStore()
+    records = []
+    for record_id, source_id, revision in (
+        ("a-active", "active-source", 2),
+        ("b-stale", "stale-source", 1),
+        ("c-deleted", "deleted-source", 1),
+    ):
+        records.append({
+            "id": record_id,
+            "embedding": [1.0, 0.0, 0.0],
+            "document": f"content for {source_id}",
+            "metadata": {
+                "source_id": source_id,
+                "url": source_id,
+                "revision": revision,
+                "content_sha256": "a" * 64,
+            },
+        })
+    asyncio.run(vector_store.upsert("knowledge_chunks", "test-embedding", 3, records))
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        embedding_provider=_FixedEmbeddingProvider(),
+        vector_store=vector_store,
+        index_store=index_store,
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/search/hybrid/knowledge", json={
+            "query": "content", "limit": 10,
+        })
+        assert response.status_code == 200
+        results = response.json()["results"]
+        assert [item["metadata"]["source_id"] for item in results] == ["active-source"]
 
 
 def test_index_manifest_persists_across_restart(tmp_path):
