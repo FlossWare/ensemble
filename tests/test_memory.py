@@ -195,3 +195,47 @@ def test_memory_knowledge_ingest_rejects_bad_digest_and_scope_escape():
         )
         assert bad_digest.status_code == 400
         assert escaped.status_code == 400
+
+
+
+def test_memory_knowledge_ingest_rejects_dotdot_path_traversal():
+    import hashlib
+
+    from ensemble.memory_store import _validate_ingest
+
+    content = "path validation"
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    try:
+        _validate_ingest(
+            "/workspace/../outside/secret.md",
+            content,
+            digest,
+            {"scope": "/workspace"},
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("path traversal must be rejected")
+
+
+def test_memory_knowledge_ingest_rejects_symlink_escape(tmp_path):
+    import hashlib
+
+    from ensemble.memory_store import _validate_ingest
+
+    scope = tmp_path / "scope"
+    outside = tmp_path / "outside"
+    scope.mkdir()
+    outside.mkdir()
+    target = outside / "secret.md"
+    target.write_text("outside", encoding="utf-8")
+    link = scope / "linked.md"
+    link.symlink_to(target)
+    content = "caller supplied content"
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    try:
+        _validate_ingest(str(link), content, digest, {"scope": str(scope)})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("symlink escape must be rejected")
