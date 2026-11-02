@@ -1258,7 +1258,7 @@ def create_app(
     @app.post("/api/v1/lexical/documents", response_model=DocumentOut, status_code=201, tags=["lexical"])
     async def lexical_ingest_document(request: DocumentIn):
         try:
-            return await documents.ingest(request)
+            return await documents.ingest(request, embed=False)
         except ChunkingError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
         except ValueError as exc:
