@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ensemble Control Center</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#20242b;background:#f5f7fa}body{max-width:1200px;margin:2rem auto;padding:0 1rem}
+h1{margin-bottom:.2rem}section{background:white;border:1px solid #d8dee8;border-radius:10px;padding:1rem;margin:1rem 0}
+button,input{font:inherit;padding:.45rem .65rem;margin:.25rem;border:1px solid #aab4c2;border-radius:6px}
+button{cursor:pointer;background:#f3f6fa}button:disabled{opacity:.5;cursor:wait}
+input[type=text],input[type=url]{min-width:18rem;max-width:100%}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f7fa;padding:.75rem;border-radius:6px;max-height:28rem;overflow:auto}
+table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;padding:.45rem;border-bottom:1px solid #e1e5eb;vertical-align:top}
+.status-ok{color:#176b39}.status-error{color:#a32222}.muted{color:#5d6877}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem}
+</style>
+</head>
+<body>
+<h1>Ensemble Control Center</h1>
+<p><a href="/docs">REST API</a></p>
+<section><h2>Platform status</h2><button id="refresh-health" type="button">Refresh readiness</button><pre id="health-result">Not checked.</pre></section>
+<section id="capability-explorer">
+<h2>Capability Explorer</h2>
+<p class="muted">Live health checks for the single Ensemble process and its capability endpoint groups.</p>
+<div class="toolbar"><button id="refresh-capabilities" type="button">Refresh all capabilities</button><span id="capability-summary">Not checked.</span></div>
+<table><thead><tr><th>Capability</th><th>Health</th><th>Readiness</th><th>Details</th></tr></thead><tbody id="capability-rows"></tbody></table>
+</section>
+<section id="retrieval-explorer">
+<h2>Retrieval Explorer</h2>
+<p>Run the actual Hybrid endpoint and inspect result provenance, scores and degraded dependencies.</p>
+<form id="retrieval-form"><input id="retrieval-query" type="text" required maxlength="2000" placeholder="Search documents and knowledge"><input id="retrieval-limit" type="number" min="1" max="100" value="10"><label><input id="retrieval-rerank" type="checkbox"> Rerank candidates</label><button type="submit">Search</button></form>
+<pre id="retrieval-results">No query run.</pre>
+</section>
+<section id="session-ingest">
+<h2>Transcript Session Ingestion</h2>
+<p>Paste a structured session export. Ensemble stores message documents, append-once events and Graph relationships; it does not read arbitrary local transcript paths.</p>
+<textarea id="session-payload" rows="10" style="width:100%" placeholder='{"session":{"session_id":"session-1","project":"project","file":"/logical/path/session.jsonl"},"messages":[{"uuid":"message-1","role":"user","kind":"text","text":"Example transcript message"}]}'></textarea>
+<div class="toolbar"><button id="session-ingest-button" type="button">Ingest session</button><span id="session-ingest-status">No session submitted.</span></div>
+<pre id="session-ingest-result"></pre>
+</section>
+<section id="index-inspector">
+<h2>Index and Vector Inspection</h2>
+<div class="toolbar"><button id="refresh-index" type="button">Refresh source manifest</button><button id="refresh-vectors" type="button">Refresh vector collections</button></div>
+<pre id="index-results">Not loaded.</pre><pre id="vector-results">Not loaded.</pre>
+<form id="source-lookup-form"><input id="source-id" type="text" required maxlength="512" placeholder="Source identifier"><button type="submit">Inspect source</button></form>
+<pre id="source-result">No source selected.</pre>
+<form id="source-tombstone-form"><input id="tombstone-source-id" type="text" required maxlength="512" placeholder="Source identifier to tombstone"><input id="tombstone-sequence" type="number" min="1" required placeholder="Revision sequence"><button type="submit">Tombstone source</button></form>
+<p class="muted">Tombstones are permanent source-index decisions. Confirm carefully before submitting.</p><pre id="tombstone-result">No tombstone requested.</pre>
+</section>
+<section id="memory-inspector">
+<h2>Memory and Knowledge Inspection</h2>
+<div class="toolbar"><button id="refresh-memories" type="button">Refresh memory names</button><button id="refresh-memory-knowledge" type="button">Refresh Knowledge status</button></div>
+<pre id="memory-names">Not loaded.</pre><pre id="memory-knowledge">Not loaded.</pre>
+<form id="memory-search-form"><input id="memory-query" type="text" required maxlength="2000" placeholder="Search episodic Memory"><button type="submit">Search Memory</button></form>
+<pre id="memory-results">No query run.</pre>
+</section>
+<section id="entity-workbench">
+<h2>Entity Workbench</h2>
+<p>Extract candidates without persistence, explicitly resolve them to canonical Graph identities, and create typed relationships between resolved entities.</p>
+<textarea id="entity-text" rows="5" style="width:100%" maxlength="200000" placeholder="Text containing names, identifiers, paths, URLs, or other entity candidates"></textarea>
+<div class="toolbar"><button id="entity-extract" type="button">Extract candidates</button><button id="entity-resolve" type="button" disabled>Resolve candidates to Graph</button></div>
+<pre id="entity-results">No entity extraction run.</pre>
+<h3>Link canonical entities</h3>
+<form id="entity-link-form">
+<label>Source entity ID <input id="entity-source-id" type="text" required maxlength="256"></label>
+<label>Target entity ID <input id="entity-target-id" type="text" required maxlength="256"></label>
+<label>Relationship <input id="entity-relationship" type="text" required maxlength="128" value="related_to"></label>
+<button type="submit">Create Graph relationship</button>
+</form>
+<pre id="entity-link-result">No relationship submitted.</pre>
+</section>
+<section id="graph-workbench">
+<h2>Graph Workbench</h2>
+<p>Read-only node lookup, property-filtered queries, and bounded traversal. This view does not create or modify graph data.</p>
+<form id="graph-query-form"><label>Node type <input id="graph-node-type" type="text" maxlength="128" placeholder="session, file, etc."></label><label>Properties (JSON) <input id="graph-node-properties" type="text" value="{}" maxlength="2000"></label><button type="submit">Query nodes</button></form>
+<form id="graph-node-form"><label>Node ID <input id="graph-node-id" type="text" required maxlength="512"></label><button type="submit">Inspect node</button></form>
+<form id="graph-traverse-form"><label>Start node ID <input id="graph-start-id" type="text" required maxlength="512"></label><label>Direction <select id="graph-direction"><option value="out">Outgoing</option><option value="in">Incoming</option><option value="both">Both</option></select></label><label>Max depth <input id="graph-depth" type="number" min="1" max="3" value="1"></label><label>Edge type <input id="graph-edge-type" type="text" maxlength="128" placeholder="Optional"></label><button type="submit">Traverse</button></form>
+<pre id="graph-results">No graph query run.</pre>
+</section>
+<section id="chunking-workbench">
+<h2>Chunking Workbench</h2>
+<p>Inspect available profiles and preview chunk boundaries. Preview does not persist chunks.</p>
+<div class="toolbar"><button id="chunking-refresh" type="button">Load profiles</button><select id="chunking-profile"></select></div>
+<textarea id="chunking-text" rows="6" style="width:100%" maxlength="200000" placeholder="Text to chunk"></textarea>
+<button id="chunking-preview" type="button">Preview chunks</button>
+<pre id="chunking-results">No chunk preview run.</pre>
+</section>
+<section id="tokenization-workbench">
+<h2>Tokenization Workbench</h2>
+<p>Inspect analyzer profiles and token boundaries. This is a non-persistent diagnostic operation.</p>
+<div class="toolbar"><button id="tokenization-refresh" type="button">Load profiles</button><select id="tokenization-profile"></select></div>
+<textarea id="tokenization-text" rows="4" style="width:100%" maxlength="200000" placeholder="Text to tokenize"></textarea>
+<button id="tokenization-preview" type="button">Tokenize</button>
+<pre id="tokenization-results">No tokenization run.</pre>
+</section>
+<section id="knowledge-workbench">
+<h2>Knowledge Record Inspector</h2>
+<p>Read a record by source identifier, including revision and provenance metadata when exposed by the store.</p>
+<form id="knowledge-lookup-form"><input id="knowledge-source-id" type="text" required maxlength="512" placeholder="Knowledge source identifier"><button type="submit">Inspect record</button></form>
+<pre id="knowledge-results">No Knowledge record selected.</pre>
+</section>
+<section id="pipeline-inspector">
+<h2>Pipeline Inspector · Diagnostic Preview</h2>
+<p>This runs current capability operations against supplied text. It is not a replay or trace of a persisted ingestion or retrieval request, and it does not write data.</p>
+<textarea id="pipeline-text" rows="7" style="width:100%" maxlength="200000" placeholder="Paste text to inspect across processing stages"></textarea>
+<button id="pipeline-run" type="button">Run diagnostic pipeline</button>
+<pre id="pipeline-results">No diagnostic pipeline run.</pre>
+</section>
+<h2>URI ingestion</h2>
+<form id="scrape-form">
+<label for="uri">Public page URI</label>
+<input id="uri" type="url" required placeholder="https://example.org/docs">
+<button type="submit">Preview page</button>
+</form>
+<p id="status">Preview first. Ingestion is a separate explicit action.</p>
+<section id="preview" hidden>
+<h2 id="title"></h2><p id="metadata"></p><pre id="body"></pre><h3>Discovered links (not crawled)</h3><div id="links"></div>
+<button id="ingest" type="button">Ingest this page</button>
+</section>
+<section id="ga-panel">
+<h2>Genetic Algorithm tuning</h2>
+<p>Runs five synthetic local evaluators. Fitness is experimental evidence, not production validation. Candidate approval records an export candidate and does not change live settings.</p>
+<form id="ga-form">
+<label for="ga-population">Population size (15-200)</label>
+<input id="ga-population" type="number" min="15" max="200" step="5" value="50" required>
+<label for="ga-generations">Generations (1-50)</label>
+<input id="ga-generations" type="number" min="1" max="50" value="25" required>
+<label for="ga-seed">Seed (optional, for reproducibility)</label>
+<input id="ga-seed" type="number" min="0" max="4294967295" placeholder="Generate a seed">
+<button id="ga-start" type="submit">Start GA run</button>
+<button id="ga-refresh" type="button">Refresh runs</button>
+</form>
+<p id="ga-status">No run selected.</p>
+<div id="ga-runs"></div>
+<div id="ga-detail" hidden>
+<h3>Run details</h3>
+<pre id="ga-result"></pre>
+<label for="ga-approved-by">Approved by</label>
+<input id="ga-approved-by" type="text" maxlength="256" placeholder="Local operator">
+<label for="ga-reason">Approval reason</label>
+<input id="ga-reason" type="text" maxlength="2048" placeholder="Why this candidate is approved for export">
+<div id="ga-candidates"></div>
+<p>Approval is recorded for export only. Ensemble does not apply candidate parameters to live consumers.</p>
+</div>
+</section>
+<section id="thompson-panel">
+<h2>Thompson Router</h2>
+<p>Model-level Beta posteriors and cost-aware selection. Task-specific capability filtering is not implemented in the POC contract yet.</p>
+<form id="thompson-select-form">
+<label for="thompson-task">Task type</label>
+<input id="thompson-task" type="text" value="unknown">
+<label for="thompson-max-cost">Maximum cost per call (optional)</label>
+<input id="thompson-max-cost" type="number" min="0" step="any" placeholder="No limit">
+<button type="submit">Select model</button>
+</form>
+<p id="thompson-selection">No selection requested.</p>
+<button id="thompson-refresh" type="button">Refresh model statistics</button>
+<div id="thompson-state"></div>
+</section>
+<section id="runtime-config">
+<h2>Runtime Configuration</h2>
+<p>The listener and persistence root are selected at process start. Change the host environment file or command-line options, then restart Ensemble to apply changes.</p>
+<pre id="runtime-config-values">Loading runtime configuration...</pre>
+</section>
+<section id="learning-panel">
+<h2>Learning</h2>
+<p>Inspect task outcomes and portable artifacts. Reset clears Learning outcomes only; Thompson model statistics are preserved.</p>
+<button id="learning-refresh" type="button">Refresh Learning state</button>
+<button id="learning-reset" type="button">Reset Learning outcomes</button>
+<p id="learning-status">Not loaded.</p>
+<h3>Thirty-day report</h3>
+<pre id="learning-report"></pre>
+<h3>Recent outcomes</h3>
+<div id="learning-outcomes"></div>
+<h3>Portable artifacts</h3>
+<div id="learning-artifacts"></div>
+</section>
+<script src="/control.js"></script>
+</body></html>

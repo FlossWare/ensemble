@@ -1,0 +1,69 @@
+from pathlib import Path
+
+import pytest
+
+from ensemble.config import DEFAULT_HOST, DEFAULT_PORT, resolve_database_url, settings_from_env
+
+
+def test_default_settings_use_configurable_persistence_root(tmp_path, monkeypatch):
+    root = tmp_path / "ensemble-data"
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(root))
+    monkeypatch.delenv("ENSEMBLE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("ENSEMBLE_HOST", raising=False)
+    monkeypatch.delenv("ENSEMBLE_PORT", raising=False)
+
+    settings = settings_from_env()
+
+    assert settings.host == DEFAULT_HOST
+    assert settings.port == DEFAULT_PORT
+    assert settings.persistence_root == root.resolve()
+    assert Path(settings.persistence_root / "ensemble.db").parent.is_dir()
+    assert settings.database_url.endswith("/ensemble-data/ensemble.db")
+
+
+def test_host_and_port_are_configurable_and_validated(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
+    monkeypatch.setenv("ENSEMBLE_HOST", "0.0.0.0")
+    monkeypatch.setenv("ENSEMBLE_PORT", "9123")
+    settings = settings_from_env()
+    assert settings.host == "0.0.0.0"
+    assert settings.port == 9123
+
+    monkeypatch.setenv("ENSEMBLE_PORT", "70000")
+    with pytest.raises(ValueError, match="ENSEMBLE_PORT"):
+        settings_from_env()
+
+
+def test_database_url_override_must_remain_sqlite(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
+    monkeypatch.delenv("ENSEMBLE_DATABASE_URL", raising=False)
+    with pytest.raises(ValueError, match="SQLite"):
+        resolve_database_url("postgresql+asyncpg://localhost/ensemble")
+
+
+def test_explicit_database_url_override_is_used(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    db = tmp_path / "custom" / "ensemble.sqlite"
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(root))
+    monkeypatch.delenv("ENSEMBLE_DATABASE_URL", raising=False)
+    url = f"sqlite+aiosqlite:///{db}"
+    settings = settings_from_env(url)
+    assert settings.database_url == url
+    assert db.parent.is_dir()
+    assert settings.persistence_root == root.resolve()
+
+def test_system_config_endpoint_reports_effective_listener_and_root(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from ensemble.api import create_app
+    from ensemble.store import InMemoryDocumentStore
+
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path / "persist"))
+    monkeypatch.setenv("ENSEMBLE_HOST", "127.0.0.1")
+    monkeypatch.setenv("ENSEMBLE_PORT", "9123")
+    with TestClient(create_app(store=InMemoryDocumentStore())) as http:
+        result = http.get("/api/v1/system/config")
+    assert result.status_code == 200
+    assert result.json()["host"] == "127.0.0.1"
+    assert result.json()["port"] == 9123
+    assert result.json()["persistence_root"] == str((tmp_path / "persist").resolve())

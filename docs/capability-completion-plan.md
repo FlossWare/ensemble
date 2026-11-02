@@ -1,0 +1,145 @@
+# Ensemble Capability Completion Plan
+
+## Objective
+
+Complete the intended Ensemble platform as a standalone, client-independent REST service. This plan is functionality-first. The historical POC and Claude Ensemble repositories are reference material for discovering useful behavior and requirements; reproducing their internal designs, test counts, or test suites is not a goal.
+
+## Working rules
+
+- Implement the capability Ensemble needs, using its own contracts and architecture.
+- Keep one application and one REST server unless a demonstrated operational requirement justifies a separate process.
+- REST is canonical. MCP and coding-agent integrations remain adapters outside core Ensemble.
+- SQLite remains Ensemble's only persistence implementation.
+- Preserve existing working behavior and migrations.
+- During this phase, prioritize implementation and end-to-end workflows over expanding the test suite.
+- Continue running the existing tests when practical. Fix regressions introduced by implementation; do not knowingly leave the repository broken.
+- Do not create tests merely to mirror POC tests. Defer systematic test expansion until the capability set is substantially complete.
+- Update implementation status and this plan as capabilities become usable, not merely when routes or stubs exist.
+
+## Priority 0: make the core platform complete end to end
+
+### 1. Complete hybrid retrieval
+
+- Retrieve independently from Knowledge and transcript/document sources.
+- Preserve source identity, revision, scope, and provenance through candidate fusion and reranking.
+- Define deterministic fusion, deduplication, and stable tie-breaking.
+- Make partial-success and degraded-dependency behavior explicit.
+- Ensure a failed or partial retrieval is never represented as a successful empty result.
+- Add bounded retrieval deadlines and cancellation behavior.
+- Ensure retrieval scope is enforced consistently across all channels.
+
+### 2. Complete transcript ingestion lifecycle
+
+- Turn the existing incremental JSONL parser into a durable ingestion workflow.
+- Persist source identity, revision, byte checkpoint, operation state, and failure details.
+- Make retries idempotent and prevent acknowledgement before durable indexing succeeds.
+- Resume safely after process restart.
+- Handle changed source revisions, truncation, malformed records, and incomplete trailing records.
+- Keep filesystem access caller-authorized and scope-restricted; do not allow arbitrary server-side paths.
+
+### 3. Complete source and document lifecycle correctness
+
+- Define canonical source identity and revision semantics across documents, files, URLs, and transcripts.
+- Ensure stale updates cannot replace newer active content.
+- Ensure tombstones cannot be undone by delayed or retried upserts.
+- Make freshness verification explicit before returning retrieval results.
+- Preserve provenance and source metadata through chunking, indexing, Knowledge publication, and retrieval.
+- Make all lifecycle operations safe across restart and retry.
+
+### 4. Complete Memory as a usable shared capability
+
+- Finish scoped source import/reconciliation with explicit authorization and safe path handling.
+- Complete execution-context-aware recall and useful retrieval ranking.
+- Provide bounded context assembly with provenance, token budgeting, and deterministic ordering.
+- Define conflict, append-once, expiry, and deletion semantics.
+- Ensure Memory readiness reflects usable persisted state and recovery, not just process liveness.
+
+## Priority 1: operationally safe and useful platform behavior
+
+### 5. Index generation rebuild and cutover
+
+Implement durable index rebuilds that can safely coexist with writes:
+
+- Create a new index generation.
+- Reconcile Memory and Knowledge independently.
+- Establish durable sealed checkpoints.
+- Acquire and register write fences with the owning capabilities.
+- Verify all acknowledged changes are represented.
+- Atomically switch the active generation.
+- Release fences and persist completion.
+- Recover safely from crashes, lost responses, expired fences, and uncertain cutover.
+
+Do not ship a rebuild operation that can silently lose acknowledged writes or resurrect deleted content.
+
+### 6. Context assembly and compression
+
+- Provide a client-independent context assembly contract.
+- Support bounded token budgets and configurable selection policies.
+- Preserve source attribution and provenance.
+- Support deterministic truncation and compression summaries.
+- Distinguish omitted, truncated, summarized, and fully included content.
+- Keep provider-specific prompt-cache optimization outside core correctness requirements.
+
+### 7. Runtime resilience
+
+- Define absolute request deadlines and cancellation propagation.
+- Bound retries and prevent retry amplification.
+- Avoid nested REST dispatch starvation within the single application.
+- Define explicit partial-result, empty-result, unavailable, and not-ready semantics.
+- Add durable operation tracking for long-running ingestion and rebuild jobs.
+- Provide recovery and reconciliation for interrupted operations.
+
+### 8. Vector and model capability completion
+
+- Decide when exact vector scans cease to be acceptable and implement an appropriate local index when justified.
+- Complete model identity, revision, dimensions, normalization, and provider readiness reporting.
+- Make embedding and reranking availability/degradation visible in capability health.
+- Keep hardware-specific acceleration optional and report backend selection accurately.
+
+### 9. Source adapters
+
+- Complete bounded website crawling with robots policy, DNS-to-connection binding, redirect and response limits, and durable refresh jobs.
+- Add OCR only with a deliberate provider/runtime decision.
+- Provide source connector contracts without coupling core ingestion to individual vendors.
+
+## Priority 2: usability and production readiness
+
+### 10. Finish Control Center
+
+- Complete diagnostics and operational visibility for all capabilities.
+- Add durable operation/job inspection and recovery controls.
+- Expose model/provider configuration safely.
+- Provide clear source lifecycle, freshness, and rebuild status.
+- Keep the Control Center a REST consumer; no direct database access or UI-only backend logic.
+
+### 11. Security and deployment
+
+- Define authentication and authorization boundaries.
+- Enforce scope/partition isolation across ingestion, Memory, Knowledge, Graph, Vector, and retrieval.
+- Add rate limits and resource bounds.
+- Complete installation, upgrade, backup, restore, and recovery workflows.
+- Add production observability and actionable diagnostics.
+
+## Deferred work
+
+- Systematic expansion of unit, integration, failure-injection, and coverage tests.
+- POC test-suite reproduction or test-count matching.
+- Provider prompt-cache optimization.
+- Client-specific hooks and prompt injection; these belong in client adapters such as `ensemble-claude`, not Ensemble core.
+- Separate processes or microservices for logical capabilities without demonstrated need.
+
+## Completion standard
+
+A capability is complete when it has a usable contract, a working implementation, durable behavior where state is involved, clear failure/degradation semantics, and is connected to the end-to-end workflows that depend on it. A route stub, UI panel, or isolated algorithm is not by itself a completed capability.
+
+Existing tests should continue to be run when practical. New test development is deliberately deprioritized during this functionality phase, but regressions and known failures must not be concealed.
+
+## Immediate implementation sequence
+
+1. Complete hybrid retrieval across Knowledge and transcript/document sources.
+2. Make transcript ingestion durable and restart-safe.
+3. Close source revision, freshness, and tombstone correctness gaps.
+4. Complete Memory context assembly and scoped reconciliation.
+5. Implement safe index-generation rebuild and cutover.
+6. Complete request deadlines, cancellation, and long-running operation recovery.
+7. Finish Control Center and production-readiness capabilities.
