@@ -145,12 +145,25 @@ A capability is complete when it has a usable contract, a working implementation
 
 Existing tests should continue to be run when practical. New test development is deliberately deprioritized during this functionality phase, but regressions and known failures must not be concealed.
 
-## Immediate implementation sequence
+## Current review-branch state
 
-1. Complete hybrid retrieval across Knowledge and transcript/document sources.
-2. Make transcript ingestion durable and restart-safe.
-3. Close source revision, freshness, and tombstone correctness gaps.
-4. Complete Memory context assembly and scoped reconciliation.
-5. Implement safe index-generation rebuild and cutover.
-6. Complete request deadlines, cancellation, and long-running operation recovery.
-7. Finish Control Center and production-readiness capabilities.
+The following work is implemented in the current review branch, with CI verification still required for the latest commit:
+
+- Knowledge publication is Index-gated and writes the shared document/chunk index, Knowledge provenance store, optional vector collection, and exact entity/source Graph links.
+- Supported document, file, PDF, URL, transcript, lexical, and Knowledge ingestion paths consult the Index revision authority before writing.
+- Hybrid Search combines the shared lexical/vector document candidates, enriches exact query entities from Graph-linked sources, retains source/revision/chunk provenance, and can rerank the combined candidate set.
+- Source tombstones deactivate current document chunks, tombstone Knowledge, and remove source vectors across collections. The Index tombstone remains authoritative and blocks later revisions.
+- Memory context assembly is exposed as a REST capability with deterministic ordering, approximate character-based token budgeting, extractive compression, and source metadata.
+- System configuration reports listener and durable-persistence status without exposing filesystem paths or database URLs.
+
+These are implemented slices, not a declaration that the platform is production-ready. In particular, transcript parsing still relies on caller-supplied byte slices; it does not yet own durable ingestion jobs or restart checkpoints.
+
+## Remaining implementation sequence
+
+1. Durable transcript ingestion jobs with persisted byte checkpoints, retries, revision handling, and restart recovery.
+2. Close remaining source lifecycle gaps: cleanup retry state, stale vector reconciliation, rebuild/reindex semantics, and failure recovery across Index, document, Knowledge, Graph, and Vector stores.
+3. Complete Memory scoped-source reconciliation, event lifecycle semantics, conflict/deletion policy, and retrieval quality.
+4. Add bounded deadlines/cancellation and durable operation tracking for long-running ingestion and rebuild operations.
+5. Finish Control Center usability and real execution diagnostics, while keeping all operations REST-backed.
+6. Complete operational readiness: backup/restore, migrations/upgrade, observability, rate limits, authentication/authorization, and partition enforcement.
+7. Verify the local embedding/reranking runtime matrix and decide when exact vector scans require a local ANN implementation.
