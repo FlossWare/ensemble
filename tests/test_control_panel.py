@@ -27,6 +27,7 @@ def test_control_panel_is_served_by_the_api():
         assert "Retrieval Explorer" in response.text
         assert "Index and Vector Inspection" in response.text
         assert "Memory and Knowledge Inspection" in response.text
+        assert "Tombstone source" in response.text
         script = client.get("/control.js")
         assert script.status_code == 200
         assert "/api/v1/ga/runs" in script.text
@@ -37,6 +38,7 @@ def test_control_panel_is_served_by_the_api():
         assert "/api/v1/index/manifest" in script.text
         assert "/api/v1/memory/search-hybrid" in script.text
         assert "refreshCapabilityTable" in script.text
+        assert "/api/v1/index/tombstones" in script.text
 
 
 def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch):
