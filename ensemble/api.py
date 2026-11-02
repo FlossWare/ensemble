@@ -1138,7 +1138,7 @@ def create_app(
     async def graph_health():
         return {"ok": True, "service": "graph", "backend": "sqlite"}
 
-    @app.post("/api/v1/graph/add-node", tags=["graph"])
+    @app.post("/api/v1/graph/nodes", tags=["graph"])
     async def graph_add_node(payload: dict[str, Any]):
         try:
             node = await active_graph_store.add_node(payload.get("type"), payload.get("properties", {}), payload.get("id"))
@@ -1146,7 +1146,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "node": node}
 
-    @app.post("/api/v1/graph/add-edge", tags=["graph"])
+    @app.post("/api/v1/graph/edges", tags=["graph"])
     async def graph_add_edge(payload: dict[str, Any]):
         try:
             edge = await active_graph_store.add_edge(payload.get("source"), payload.get("target"), payload.get("type"), payload.get("properties", {}), payload.get("id"))
@@ -1156,7 +1156,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "edge": edge}
 
-    @app.get("/api/v1/graph/node/{node_id}", tags=["graph"])
+    @app.get("/api/v1/graph/nodes/{node_id}", tags=["graph"])
     async def graph_get_node(node_id: str):
         node = await active_graph_store.get_node(node_id)
         if node is None:
