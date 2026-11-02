@@ -70,7 +70,8 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | GET | /api/v1/search/hybrid/health, /api/v1/search/hybrid/ready | Hybrid retrieval capability status |
 | POST | /api/v1/search/hybrid | Unified hybrid retrieval |
 | POST | /api/v1/search/hybrid/knowledge | Knowledge-scoped hybrid retrieval |
-| POST | /api/v1/ingest/sessions | Ingest a structured transcript session and its messages through Memory, Graph, and retrieval indexing |\n| POST | /api/v1/hybrid/prompts | Existing prompt capture route; placement under the Memory event model remains under audit |
+| POST | /api/v1/ingest/sessions | Ingest a structured transcript session and its messages through Memory, Graph, and retrieval indexing |
+| POST | /api/v1/hybrid/prompts | Existing prompt capture route; placement under the Memory event model remains under audit |
 | GET | /api/v1/tokenization/health, /ready, /profiles | Tokenization capability status and analyzer profiles |
 | POST | /api/v1/tokenization/tokenize | Versioned deterministic text analysis |
 | GET | /api/v1/extraction/health, /ready | Extraction capability status |
@@ -121,6 +122,16 @@ The POC parity inventory in docs/poc-parity.md defines the complete capability b
 | Memory | Durable memory/event operations, retrieval and operational status |
 
 A Control Center is also a required product surface. It is served by the same application and consumes these REST contracts; it does not create a second backend or duplicate capability logic.
+
+## Graph resource conventions
+
+- `POST /api/v1/graph/nodes` creates or resolves a node.
+- `GET /api/v1/graph/nodes/{node_id}` reads a node by stable identifier.
+- `POST /api/v1/graph/edges` creates or resolves an edge.
+- `POST /api/v1/graph/query` performs bounded typed node/edge queries.
+- `POST /api/v1/graph/traverse` performs bounded directional traversal.
+
+Node and edge mutations use resource names and HTTP methods. Query and traversal remain explicit domain operations because they describe graph computations rather than CRUD resources.
 
 ## 9. Search and reranking security
 
