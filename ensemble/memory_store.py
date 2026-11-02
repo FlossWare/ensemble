@@ -634,6 +634,7 @@ class InMemoryMemoryStore:
         if not isinstance(payload, dict) or not payload:
             raise ValueError("entry must be a non-empty JSON object")
         record = dict(payload)
+        _validate_expiry(record)
         digest = None
         if event_id is not None:
             if not isinstance(event_id, str) or not event_id.strip() or len(event_id) > 256:
