@@ -37,6 +37,8 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <pre id="index-results">Not loaded.</pre><pre id="vector-results">Not loaded.</pre>
 <form id="source-lookup-form"><input id="source-id" type="text" required maxlength="512" placeholder="Source identifier"><button type="submit">Inspect source</button></form>
 <pre id="source-result">No source selected.</pre>
+<form id="source-tombstone-form"><input id="tombstone-source-id" type="text" required maxlength="512" placeholder="Source identifier to tombstone"><input id="tombstone-sequence" type="number" min="1" required placeholder="Revision sequence"><button type="submit">Tombstone source</button></form>
+<p class="muted">Tombstones are permanent source-index decisions. Confirm carefully before submitting.</p><pre id="tombstone-result">No tombstone requested.</pre>
 </section>
 <section id="memory-inspector">
 <h2>Memory and Knowledge Inspection</h2>
