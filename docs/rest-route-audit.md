@@ -72,7 +72,7 @@ The previous Hybrid search routes were removed rather than aliased. Control Cent
 
 - Chunking: `GET /api/v1/chunking/health`, `/ready`, `/profiles`; `POST /api/v1/chunking/chunk`
 - Tokenization: `GET /api/v1/tokenization/health`, `/ready`, `/profiles`; `POST /api/v1/tokenization/tokenize`
-- Extraction: `GET /api/v1/extraction/health`, `/ready`; `POST /api/v1/extraction/extract`
+- Entities: `GET /api/v1/entities/health`, `/ready`; `POST /api/v1/entities/extract`, `/resolve`, `/link`
 - Intent: `GET /api/v1/intent/health`, `/ready`; `POST /api/v1/intent/classify`
 - Ranking: `GET /api/v1/ranking/health`, `/ready`; `POST /api/v1/ranking/rank`
 - Reranking: `GET /api/v1/reranking/health`, `/ready`; `POST /api/v1/reranking/rerank`
@@ -127,7 +127,7 @@ Prompt capture now uses `POST /api/v1/memory/events`. Structured session ingesti
 | Knowledge / Index | Records, sources, revisions, tombstones | Mostly resource-oriented; tombstone is represented differently in the two groups | Decide one consistent tombstone lifecycle and preserve its revision semantics |
 | Learning / Thompson | Outcomes and runs are resources; reset/select/report/ping/root POST are mixed | Some operations are resources, others are action verbs or duplicate status calls | Keep meaningful domain actions; remove redundant ping if health/readiness fully covers it; clarify root POST operations |
 | GA | Runs and optimizers are resources; promote is an action | Mostly coherent | Keep promotion as an explicit domain action unless promotion records become first-class resources |
-| Processing capabilities | `chunk`, `tokenize`, `extract`, `classify`, `rank`, `rerank`, `embed` | These are computational operations, not durable CRUD resources | Explicit operation names are acceptable; keep capability roots and status suffixes consistent |
+| Processing capabilities | `chunk`, `tokenize`, `classify`, `rank`, `rerank`, `embed`; entity operations under `/entities` | Computational operations remain explicit; durable canonical entity identity and relationships belong to Graph | Keep extraction stateless, resolution identity-oriented, and linking graph-backed |
 | Configuration | `GET /api/v1/system/config` | Current implementation returns persistence root and database URL, exposing implementation details contrary to the contract principles | Reduce to caller-relevant, non-sensitive runtime configuration; keep storage internals private |
 
 ## 5. Search contract semantics
@@ -161,3 +161,13 @@ For each route family:
 - do not expand the test suite merely to increase test count while functionality-first work is in progress.
 
 This is an audit, not authorization to mechanically rename every action endpoint. A route changes only when the caller-facing resource model and operation semantics are clear.
+
+
+## 8. Intent and entity capability decisions
+
+- Intent classification is a standalone capability, not Search-owned logic. It returns a primary intent plus additional detected intents, evidence spans, heuristic confidence, constraints, and required capability hints.
+- Entity extraction is stateless and returns typed candidates with normalized values, offsets, confidence, and provenance.
+- Entity resolution is separate from extraction. It uses deterministic normalized identity matching and Graph-backed canonical entity nodes; ambiguous matches are surfaced, never guessed.
+- Entity linking is separate from resolution. It creates typed Graph edges only between canonical entity nodes.
+- Hybrid Search may consume intent and extraction, but it does not silently persist query entities or create graph relationships.
+- Model-backed classifiers, fuzzy resolution, ontology management, and learned entity extraction remain future enhancements behind these contracts. They are not represented as implemented.
