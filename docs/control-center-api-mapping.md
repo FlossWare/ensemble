@@ -45,7 +45,21 @@ The following endpoint groups were found in `ensemble/api.py` at the time of thi
 | Learning | `/api/v1/learning/*` health/readiness/outcomes/report/artifacts/reset and outcome workflow | Report/outcomes/artifacts/reset |
 | Scraping | `POST /api/v1/scrape/preview`, `POST /api/v1/scrape/ingest` | Preview/ingest |
 
-## 3. Priority gaps against accepted requirements
+## 3. Implemented in the current parity branch
+
+The Control Center now includes initial read-only workbenches backed by existing REST contracts:
+
+- **Graph:** property-filtered node queries, node lookup, and bounded traversal.
+- **Chunking:** profile inventory and non-persistent chunk previews.
+- **Tokenization:** analyzer profile inventory and token previews.
+- **Knowledge:** record lookup by source identifier.
+- **Pipeline Inspector (diagnostic preview):** sequentially invokes current Tokenization, Extraction, Intent, and Chunking operations and reports each stage's result or failure.
+
+The diagnostic pipeline is deliberately labeled as an interactive preview. It does not mutate persistence and does not claim to be a trace of a real ingestion or retrieval execution. It currently does not include embedding, vector writes, lexical writes, fusion, or reranking.
+
+These additions are UI integration only; they do not establish POC parity for the underlying capability implementations. Browser behavior and API contract tests still need to be run.
+
+## 4. Priority gaps against accepted requirements
 
 ### P0: Build a truthful read-only foundation
 
@@ -74,7 +88,7 @@ The following endpoint groups were found in `ensemble/api.py` at the time of thi
 - Add safe database/migration diagnostics without exposing private schema details or secrets.
 - Add controlled maintenance operations only after scope, impact, confirmation, and audit semantics are defined.
 
-## 4. Pipeline Inspector contract gap
+## 5. Pipeline Inspector contract gap
 
 The current API exposes the individual operations needed for several stages, but the inspected route inventory does not show a general pipeline-run or trace resource that correlates them.
 
@@ -85,7 +99,7 @@ A genuine end-to-end inspector therefore needs an explicit contract decision. Tw
 
 Prefer the first increment for capability previews and the second only when the actual pipeline execution can emit trustworthy stage data. Do not reconstruct a supposed historical trace by rerunning a query or document through current settings.
 
-## 5. Immediate implementation order
+## 6. Immediate implementation order
 
 1. Add Graph, Chunking, Tokenization, and Knowledge read-only workbenches from existing endpoints.
 2. Add Lexical/Vector/Hybrid comparison with explicit channel provenance and truthful limits.
@@ -94,7 +108,7 @@ Prefer the first increment for capability previews and the second only when the 
 5. Define correlated server-side pipeline traces for actual ingestion and retrieval execution.
 6. Add backend-owned operational statistics and carefully scoped maintenance only where justified.
 
-## 6. Inventory caveats
+## 7. Inventory caveats
 
 - This inventory was derived from the current `ensemble/api.py`, `ensemble/control_panel.html`, and `ensemble/control.js` on the parity branch.
 - Endpoint existence does not establish complete POC parity, production readiness, or suitability for an administrative UI.
