@@ -64,7 +64,7 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | GET | /api/v1/chunking/health, /ready, /profiles | Chunking capability status and versioned profiles |
 | POST | /api/v1/chunking/chunk | Generate deterministic chunks with offsets and provenance |
 | POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |
-| GET/POST | /api/v1/lexical/health, /ready, /documents, /search | Independent Lexical ingestion and BM25 search capability |
+| GET/POST | /api/v1/search/lexical/health, /ready, /documents, /search | Independent Lexical ingestion and BM25 search capability |
 | GET | /api/v1/search/hybrid/health, /api/v1/search/hybrid/ready | Hybrid retrieval capability status |
 | POST | /api/v1/search/hybrid | Unified hybrid retrieval |
 | POST | /api/v1/search/hybrid/knowledge | Knowledge-scoped hybrid retrieval |
@@ -139,7 +139,7 @@ Security-sensitive decorators are defense in depth. Enforcement also belongs at 
 
 ## 11. Search API conventions
 
-Search paths are capability-first. The canonical unified retrieval operation is `POST /api/v1/search/hybrid`; the Knowledge-scoped operation is `POST /api/v1/search/hybrid/knowledge`. The scope segment is present only because Knowledge-only retrieval is a distinct caller-facing operation. Do not expose channel implementation details such as FTS5, SQLite, vector collection names, or model providers in search paths. Other strategies or scopes should be added only when a real consumer requirement exists.
+Search paths are capability-first. `POST /api/v1/search` is the default retrieval contract; `POST /api/v1/search/lexical` requests lexical-only retrieval; `POST /api/v1/search/hybrid` requests the full Hybrid orchestration contract. The Knowledge-scoped Hybrid operation is `POST /api/v1/search/hybrid/knowledge`. The canonical unified retrieval operation is `POST /api/v1/search/hybrid`; the Knowledge-scoped operation is `POST /api/v1/search/hybrid/knowledge`. The scope segment is present only because Knowledge-only retrieval is a distinct caller-facing operation. Do not expose channel implementation details such as FTS5, SQLite, vector collection names, or model providers in search paths. Other strategies or scopes should be added only when a real consumer requirement exists.
 
 ## 12. Ingestion API conventions
 
