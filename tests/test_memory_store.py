@@ -78,6 +78,17 @@ def test_sqlite_memory_expiry_and_delete_semantics(tmp_path):
         assert await store.read("notes") is None
         assert await store.read_entries("notes") == []
         assert (await store.delete("notes"))["status"] == "not_found"
+
+        source_content = "# Source\\nImported memory content."
+        source_digest = hashlib.sha256(source_content.encode("utf-8")).hexdigest()
+        imported = await store.ingest_claude_markdown(
+            "/repo/docs/source.md", source_content, source_digest, {"scope": "/repo"}
+        )
+        source_delete = await store.delete(imported["document"])
+        assert source_delete["status"] == "deleted"
+        assert source_delete["sources_deleted"] == 1
+        assert source_delete["memory_deleted"] is True
+        assert (await store.knowledge_status())["indexed_document_count"] == 0
         await store.close()
 
     asyncio.run(exercise())
