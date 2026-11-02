@@ -12,6 +12,7 @@ class DocumentIn(BaseModel):
     content: str = Field(min_length=1)
     chunk_profile: str = Field(default="window-v1", min_length=1, max_length=64)
     media_type: str = Field(default="text/plain", max_length=128)
+    metadata: dict = Field(default_factory=dict)
 
 
 class DocumentOut(BaseModel):
@@ -24,6 +25,7 @@ class DocumentOut(BaseModel):
     created_at: datetime
     chunk_profile: str = "window-v1"
     vector_indexed: bool = False
+    metadata: dict = Field(default_factory=dict)
 
 
 class SearchIn(BaseModel):
@@ -48,15 +50,21 @@ class SearchHit(BaseModel):
     chunk_end: int = 0
     chunk_header: str = ""
     rerank_score: float | None = None
+    session_id: str | None = None
+    project: str | None = None
+    role: str | None = None
+    kind: str | None = None
+    is_subagent: bool | None = None
 
 
 class Document:
-    def __init__(self, source_id: str, revision: int, title: str, content: str):
+    def __init__(self, source_id: str, revision: int, title: str, content: str, metadata: dict | None = None):
         self.id = uuid4()
         self.source_id = source_id.strip()
         self.revision = revision
         self.title = title.strip()
         self.content = content
+        self.metadata = dict(metadata or {})
         self.created_at = datetime.now(timezone.utc)
 
 
