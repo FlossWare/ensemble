@@ -35,7 +35,7 @@ def test_control_panel_is_served_by_the_api():
         assert "Approve for export" in script.text
         assert "/api/v1/thompson/state" in script.text
         assert 'textContent="Reset"' in script.text
-        assert "/api/v1/hybrid/search" in script.text
+        assert "/api/v1/search/hybrid" in script.text
         assert "/api/v1/index/manifest" in script.text
         assert "/api/v1/memory/search-hybrid" in script.text
         assert "refreshCapabilityTable" in script.text
