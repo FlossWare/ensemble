@@ -12,7 +12,7 @@
 | Retrieval Explorer | Hybrid search with optional reranking | `POST /api/v1/search/hybrid` | Does not yet compare independent channel results or expose every pipeline stage |
 | Transcript ingestion | Submit structured session payload | `POST /api/v1/ingest/sessions` | Explicit mutation; needs richer preview/trace |
 | Index and Vector | Manifest, collection list, source lookup | `GET /api/v1/index/manifest`, `GET /api/v1/vector/collections`, `GET /api/v1/index/sources/{source_id}` | Read-only inspection plus separate tombstone action |
-| Memory and Knowledge | Memory names, Knowledge status, hybrid Memory search | `GET /api/v1/memory/list`, `GET /api/v1/memory/knowledge/status`, `POST /api/v1/memory/search-hybrid` | Partial; no event/session detail workbench |
+| Memory and Knowledge | Memory names, Knowledge status, hybrid Memory search | `GET /api/v1/memory/list`, `GET /api/v1/memory/knowledge/status`, `POST /api/v1/memory/search/hybrid` | Partial; no event/session detail workbench |
 | URI ingestion | Preview then explicit ingest | `POST /api/v1/ingest/urls/preview`, `POST /api/v1/ingest/urls` | Preview/commit separation exists |
 | GA | Run, history, detail, candidate promotion/export | `/api/v1/ga/runs`, `/api/v1/ga/runs/{run_id}`, `POST /api/v1/ga/runs/{run_id}/promote` | Initial workbench; synthetic evaluators must remain clearly labeled |
 | Thompson | State, selection, reset | `GET /api/v1/thompson/state`, `POST /api/v1/thompson/select`, `POST /api/v1/thompson/reset` | Model-level state and operations; task/capability filtering is not implemented |
