@@ -9,11 +9,11 @@
 |---|---|---|---|
 | Platform status | Readiness summary | `GET /ready` | Basic status only; no history, metrics, or diagnostics |
 | Capability Explorer | Health/readiness table | Capability `/health` and `/ready` endpoints | Useful baseline; mostly generic status |
-| Retrieval Explorer | Hybrid search with optional reranking | `POST /api/v1/hybrid/search` | Does not yet compare independent channel results or expose every pipeline stage |
+| Retrieval Explorer | Hybrid search with optional reranking | `POST /api/v1/search/hybrid` | Does not yet compare independent channel results or expose every pipeline stage |
 | Transcript ingestion | Submit structured session payload | `POST /api/v1/hybrid/sessions/ingest` | Explicit mutation; needs richer preview/trace |
 | Index and Vector | Manifest, collection list, source lookup | `GET /api/v1/index/manifest`, `GET /api/v1/vector/collections`, `GET /api/v1/index/sources/{source_id}` | Read-only inspection plus separate tombstone action |
 | Memory and Knowledge | Memory names, Knowledge status, hybrid Memory search | `GET /api/v1/memory/list`, `GET /api/v1/memory/knowledge/status`, `POST /api/v1/memory/search-hybrid` | Partial; no event/session detail workbench |
-| URI ingestion | Preview then explicit ingest | `POST /api/v1/scrape/preview`, `POST /api/v1/scrape/ingest` | Preview/commit separation exists |
+| URI ingestion | Preview then explicit ingest | `POST /api/v1/ingest/urls/preview`, `POST /api/v1/ingest/urls` | Preview/commit separation exists |
 | GA | Run, history, detail, candidate promotion/export | `/api/v1/ga/runs`, `/api/v1/ga/runs/{run_id}`, `POST /api/v1/ga/runs/{run_id}/promote` | Initial workbench; synthetic evaluators must remain clearly labeled |
 | Thompson | State, selection, reset | `GET /api/v1/thompson/state`, `POST /api/v1/thompson/select`, `POST /api/v1/thompson/reset` | Model-level state and operations; task/capability filtering is not implemented |
 | Learning | Report, recent outcomes, artifacts, confirmed reset | `GET /api/v1/learning/report`, `GET /api/v1/learning/outcomes`, `GET /api/v1/learning/artifacts`, `POST /api/v1/learning/reset` | Initial workbench |
@@ -35,7 +35,7 @@ The following endpoint groups were found in `ensemble/api.py` at the time of thi
 | Reranking | `/api/v1/reranking/health`, `/ready`, `POST /rerank` | Health only; hybrid query can opt in to reranking |
 | Vector | `/api/v1/vector/health`, collection list, collection existing/upsert/metadata/delete-superseded/query | Collection list only |
 | Lexical | `/api/v1/lexical/health`, `/ready`, document write, search | Health only; retrieval is not separately compared in UI |
-| Hybrid | `/api/v1/hybrid/health`, `/ready`, search, knowledge search, session ingest, prompt capture | Hybrid search and session ingestion |
+| Hybrid | `/api/v1/search/hybrid/health`, `/ready`, search, knowledge search, session ingest, prompt capture | Hybrid search and session ingestion |
 | Index | `/api/v1/index/health`, `/ready`, revision decisions, tombstones, source lookup, manifest | Manifest/source inspection and tombstone |
 | Knowledge | `/api/v1/knowledge/health`, `/ready`, record write/read, tombstone | Indirect status only |
 | Memory | `/api/v1/memory/*` health/readiness, read/write/append, entries, list, search, retrieve, chunk, semantic/hybrid search, ingest, reconcile, Knowledge status | Names/status/search only |
@@ -43,7 +43,7 @@ The following endpoint groups were found in `ensemble/api.py` at the time of thi
 | Thompson | `/api/v1/thompson/*` health/readiness/state/select/outcomes/reset | State/select/reset |
 | GA | `/api/v1/ga/*` health/readiness/optimizers/runs/detail/promote | Run/detail/promote |
 | Learning | `/api/v1/learning/*` health/readiness/outcomes/report/artifacts/reset and outcome workflow | Report/outcomes/artifacts/reset |
-| Scraping | `POST /api/v1/scrape/preview`, `POST /api/v1/scrape/ingest` | Preview/ingest |
+| Scraping | `POST /api/v1/ingest/urls/preview`, `POST /api/v1/ingest/urls` | Preview/ingest |
 
 ## 3. Implemented in the current parity branch
 
