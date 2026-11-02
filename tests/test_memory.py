@@ -103,6 +103,45 @@ def test_memory_context_retrieval_prioritizes_parent_and_search_is_bounded():
         assert search.json()["results"][0]["file"] == "execution"
 
 
+def test_context_assembly_combines_memory_and_retrieval_with_token_budget():
+    with client() as http:
+        http.put("/api/v1/memory/memories/notes", json={
+            "content": "# Retrieval\nMemory retrieval preserves provenance and source attribution.\n"
+        })
+        http.post("/api/v1/ingest/documents", json={
+            "source_id": "context-doc", "revision": 1, "title": "Context retrieval",
+            "content": "Hybrid retrieval combines lexical and vector evidence with source provenance.",
+        })
+        response = http.post("/api/v1/context/assemble", json={
+            "query": "retrieval provenance", "limit": 10, "max_tokens": 300,
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["estimated_tokens"] <= body["max_tokens"]
+        assert body["token_estimator"].startswith("UTF-8 character count")
+        assert {item["source"] for item in body["sources"]} >= {
+            "memory-document", "ensemble-retrieval",
+        }
+        assert "retrieval" in body["context"].casefold()
+
+
+def test_context_assembly_extractively_compresses_to_budget():
+    from ensemble.api import _assemble_context
+
+    source = (
+        "A long irrelevant sentence about unrelated operations. "
+        "The retrieval pipeline preserves provenance and ranks evidence. "
+        "Another unrelated sentence about a different subsystem."
+    )
+    result = _assemble_context([{
+        "source": "test", "title": "retrieval", "content": source, "score": 1.0,
+    }], "retrieval provenance", 20)
+    assert result["estimated_tokens"] <= 20
+    assert result["compressed_count"] == 1
+    assert result["truncated_count"] == 1
+    assert "preserves provenance" in result["context"]
+
+
 def test_memory_chunking_and_name_validation():
     with client() as http:
         http.put("/api/v1/memory/memories/chunked", json={"content": "# Intro\nalpha\n# Second\nbeta\n"})
