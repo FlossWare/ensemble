@@ -388,6 +388,17 @@ def create_app(
                 "matched_entities": graph_matches, "candidate_sources": 0, "degraded": True,
             }
 
+    async def tombstone_indexed_source(source_id: str) -> None:
+        await document_store.tombstone_source(source_id)
+        await active_knowledge_store.tombstone(source_id)
+        # Source records may have been written through different ingestion
+        # capabilities and vector collections. Remove them all, not just
+        # Knowledge's collection.
+        for collection in await active_vector_store.list_collections():
+            await active_vector_store.delete_superseded(
+                collection["name"], source_id, ""
+            )
+
     app.state.store = document_store
     app.state.embedding_provider = embeddings
     app.state.reranker = active_reranker
@@ -586,9 +597,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         decision = await active_index_store.record_tombstone(source_id, sequence)
         if decision["decision"] == "tombstoned":
-            await document_store.tombstone_source(source_id)
-            await active_knowledge_store.tombstone(source_id)
-            await active_vector_store.delete_superseded("knowledge_chunks", source_id, "")
+            await tombstone_indexed_source(source_id)
         return {"ok": True, "decision": decision["decision"], "source_id": source_id}
 
     @app.get("/api/v1/index/health", tags=["index"])
