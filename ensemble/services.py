@@ -53,12 +53,23 @@ class SearchService:
         self.store = store
         self.embeddings = embeddings
 
+    async def lexical_search(self, query: str, limit: int = 10) -> list[SearchHit]:
+        return (await self.search_with_status(query, limit, include_vector=False))["results"]
+
     async def search(self, query: str, limit: int = 10) -> list[SearchHit]:
+        return (await self.search_with_status(query, limit))["results"]
+
+    async def search_with_status(
+        self, query: str, limit: int = 10, *, include_vector: bool = True
+    ) -> dict:
         if not query.strip():
             raise ValueError("query is required")
         indexed = await self.store.all_chunks()
         if not indexed:
-            return []
+            return {
+                "ok": True, "results": [], "degraded": [],
+                "retrieval": "lexical", "reranked": False,
+            }
 
         query_terms = _tokens(query)
         lexical_scores = {
@@ -67,14 +78,19 @@ class SearchService:
             if query_terms and query_terms & _tokens(item.chunk.content)
         }
         vector_scores: dict = {}
-        if self.embeddings.available:
-            query_vector = (await self.embeddings.embed([query], mode="query"))[0]
-            vector_scores = {
-                item.chunk.id: score
-                for item in indexed
-                if item.chunk.embedding
-                and (score := _cosine(query_vector, item.chunk.embedding)) > 0
-            }
+        degraded: list[str] = []
+        if include_vector and self.embeddings.available:
+            try:
+                query_vector = (await self.embeddings.embed([query], mode="query"))[0]
+                vector_scores = {
+                    item.chunk.id: score
+                    for item in indexed
+                    if item.chunk.embedding
+                    and (score := _cosine(query_vector, item.chunk.embedding)) > 0
+                }
+            except Exception:
+                # Preserve lexical results when the embedding dependency is degraded.
+                degraded.append("embeddings")
 
         lexical_ranks = _rank(lexical_scores)
         vector_ranks = _rank(vector_scores)
@@ -101,7 +117,17 @@ class SearchService:
                 chunk_end=item.chunk.end,
                 chunk_header=item.chunk.header,
             ))
-        return sorted(hits, key=lambda hit: (hit.fusion_score, hit.lexical_score), reverse=True)[:limit]
+        results = sorted(
+            hits, key=lambda hit: (hit.fusion_score, hit.lexical_score, str(hit.chunk_id)),
+            reverse=True,
+        )[:limit]
+        return {
+            "ok": True,
+            "results": results,
+            "degraded": degraded,
+            "retrieval": "hybrid" if vector_scores else "lexical",
+            "reranked": False,
+        }
 
 
 def _tokens(text: str) -> set[str]:
