@@ -137,13 +137,16 @@ class SearchService:
                         known_ids[hit["id"]]: float(hit["score"])
                         for hit in vector_hits if hit["id"] in known_ids and float(hit["score"]) > 0
                     }
-                if not vector_scores:
-                    vector_scores = {
-                        item.chunk.id: score
-                        for item in indexed
-                        if item.chunk.embedding
-                        and (score := _cosine(query_vector, item.chunk.embedding)) > 0
-                    }
+                # Keep document chunks outside the transcript collection in the
+                # vector candidate set as well; the collection is one source, not
+                # a replacement for the document-store vector channel.
+                for item in indexed:
+                    if item.chunk.embedding:
+                        score = _cosine(query_vector, item.chunk.embedding)
+                        if score > 0:
+                            vector_scores[item.chunk.id] = max(
+                                vector_scores.get(item.chunk.id, 0.0), score
+                            )
             except Exception:
                 # Preserve lexical results when the embedding dependency is degraded.
                 degraded.append("embeddings")
