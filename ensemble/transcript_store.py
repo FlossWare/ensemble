@@ -250,7 +250,7 @@ class SqliteTranscriptCheckpointStore:
                 status="running", attempts=attempts, last_error=None,
                 updated_at=now, completed_at=None,
             ))
-        return {"status": "running", "attempts": attempts, "created": False}
+        return {"status": "running", "attempts": attempts, "created": True}
 
     async def complete_job(self, job_id: str, end_offset: int, result: dict[str, Any]) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
@@ -373,7 +373,7 @@ class InMemoryTranscriptCheckpointStore:
                 "last_error": None, "updated_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": None,
             })
-            return {"status": "running", "attempts": row["attempts"], "created": False}
+            return {"status": "running", "attempts": row["attempts"], "created": True}
         now = datetime.now(timezone.utc).isoformat()
         self._jobs[job_id] = {
             "job_id": job_id, "source_id": source_id, "revision_id": revision_id,
