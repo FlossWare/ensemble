@@ -1,6 +1,6 @@
 # REST Contract Conventions
 
-**Status:** Initial conventions. The running FastAPI application publishes its OpenAPI schema at /openapi.json and interactive documentation at /docs.
+**Status:** Canonical conventions for current and future routes. See [the route inventory and naming audit](rest-route-audit.md) for current coverage and cleanup decisions. The running FastAPI application publishes its OpenAPI schema at /openapi.json and interactive documentation at /docs.
 
 ## 1. Base path and media type
 
