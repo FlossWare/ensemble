@@ -1247,6 +1247,8 @@ def create_app(
     async def ingest_document(request: DocumentIn):
         try:
             return await documents.ingest(request)
+        except ChunkingError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
