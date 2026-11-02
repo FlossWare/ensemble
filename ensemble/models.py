@@ -10,6 +10,8 @@ class DocumentIn(BaseModel):
     revision: int = Field(default=1, ge=1)
     title: str = Field(min_length=1, max_length=2048)
     content: str = Field(min_length=1)
+    chunk_profile: str = Field(default="window-v1", min_length=1, max_length=64)
+    media_type: str = Field(default="text/plain", max_length=128)
 
 
 class DocumentOut(BaseModel):
@@ -20,6 +22,7 @@ class DocumentOut(BaseModel):
     chunk_count: int
     embedded: bool
     created_at: datetime
+    chunk_profile: str = "window-v1"
 
 
 class SearchIn(BaseModel):
@@ -38,6 +41,10 @@ class SearchHit(BaseModel):
     lexical_score: float
     vector_score: float
     fusion_score: float
+    chunk_profile: str = "window-v1"
+    chunk_start: int = 0
+    chunk_end: int = 0
+    chunk_header: str = ""
 
 
 class Document:
@@ -51,9 +58,13 @@ class Document:
 
 
 class Chunk:
-    def __init__(self, document_id: UUID, ordinal: int, content: str, embedding: list[float] | None = None):
+    def __init__(self, document_id: UUID, ordinal: int, content: str, embedding: list[float] | None = None, *, profile: str = "window-v1", start: int = 0, end: int = 0, header: str = ""):
         self.id = uuid4()
         self.document_id = document_id
         self.ordinal = ordinal
         self.content = content
         self.embedding = embedding or []
+        self.profile = profile
+        self.start = start
+        self.end = end
+        self.header = header
