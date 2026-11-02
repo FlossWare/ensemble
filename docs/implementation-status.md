@@ -29,7 +29,7 @@ Implemented:
 - Versioned window-v1, markdown-v1, and message-v1 profiles are integrated into document ingestion; selected profile, exact offsets, and Markdown heading provenance persist in SQLite and are returned by search.
 - Standalone versioned window-v1, markdown-v1, and message-v1 chunk profiles with stable IDs, source offsets, and heading provenance.
 - Optional OpenAI-compatible embedding provider.
-- Versioned lexical-v1 tokenization with deterministic compound identifier handling and source offsets.
+- Versioned lexical-v1 tokenization with deterministic compound identifier handling and source offsets.\n- Structured transcript metadata (session ID, project, role, message kind, subagent flag and source file) persists with document revisions and is returned by Lexical search; identical message text is deduplicated in Lexical results.
 - Exact identifier/entity extraction with uncertainty and confidence metadata.
 - Explainable rule-based intent classification with evidence and per-label scores.
 - Deterministic reciprocal-rank fusion with per-list contributions and tie-breaking.
@@ -38,7 +38,7 @@ Implemented:
 - Vector similarity over stored chunk embeddings when embeddings are enabled.
 - Document and chunk provenance in search responses.
 - Tests for API behavior, migration setup, restart durability, and revision replacement.
-- Python 3.12 GitHub Actions test workflow.
+- Python 3.12 GitHub Actions workflow validates installer shell syntax, Control Center JavaScript syntax, and the full Python test suite. The latest completed run passed 129 tests.
 
 Implemented on the parity branch (GitHub Actions has verified the latest completed test run):
 - POC-compatible lexical-v1 tokenization capability and REST endpoints.
