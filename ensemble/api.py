@@ -436,6 +436,8 @@ def create_app(
         if decision["decision"] not in {"accepted", "duplicate"}:
             return {"ok": True, "decision": decision["decision"], "source_id": source_id, "stored": False}
         chunk_profile = profiles.get("chunking", "window-v1")
+        if isinstance(chunk_profile, str) and "@" in chunk_profile:
+            chunk_profile = chunk_profile.split("@", 1)[0]
         media_type = profiles.get("media_type", "text/plain")
         document = DocumentIn(
             source_id=source_id, revision=sequence, title=title, content=content,
