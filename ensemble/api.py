@@ -73,17 +73,17 @@ def _compress_context_text(value: str, query: str, max_chars: int) -> tuple[str,
     if len(value) <= max_chars:
         return value, False
     query_terms = {
-        token.casefold() for token in re.findall(r"[^\\W_]+", query)
+        token.casefold() for token in re.findall(r"[^\W_]+", query)
         if len(token) > 1
     }
     sentences = [
         match.group(0).strip()
-        for match in re.finditer(r"[^.!?\\n]+(?:[.!?]+|$)", value)
+        for match in re.finditer(r"[^.!?\n]+(?:[.!?]+|$)", value)
         if match.group(0).strip()
     ]
     ranked = []
     for index, sentence in enumerate(sentences):
-        terms = {token.casefold() for token in re.findall(r"[^\\W_]+", sentence)}
+        terms = {token.casefold() for token in re.findall(r"[^\W_]+", sentence)}
         ranked.append((len(query_terms & terms), index, sentence))
     selected, used = [], 0
     for score, index, sentence in sorted(ranked, key=lambda item: (-item[0], item[1])):
@@ -115,7 +115,7 @@ def _assemble_context(candidates: list[dict[str, Any]], query: str, max_tokens: 
         source = candidate.get("source", "unknown")
         title = candidate.get("title") or candidate.get("section") or source
         header = f"[{source}] {title}"
-        block = header + "\\n" + value.strip()
+        block = header + "\n" + value.strip()
         needed = _context_token_estimate(block)
         was_truncated = was_compressed = False
         if needed > remaining:
@@ -127,7 +127,7 @@ def _assemble_context(candidates: list[dict[str, Any]], query: str, max_tokens: 
             if not selected:
                 omitted += 1
                 continue
-            block = header + "\\n" + selected
+            block = header + "\n" + selected
             was_truncated = len(selected) < len(value.strip())
             needed = _context_token_estimate(block)
             if needed > remaining:
@@ -145,7 +145,7 @@ def _assemble_context(candidates: list[dict[str, Any]], query: str, max_tokens: 
         truncated += int(was_truncated)
         compressed += int(was_compressed)
     return {
-        "context": "\\n\\n".join(blocks), "sources": included,
+        "context": "\n\n".join(blocks), "sources": included,
         "estimated_tokens": max_tokens - remaining,
         "token_estimator": "UTF-8 character count divided by four; approximate, not model-tokenizer exact",
         "max_tokens": max_tokens, "omitted_count": omitted,
