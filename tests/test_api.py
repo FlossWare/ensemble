@@ -749,7 +749,7 @@ def test_raw_jsonl_transcript_job_survives_sqlite_restart(tmp_path):
             "role": "assistant",
             "content": [{"type": "text", "text": "Persist this transcript job across a service restart."}],
         },
-    }) + "\\n"
+    }) + "\n"
     payload = {
         "session_id": "restartable-jsonl-session",
         "project": "restartable-project",
