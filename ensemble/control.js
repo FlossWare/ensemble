@@ -553,3 +553,41 @@ document.getElementById("pipeline-run").addEventListener("click",async()=>{
   output.textContent=JSON.stringify(trace,null,2);
  }finally{button.disabled=false;}
 });
+
+
+let latestEntityCandidates=[];
+document.getElementById("entity-extract").addEventListener("click",async()=>{
+ const button=document.getElementById("entity-extract"),resolveButton=document.getElementById("entity-resolve"),output=document.getElementById("entity-results");
+ button.disabled=true;resolveButton.disabled=true;
+ try{
+  const result=await controlJson("/api/v1/entities/extract","POST",{
+   text:document.getElementById("entity-text").value,
+   source:"control-center.entity-workbench"
+  });
+  latestEntityCandidates=result.entities||[];
+  output.textContent=JSON.stringify(result,null,2);
+  resolveButton.disabled=latestEntityCandidates.length===0;
+ }catch(error){latestEntityCandidates=[];output.textContent="Entity extraction failed: "+error.message;}
+ finally{button.disabled=false;}
+});
+document.getElementById("entity-resolve").addEventListener("click",async()=>{
+ const button=document.getElementById("entity-resolve"),output=document.getElementById("entity-results");
+ if(!latestEntityCandidates.length){output.textContent="Extract entity candidates first.";return;}
+ button.disabled=true;
+ try{
+  const result=await controlJson("/api/v1/entities/resolve","POST",{entities:latestEntityCandidates});
+  output.textContent=JSON.stringify({candidates:latestEntityCandidates,resolution:result},null,2);
+ }catch(error){output.textContent="Entity resolution failed: "+error.message;}
+ finally{button.disabled=false;}
+});
+document.getElementById("entity-link-form").addEventListener("submit",async event=>{
+ event.preventDefault();const output=document.getElementById("entity-link-result");
+ try{
+  const result=await controlJson("/api/v1/entities/link","POST",{
+   source_id:document.getElementById("entity-source-id").value.trim(),
+   target_id:document.getElementById("entity-target-id").value.trim(),
+   relationship:document.getElementById("entity-relationship").value.trim()
+  });
+  output.textContent=JSON.stringify(result,null,2);
+ }catch(error){output.textContent="Entity linking failed: "+error.message;}
+});
