@@ -622,6 +622,7 @@ def test_hybrid_session_ingestion_is_idempotent_and_populates_retrieval_graph():
             "project": "ensemble",
             "file": "/work/ensemble/session-100.jsonl",
             "title": "Ensemble debugging session",
+            "is_subagent": True,
         },
         "messages": [
             {
@@ -650,6 +651,9 @@ def test_hybrid_session_ingestion_is_idempotent_and_populates_retrieval_graph():
         assert search.status_code == 200
         assert search.json()["results"]
         assert search.json()["related_sessions"][0]["session_id"] == "session-100"
+        assert search.json()["results"][0]["session_id"] == "session-100"
+        assert search.json()["results"][0]["project"] == "ensemble"
+        assert search.json()["results"][0]["is_subagent"] is True
 
 
 def test_hybrid_session_ingestion_rejects_invalid_messages_before_writing():
@@ -729,3 +733,33 @@ def test_lexical_documents_accepts_poc_session_message_contract():
             "query": "searchable",
         }).json()["results"]
         assert results[0]["source_id"].startswith("transcript:lexical-session:")
+
+
+def test_transcript_metadata_survives_sqlite_restart(tmp_path):
+    payload = {
+        "session": {
+            "session_id": "durable-session",
+            "project": "durable-project",
+            "file": "/work/durable/session.jsonl",
+            "is_subagent": True,
+        },
+        "messages": [{
+            "uuid": "durable-message", "role": "assistant", "kind": "tool_result",
+            "text": "The durable transcript metadata remains attached to the tool result.",
+        }],
+    }
+    with _client(tmp_path) as client:
+        response = client.post("/api/v1/hybrid/sessions/ingest", json=payload)
+        assert response.status_code == 200
+        assert response.json()["inserted"] == 1
+
+    with _client(tmp_path) as client:
+        results = client.post("/api/v1/lexical/search", json={
+            "query": "durable transcript metadata",
+        }).json()["results"]
+        assert results
+        assert results[0]["session_id"] == "durable-session"
+        assert results[0]["project"] == "durable-project"
+        assert results[0]["role"] == "assistant"
+        assert results[0]["kind"] == "tool_result"
+        assert results[0]["is_subagent"] is True
