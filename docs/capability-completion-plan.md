@@ -16,21 +16,32 @@ Complete the intended Ensemble platform as a standalone, client-independent REST
 - Do not create tests merely to mirror POC tests. Defer systematic test expansion until the capability set is substantially complete.
 - Update implementation status and this plan as capabilities become usable, not merely when routes or stubs exist.
 
+## Completed in the current review branch
+
+- All supported document, lexical, transcript, PDF, URL, and Knowledge ingestion paths now pass through Index revision decisions.
+- Knowledge publication writes the durable document/chunk index, Knowledge provenance record, and optional knowledge_chunks vectors.
+- Accepted source revisions are associated with exact extracted entities in Graph. Hybrid retrieval expands through Graph-linked source relationships and reranks after candidate fusion.
+- Source tombstones remove content from the active document retrieval view and prune Knowledge vectors.
+- Initial client-independent Context assembly composes Hybrid retrieval, Graph expansion, Memory documents, and optional execution-lineage recall. It preserves source provenance and applies a bounded extractive context budget.
+- Review-branch CI currently verifies the existing suite plus new source lifecycle, Graph expansion, and Context assembly coverage. Token estimates are character-based approximations, not model-tokenizer exact counts.
+
+These items are implemented foundations, not claims that every operational requirement in the sections below is complete.
+
 ## Priority 0: make the core platform complete end to end
 
 ### 1. Complete hybrid retrieval
 
-- Retrieve independently from Knowledge and transcript/document sources.
+- Retrieve from the shared document/chunk index populated by Knowledge, transcripts, and documents; finish independent channel diagnostics and external ranking fallback.
 - Preserve source identity, revision, scope, and provenance through candidate fusion and reranking.
 - Define deterministic fusion, deduplication, and stable tie-breaking.
 - Make partial-success and degraded-dependency behavior explicit.
 - Ensure a failed or partial retrieval is never represented as a successful empty result.
-- Add bounded retrieval deadlines and cancellation behavior.
-- Ensure retrieval scope is enforced consistently across all channels.
+- Add bounded retrieval deadlines and cancellation behavior (remaining).
+- Ensure retrieval scope is enforced consistently across all channels (requires authentication/partition enforcement).
 
 ### 2. Complete transcript ingestion lifecycle
 
-- Turn the existing incremental JSONL parser into a durable ingestion workflow.
+- Turn the existing incremental JSONL parser into a durable ingestion workflow; the current caller-supplied byte-slice parser and synchronous session ingestion are not durable jobs.
 - Persist source identity, revision, byte checkpoint, operation state, and failure details.
 - Make retries idempotent and prevent acknowledgement before durable indexing succeeds.
 - Resume safely after process restart.
@@ -41,7 +52,7 @@ Complete the intended Ensemble platform as a standalone, client-independent REST
 
 - Define canonical source identity and revision semantics across documents, files, URLs, and transcripts.
 - Ensure stale updates cannot replace newer active content.
-- Ensure tombstones cannot be undone by delayed or retried upserts.
+- Ensure tombstones cannot be undone by delayed or retried upserts; Index now gates supported ingestion routes and tombstones remove active document/vector results.
 - Make freshness verification explicit before returning retrieval results.
 - Preserve provenance and source metadata through chunking, indexing, Knowledge publication, and retrieval.
 - Make all lifecycle operations safe across restart and retry.
@@ -50,7 +61,7 @@ Complete the intended Ensemble platform as a standalone, client-independent REST
 
 - Finish scoped source import/reconciliation with explicit authorization and safe path handling.
 - Complete execution-context-aware recall and useful retrieval ranking.
-- Provide bounded context assembly with provenance, token budgeting, and deterministic ordering.
+- Extend the initial bounded Context assembly with exact model-tokenizer budgeting when a concrete tokenizer is configured; current character-based estimates and extractive compression are deterministic and provenance-preserving.
 - Define conflict, append-once, expiry, and deletion semantics.
 - Ensure Memory readiness reflects usable persisted state and recovery, not just process liveness.
 
