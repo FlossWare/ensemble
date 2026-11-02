@@ -1,131 +1,72 @@
 # Control Center API and UI Mapping
 
-**Status:** Review-branch inventory for `review/core-services-2026-11-02`.
-**Purpose:** Record what the current REST application exposes and what the current browser Control Center actually uses. This is an implementation inventory, not a claim that every requirement is complete.
+**Status:** Review-branch implementation inventory for `review/core-services-2026-11-02`.
+**Purpose:** Describe the actual browser workbenches and their REST contracts. A UI panel is not proof of production readiness or complete capability parity.
 
-## 1. Current browser workbench coverage
+## 1. Browser workbench coverage
 
-| Workbench | Current browser behavior | REST operations used | Assessment |
+| Workbench | Current behavior | REST operations | Known limitation |
 |---|---|---|---|
-| Platform status | Readiness summary | `GET /ready` | Basic status only; no history, metrics, or diagnostics |
-| Capability Explorer | Health/readiness table | Capability `/health` and `/ready` endpoints | Useful baseline; mostly generic status |
-| Retrieval Explorer | Hybrid search with optional reranking | `POST /api/v1/search/hybrid` | Does not yet compare independent channel results or expose every pipeline stage |
-| Transcript ingestion | Submit structured session payload | `POST /api/v1/ingest/sessions` | Explicit mutation; needs richer preview/trace |
-| Index and Vector | Manifest, collection list, source lookup | `GET /api/v1/index/manifest`, `GET /api/v1/vector/collections`, `GET /api/v1/index/sources/{source_id}` | Read-only inspection plus separate tombstone action |
-| Memory and Knowledge | Memory names, Knowledge status, hybrid Memory search | `GET /api/v1/memory/memories`, `GET /api/v1/memory/sources/status`, `POST /api/v1/memory/search/hybrid` | Partial; no event/session detail workbench |
-| URI ingestion | Preview then explicit ingest | `POST /api/v1/ingest/urls/preview`, `POST /api/v1/ingest/urls` | Preview/commit separation exists |
-| GA | Run, history, detail, candidate promotion/export | `/api/v1/ga/runs`, `/api/v1/ga/runs/{run_id}`, `POST /api/v1/ga/runs/{run_id}/promote` | Initial workbench; synthetic evaluators must remain clearly labeled |
-| Thompson | State, selection, reset | `GET /api/v1/thompson/state`, `POST /api/v1/thompson/select`, `POST /api/v1/thompson/reset` | Model-level state and operations; task/capability filtering is not implemented |
-| Learning | Report, recent outcomes, artifacts, confirmed reset | `GET /api/v1/learning/report`, `GET /api/v1/learning/outcomes`, `GET /api/v1/learning/artifacts`, `POST /api/v1/learning/reset` | Initial workbench |
-| Entities | Extract candidates, explicitly resolve canonical identities, and explicitly create typed Graph links | `/api/v1/entities/extract`, `/resolve`, `/link` | Extraction is non-persistent; resolution and linking are explicit mutations |
-| Intent | Inspect multi-intent classification and evidence | `POST /api/v1/intent/classify` | Rule-based heuristic, not calibrated model confidence |
-| Runtime configuration | Display process configuration | `GET /api/v1/system/config` | Must continue redacting secrets and avoid implying hot reload |
+| Platform status | Overall readiness and capability health/readiness | `GET /ready`, capability `/health` and `/ready` | No historical metrics or durable operation dashboard |
+| Retrieval Explorer | Hybrid search, result provenance, intent/entity diagnostics, optional reranking | `POST /api/v1/search/hybrid` | Does not yet compare each retrieval channel independently or show a correlated server-side trace |
+| Transcript ingestion | Submit structured session payload | `POST /api/v1/ingest/sessions` | Synchronous ingestion; no durable job/checkpoint UI |
+| Index and Vector | Manifest, collection list, source lookup, confirmed tombstone | `GET /api/v1/index/manifest`, `GET /api/v1/vector/collections`, `GET /api/v1/index/sources/{source_id}`, `POST /api/v1/index/tombstones` | No index-generation rebuild or cleanup-retry workbench |
+| Memory and Knowledge | Memory names, Knowledge status, Memory search, Knowledge record lookup | `/api/v1/memory/*`, `/api/v1/knowledge/records/{source_id}` | No complete event/session lifecycle workbench or scoped filesystem scanner |
+| URI ingestion | Preview followed by explicit ingestion | `POST /api/v1/ingest/urls/preview`, `POST /api/v1/ingest/urls` | Single-page fetch; no crawler or scheduled refresh |
+| Graph | Property-filtered node query, node lookup, bounded traversal | `POST /api/v1/graph/query`, `GET /api/v1/graph/nodes/{node_id}`, `POST /api/v1/graph/traverse` | No graph-wide visualization or activity history |
+| Entities | Non-mutating extraction preview, explicit canonical resolution and typed linking | `POST /api/v1/entities/extract`, `/resolve`, `/link` | Deterministic exact resolution; no fuzzy/ontology workflow |
+| Intent | Multi-intent classification and evidence inspection | `POST /api/v1/intent/classify` | Rule-based heuristic confidence, not model-calibrated |
+| Chunking | Profile inventory and non-persistent chunk preview | `GET /api/v1/chunking/profiles`, `POST /api/v1/chunking/chunk` | No persisted ingestion trace |
+| Tokenization | Analyzer profile inventory and token preview | `GET /api/v1/tokenization/profiles`, `POST /api/v1/tokenization/tokenize` | lexical-v1 only |
+| Pipeline Inspector | Sequential read-only probes for tokenization, entities, intent and chunking | Existing capability preview endpoints | Interactive diagnostic preview, not a correlated trace of a real ingestion |
+| GA | Launch bounded runs, inspect history/results/candidates, approve export candidate | `/api/v1/ga/runs`, `/runs/{run_id}`, `/runs/{run_id}/promote` | Synthetic local evaluators; no live settings are applied |
+| Thompson | Inspect state, select model, record outcomes, reset after confirmation | `/api/v1/thompson/*` | task/capability filtering is not implemented |
+| Learning | Report, recent outcomes, artifacts, confirmed reset | `/api/v1/learning/*` | Initial workflow; deeper parity and recovery remain open |
+| Runtime configuration | Display listener and persistence status | `GET /api/v1/system/config` | Deliberately omits filesystem paths and database URLs |
 
 ## 2. REST capability inventory
 
-The following endpoint groups were found in `ensemble/api.py` at the time of this inventory.
+The Control Center is a REST consumer. It does not access SQLite directly and has no UI-only persistence path.
 
-| Capability | Existing REST surface | Current Control Center depth |
-|---|---|---|
-| System/operations | `/health`, `/ready`, `/api/v1/system/config` | Basic |
-| Context | `/api/v1/context/health`, `/ready`, `POST /api/v1/context/assemble` | REST capability; bounded extractive assembly |
-| Embeddings | `/api/v1/embeddings/health`, `/model`, `POST /embed` | Health only |
-| Chunking | `/api/v1/chunking/health`, `/ready`, `/profiles`, `POST /chunk` | Health only |
-| Tokenization | `/api/v1/tokenization/health`, `/ready`, `/profiles`, `POST /tokenize` | Health only |
-| Entities | `/api/v1/entities/health`, `/ready`, `POST /extract`, `/resolve`, `/link` | Extraction preview plus explicit identity and relationship actions |
-| Intent | `/api/v1/intent/health`, `/ready`, `POST /classify` | Health only |
-| Ranking | `/api/v1/ranking/health`, `/ready`, `POST /rank` | Health only |
-| Reranking | `/api/v1/reranking/health`, `/ready`, `POST /rerank` | Health only; hybrid query can opt in to reranking |
-| Vector | `/api/v1/vector/health`, collection list, collection existing/upsert/metadata/delete-superseded/query | Collection list only |
-| Lexical | `/api/v1/search/lexical/health`, `/ready`, document write, search | Health/readiness only; retrieval is not separately compared in UI |
-| Hybrid | `/api/v1/search/hybrid/health`, `/ready`, search, knowledge search, session ingest, prompt capture | Hybrid search and session ingestion |
-| Index | `/api/v1/index/health`, `/ready`, revision decisions, tombstones, source lookup, manifest | Manifest/source inspection and tombstone |
-| Knowledge | `/api/v1/knowledge/health`, `/ready`, record write/read, tombstone | Indirect status only |
-| Memory | `/api/v1/memory/*` health/readiness, read/write/append, entries, list, search, retrieve, chunk, semantic/hybrid search, ingest, reconcile, Knowledge status | Names/status/search only |
-| Graph | `/api/v1/graph/health`, node/edge mutation, node lookup, query, traversal | Health only |
-| Thompson | `/api/v1/thompson/*` health/readiness/state/select/outcomes/reset | State/select/reset |
-| GA | `/api/v1/ga/*` health/readiness/optimizers/runs/detail/promote | Run/detail/promote |
-| Learning | `/api/v1/learning/*` health/readiness/outcomes/report/artifacts/reset and outcome workflow | Report/outcomes/artifacts/reset |
-| Scraping | `POST /api/v1/ingest/urls/preview`, `POST /api/v1/ingest/urls` | Preview/ingest |
+- **System:** health, readiness, non-sensitive runtime configuration.
+- **Context:** health, readiness, bounded extractive context assembly.
+- **Embeddings:** health, model metadata, controlled embedding probe.
+- **Chunking / Tokenization:** health, readiness, profile inventory, preview operations.
+- **Entities / Intent:** health, readiness, extraction, explicit resolution/linking, classification.
+- **Ranking / Reranking:** health, readiness, fusion and rerank operations.
+- **Search:** default, lexical and hybrid retrieval; Knowledge-scoped retrieval.
+- **Vector:** collection inspection, upsert, lookup, metadata update, query and pruning.
+- **Index:** revision decisions, tombstones, source lookup and bounded manifest.
+- **Knowledge:** health, readiness, record publication/lookup and tombstones.
+- **Memory:** named memory CRUD, entries, append-once, recall, lexical/semantic/hybrid search, context assembly, source import/reconciliation/status, event capture.
+- **Graph:** node/edge resources, lookup, query and bounded traversal.
+- **Ingestion:** documents, files, URLs, transcripts and structured sessions.
+- **GA / Thompson / Learning:** bounded optimization runs, model outcome statistics and learning outcome/artifact workflows.
 
-## 3. Implemented in the current parity branch
+## 3. Diagnostic semantics
 
-The Control Center includes read-only inspection and explicitly separated mutation workbenches backed by existing REST contracts. Context assembly is currently API-first and is not yet exposed as a dedicated Control Center workbench:
+The Pipeline Inspector is intentionally an interactive preview. It invokes current capability operations independently and reports their results. It does not mutate persistence and does not claim to inspect a previous ingestion or retrieval execution.
 
-- **Graph:** property-filtered node queries, node lookup, and bounded traversal.
-- **Entities:** non-persistent candidate extraction, explicit Graph-backed canonical resolution, and explicit typed relationship creation.
-- **Chunking:** profile inventory and non-persistent chunk previews.
-- **Tokenization:** analyzer profile inventory and token previews.
-- **Knowledge:** record lookup by source identifier.
-- **Pipeline Inspector (diagnostic preview):** sequentially invokes current Tokenization, entity extraction, Intent, and Chunking operations and reports each stage's result or failure.
+The Context Assembly endpoint is a real server-side operation. It combines current retrieval candidates and optional Memory recall, preserves source metadata, applies deterministic extractive selection, and reports an approximate character-based token budget. It does not use a model tokenizer or model-backed summarizer.
 
-The diagnostic pipeline is deliberately labeled as an interactive preview. It does not mutate persistence and does not claim to be a trace of a real ingestion or retrieval execution. It currently does not include embedding, vector writes, lexical writes, fusion, or reranking.
+A future correlated trace must be emitted by the actual ingestion/retrieval execution, with a stable run identifier, bounded stage events, explicit failure/degradation states, and a defined redaction/retention policy. Re-running a query is not a historical trace.
 
-These additions are UI integration only; they do not establish POC parity for the underlying capability implementations. Browser behavior and API contract tests still need to be run.
+## 4. Remaining Control Center work
 
-## 4. Priority gaps against accepted requirements
+1. Compare lexical, vector and hybrid candidates independently, including fusion contributions and provenance.
+2. Add a usable Context Assembly workbench.
+3. Add Embeddings and Ranking/Reranking diagnostic workbenches.
+4. Add durable ingestion-job/checkpoint history only after those server-side job semantics exist.
+5. Add bounded operational metrics from backend measurements, with units and time windows.
+6. Add safe migration, backup/restore, and source/index recovery diagnostics.
+7. Preserve explicit confirmation for destructive maintenance operations.
 
-### P0: Build a truthful read-only foundation
+## 5. Implementation caveats
 
-- Add capability-specific statistics/status responses where current health/readiness responses are insufficient.
-- Include Graph in a useful read-only workbench: node/edge counts, bounded node inspection, query, and traversal.
-- Add Chunking profile inventory and preview, using the existing `/profiles` and `/chunk` contracts.
-- Add Tokenization profile inventory and token preview, using existing contracts.
-- Add Vector collection detail and bounded record/query inspection. Do not present exact scan as ANN.
-- Add Knowledge record/source inspection rather than relying only on Memory's Knowledge status.
-- Add explicit unsupported/unavailable states; do not fabricate metrics.
-
-### P1: Explain processing and retrieval
-
-- Add Embeddings model/provider status and a controlled text embedding probe.
-- Add Extraction and Intent workbenches that expose confidence/evidence and rule-based semantics.
-- Add independent Lexical and Vector query inspection, followed by Hybrid comparison.
-- Display RRF contributions and candidate lineage. The current ranking endpoint is independently callable, but the current Hybrid response must be inspected to determine whether it exposes enough intermediate detail.
-- Display reranking input/output and whether reranking ran or degraded.
-- Add a pipeline inspector for ingestion and query execution. Existing endpoints are capability operations, not yet a correlated end-to-end trace contract.
-
-### P2: Operational depth
-
-- Add Graph and Memory recent-activity summaries if the service contracts can provide them without unbounded scans.
-- Add operational metrics only when measured at the backend, with units and time windows.
-- Add job history/progress only when durable job semantics exist; do not fake background-job status for synchronous requests.
-- Add safe database/migration diagnostics without exposing private schema details or secrets.
-- Add controlled maintenance operations only after scope, impact, confirmation, and audit semantics are defined.
-
-## 5. Pipeline Inspector contract gap
-
-The current API exposes the individual operations needed for several stages, but the inspected route inventory does not show a general pipeline-run or trace resource that correlates them.
-
-A genuine end-to-end inspector therefore needs an explicit contract decision. Two reasonable increments:
-
-1. **Immediate, no new trace persistence:** the browser runs existing preview/probe operations and labels them as an interactive diagnostic sequence. Each stage result is real, but the sequence is not represented as a durable server-side trace. It must not imply that it inspected a prior ingestion or search execution.
-2. **Later, correlated execution traces:** add a server-owned trace/run identifier and structured stage events to ingestion and retrieval responses. Define payload redaction and retention before persisting trace details.
-
-Prefer the first increment for capability previews and the second only when the actual pipeline execution can emit trustworthy stage data. Do not reconstruct a supposed historical trace by rerunning a query or document through current settings.
-
-## 6. Immediate implementation order
-
-1. Add Graph, Entities, Chunking, Tokenization, and Knowledge workbenches from existing endpoints, keeping mutations explicit.
-2. Add Lexical/Vector/Hybrid comparison with explicit channel provenance and truthful limits.
-3. Add Embeddings, Entity and Intent, Ranking, and Reranking diagnostic workbenches.
-4. Implement the interactive Pipeline Inspector for preview/probe flows, clearly marked as a new diagnostic run.
-5. Define correlated server-side pipeline traces for actual ingestion and retrieval execution.
-6. Add backend-owned operational statistics and carefully scoped maintenance only where justified.
-
-## 7. Inventory caveats
-
-- This inventory was derived from the current `ensemble/api.py`, `ensemble/control_panel.html`, and `ensemble/control.js` on the parity branch.
-- Endpoint existence does not establish complete POC parity, production readiness, or suitability for an administrative UI.
-- Some endpoint groups include mutation operations. The Control Center should expose them only when explicitly required and protected by the accepted interaction model.
-- The route list and UI will evolve; update this document when endpoint contracts or workbench coverage change.
-
-
-## Intent and entities
-
-- Intent preview: `POST /api/v1/intent/classify`
-- Entity extraction preview: `POST /api/v1/entities/extract`
-- Explicit canonical identity resolution: `POST /api/v1/entities/resolve`
-- Explicit canonical relationship creation: `POST /api/v1/entities/link`
-- Entity capability status: `GET /api/v1/entities/health` and `GET /api/v1/entities/ready`
-
-The Entity Workbench keeps extraction read-only. Resolution and linking require separate operator actions because they persist canonical nodes and Graph edges.
+- Endpoint presence does not establish production readiness, full POC parity, or successful operation under restart/failure.
+- Exact vector search scans SQLite records; it is not ANN.
+- Intent and entity extraction are deterministic/rule-based; confidence is heuristic.
+- Transcript JSONL parsing accepts caller-supplied byte slices and returns a checkpoint; durable checkpoint jobs are not implemented.
+- URI ingestion is a bounded single-page fetch, not a crawler.
+- Authentication, authorization, partition enforcement, rate limits, and production observability remain open.
+- Keep every workbench backed by the canonical REST contract. Do not move business logic or persistence into browser code.
