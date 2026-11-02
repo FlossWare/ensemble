@@ -87,10 +87,10 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/index/tombstones | Permanently tombstone a source at a revision sequence |
 | GET | /api/v1/index/sources/{source_id}, /manifest | Read source state and bounded source manifest |
 | GET | /api/v1/vector/health, /collections | Vector storage status and collection inventory |
-| POST | /api/v1/vector/collections/{name}/existing | Find existing record IDs |
-| POST | /api/v1/vector/collections/{name}/upsert | Idempotently insert or replace vectors and metadata |
-| POST | /api/v1/vector/collections/{name}/metadata | Update metadata for existing vector records |
-| POST | /api/v1/vector/collections/{name}/delete-superseded | Delete older content hashes for a source URL |
+| POST | /api/v1/vector/collections/{name}/records/lookup | Find existing record IDs |
+| PUT | /api/v1/vector/collections/{name}/records | Idempotently create or replace vectors and metadata |
+| PATCH | /api/v1/vector/collections/{name}/records/metadata | Update metadata for existing vector records |
+| POST | /api/v1/vector/collections/{name}/records/prune | Remove superseded vector records for a source |
 | POST | /api/v1/vector/collections/{name}/query | Exact dot-product nearest-vector search |
 | GET | /api/v1/ranking/health, /ready | Ranking capability status |
 | GET | /api/v1/reranking/health, /ready | Local cross-encoder model readiness and provenance |
