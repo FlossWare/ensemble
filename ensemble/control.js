@@ -369,7 +369,8 @@ retrievalForm.addEventListener("submit",async event=>{
  event.preventDefault();retrievalResults.textContent="Searching…";
  try{
   const result=await controlJson("/api/v1/hybrid/search","POST",{
-   query:retrievalQuery.value.trim(),limit:Number(retrievalLimit.value)
+   query:retrievalQuery.value.trim(),limit:Number(retrievalLimit.value),
+   rerank:document.getElementById("retrieval-rerank").checked
   });
   retrievalResults.textContent=JSON.stringify(result,null,2);
  }catch(error){retrievalResults.textContent="Search failed: "+error.message;}
