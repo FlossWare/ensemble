@@ -28,7 +28,7 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <section id="retrieval-explorer">
 <h2>Retrieval Explorer</h2>
 <p>Run the actual Hybrid endpoint and inspect result provenance, scores and degraded dependencies.</p>
-<form id="retrieval-form"><input id="retrieval-query" type="text" required maxlength="2000" placeholder="Search documents and knowledge"><input id="retrieval-limit" type="number" min="1" max="100" value="10"><button type="submit">Search</button></form>
+<form id="retrieval-form"><input id="retrieval-query" type="text" required maxlength="2000" placeholder="Search documents and knowledge"><input id="retrieval-limit" type="number" min="1" max="100" value="10"><label><input id="retrieval-rerank" type="checkbox"> Rerank candidates</label><button type="submit">Search</button></form>
 <pre id="retrieval-results">No query run.</pre>
 </section>
 <section id="index-inspector">
