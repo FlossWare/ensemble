@@ -243,7 +243,7 @@ def test_vector_collection_persists_across_restart(tmp_path):
 def test_vector_contract_rejects_invalid_vectors(tmp_path):
     with _client(tmp_path) as client:
         invalid = '{"model":"model-a","dimensions":2,"ids":["bad"],"embeddings":[[NaN,0.0]],"documents":["bad"],"metadatas":[{"source":"test"}]}'
-        response = client.post(
+        response = client.put(
             "/api/v1/vector/collections/c/records",
             content=invalid,
             headers={"content-type": "application/json"},
@@ -862,9 +862,7 @@ def test_successful_hybrid_search_is_recorded_in_memory_search_ledger():
         })
         response = client.post("/api/v1/search/hybrid", json={"query": "retrieval pipeline"})
         assert response.status_code == 200
-        entries = client.post("/api/v1/memory/memories/{name}/entries", json={
-            "name": "search-ledger",
-        }).json()["entries"]
+        entries = client.get("/api/v1/memory/memories/search-ledger/entries").json()["entries"]
         assert len(entries) == 1
         assert entries[0]["query"] == "retrieval pipeline"
         assert entries[0]["result_count"] == 1
