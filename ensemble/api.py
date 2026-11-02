@@ -29,6 +29,7 @@ from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
 from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_reranker, validate_rerank_request
 from .scraping import ScrapeError, preview_uri
+from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
 from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
 from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
 from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
@@ -1375,6 +1376,54 @@ def create_app(
             }
         except Exception as exc:
             raise HTTPException(status_code=503, detail="knowledge retrieval dependency unavailable") from exc
+
+    @app.post("/api/v1/hybrid/transcripts/ingest", tags=["hybrid"])
+    async def hybrid_ingest_transcript(payload: dict[str, Any], request: Request):
+        """Ingest a caller-supplied JSONL byte slice; never opens a server-side path."""
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_TRANSCRIPT_BYTES + 65_536:
+            raise HTTPException(status_code=413, detail="request body exceeds transcript limit")
+        raw_content = payload.get("content")
+        session_id = payload.get("session_id")
+        project = payload.get("project")
+        file_path = payload.get("file", "transcript.jsonl")
+        offset = payload.get("offset", 0)
+        if not isinstance(project, str) or not project.strip() or len(project) > 256:
+            raise HTTPException(status_code=400, detail="project must be a non-empty string of at most 256 characters")
+        if not isinstance(file_path, str) or not file_path.strip() or len(file_path) > 4096:
+            raise HTTPException(status_code=400, detail="file must be a non-empty logical source label of at most 4096 characters")
+        try:
+            parsed = parse_jsonl(raw_content, session_id=session_id, offset=offset)
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not parsed["messages"]:
+            return {
+                "ok": True, "session_id": parsed["session_id"],
+                "inserted": 0, "already_present": 0, "messages_received": 0,
+                "bytes_consumed": parsed["bytes_consumed"],
+                "next_offset": parsed["end_offset"],
+                "incomplete_tail": parsed["incomplete_tail"],
+                "degraded": [],
+            }
+        session_payload = {
+            "session": {
+                "session_id": parsed["session_id"], "project": project,
+                "file": file_path, "first_ts": parsed["first_ts"],
+                "last_ts": parsed["last_ts"],
+                "is_subagent": bool(payload.get("is_subagent", False)),
+            },
+            "messages": parsed["messages"],
+        }
+        result = await hybrid_ingest_session(session_payload, request)
+        result.update({
+            "bytes_consumed": parsed["bytes_consumed"],
+            "next_offset": parsed["end_offset"],
+            "incomplete_tail": parsed["incomplete_tail"],
+            "touches_detected": len(parsed["touches"]),
+        })
+        return result
 
     @app.post("/api/v1/hybrid/sessions/ingest", tags=["hybrid"])
     async def hybrid_ingest_session(payload: dict[str, Any], request: Request):
