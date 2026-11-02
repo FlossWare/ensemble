@@ -1545,6 +1545,16 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True}
 
+    @app.delete("/api/v1/memory/memories/{name}", tags=["memory"])
+    async def memory_delete(name: str):
+        try:
+            result = await active_memory_store.delete(name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if result["status"] == "not_found":
+            raise HTTPException(status_code=404, detail="memory not found")
+        return {"ok": True, **result}
+
     @app.post("/api/v1/memory/memories/{name}/entries", tags=["memory"])
     async def memory_append(name: str, payload: dict[str, Any]):
         try:
