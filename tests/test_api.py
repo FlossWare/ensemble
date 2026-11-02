@@ -7,6 +7,7 @@ from ensemble.api import create_app
 from ensemble.store import InMemoryDocumentStore
 from ensemble.graph_memory import InMemoryGraphStore
 from ensemble.vector_memory import InMemoryVectorStore
+from ensemble.memory_store import InMemoryMemoryStore
 
 
 def _client(tmp_path):
@@ -787,3 +788,41 @@ def test_lexical_search_suppresses_identical_message_text_across_sessions():
         }).json()["results"]
         assert len(results) == 1
         assert results[0]["text"] == message_text
+
+
+def test_successful_hybrid_search_is_recorded_in_memory_search_ledger():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        client.post("/api/v1/documents", json={
+            "source_id": "search-ledger-doc", "revision": 1,
+            "title": "Search ledger", "content": "The retrieval pipeline is observable.",
+        })
+        response = client.post("/api/v1/hybrid/search", json={"query": "retrieval pipeline"})
+        assert response.status_code == 200
+        entries = client.post("/api/v1/memory/entries", json={
+            "name": "search-ledger",
+        }).json()["entries"]
+        assert len(entries) == 1
+        assert entries[0]["query"] == "retrieval pipeline"
+        assert entries[0]["result_count"] == 1
+
+
+def test_search_ledger_failure_does_not_fail_successful_hybrid_search():
+    class FailingSearchLedger(InMemoryMemoryStore):
+        async def append(self, name, payload, event_id=None):
+            if name == "search-ledger":
+                raise OSError("simulated ledger failure")
+            return await super().append(name, payload, event_id)
+
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        memory_store=FailingSearchLedger(),
+    )
+    with TestClient(app) as client:
+        client.post("/api/v1/documents", json={
+            "source_id": "search-ledger-failure", "revision": 1,
+            "title": "Search ledger", "content": "Retrieval remains available.",
+        })
+        response = client.post("/api/v1/hybrid/search", json={"query": "retrieval"})
+        assert response.status_code == 200
+        assert response.json()["results"]
