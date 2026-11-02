@@ -538,10 +538,10 @@ document.getElementById("pipeline-run").addEventListener("click",async()=>{
  if(!textValue.trim()){output.textContent="Enter text before running the diagnostic pipeline.";return;}
  button.disabled=true;output.textContent="Running independent read-only capability probes…";
  const stages=[
-  ["Tokenization",()=>controlJson("/api/v1/tokenization/tokenize","POST",{profile:document.getElementById("tokenization-profile").value||"default",text:textValue})],
+  ["Tokenization",()=>controlJson("/api/v1/tokenization/tokenize","POST",{profile:document.getElementById("tokenization-profile").value||"lexical-v1",text:textValue})],
   ["Extraction",()=>controlJson("/api/v1/extraction/extract","POST",{text:textValue})],
   ["Intent",()=>controlJson("/api/v1/intent/classify","POST",{text:textValue})],
-  ["Chunking",()=>controlJson("/api/v1/chunking/chunk","POST",{profile:document.getElementById("chunking-profile").value||"default",source_id:"control-center-diagnostic",text:textValue,media_type:"text/plain"})]
+  ["Chunking",()=>controlJson("/api/v1/chunking/chunk","POST",{profile:document.getElementById("chunking-profile").value||"window-v1",source_id:"control-center-diagnostic",text:textValue,media_type:"text/plain"})]
  ];
  const trace={kind:"interactive-diagnostic-preview",persisted:false,warning:"These are independent current capability probes, not a correlated execution trace of ingestion.",stages:[]};
  try{
