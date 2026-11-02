@@ -52,7 +52,7 @@ def test_memory_append_once_is_idempotent_and_rejects_key_reuse():
 
 def test_memory_context_retrieval_prioritizes_parent_and_search_is_bounded():
     with client() as http:
-        http.put(
+        http.post(
             "/api/v1/memory/memories/execution/entries",
             json={
                 "entry": {
@@ -66,7 +66,7 @@ def test_memory_context_retrieval_prioritizes_parent_and_search_is_bounded():
                 },
             },
         )
-        http.put(
+        http.post(
             "/api/v1/memory/memories/execution/entries",
             json={
                 "entry": {
@@ -113,8 +113,8 @@ def test_memory_chunking_and_name_validation():
         assert [item["content"] for item in chunks] == ["# Intro\nalpha\n", "# Second\nbeta\n"]
 
         invalid = http.put(
-            "/api/v1/memory/memories/notes",
-            json={"name": "../outside", "content": "no"},
+            "/api/v1/memory/memories/bad%20name",
+            json={"content": "no"},
         )
         assert invalid.status_code == 400
 
