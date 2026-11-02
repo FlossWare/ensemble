@@ -1441,7 +1441,7 @@ def create_app(
                     revision=1,
                     title=f"{project}/{session_id} · {message['role']} · {kind}",
                     content=message["text"],
-                    chunk_profile="message-v1",
+                    chunk_profile="window-v1",
                     media_type="text/plain",
                     metadata={
                         "session_id": session_id, "project": project,
