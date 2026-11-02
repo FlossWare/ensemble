@@ -893,7 +893,8 @@ def test_hybrid_session_ingestion_populates_vector_collection_and_searches_it():
         })
         assert result.status_code == 200
         assert result.json()["retrieval"] == "hybrid"
-        assert result.json()["results"][0]["source_id"].startswith("transcript:vector-session:")
+        assert result.json()["results"][0]["source_id"].startswith("transcript:")
+        assert len(result.json()["results"][0]["source_id"]) == len("transcript:") + 64
 
 
 def test_lexical_documents_accepts_poc_session_message_contract():
@@ -915,7 +916,8 @@ def test_lexical_documents_accepts_poc_session_message_contract():
         results = client.post("/api/v1/search/lexical", json={
             "query": "searchable",
         }).json()["results"]
-        assert results[0]["source_id"].startswith("transcript:lexical-session:")
+        assert results[0]["source_id"].startswith("transcript:")
+        assert len(results[0]["source_id"]) == len("transcript:") + 64
         assert len(results[0]["text_sha"]) == 64
 
 
