@@ -54,6 +54,18 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <form id="memory-search-form"><input id="memory-query" type="text" required maxlength="2000" placeholder="Search episodic Memory"><button type="submit">Search Memory</button></form>
 <pre id="memory-results">No query run.</pre>
 </section>
+<section id="context-workbench">
+<h2>Context Assembly</h2>
+<p>Assemble bounded context from Memory and Hybrid retrieval. Compression is extractive; token counts are approximate.</p>
+<form id="context-form">
+<label>Query <input id="context-query" type="text" required maxlength="20000" placeholder="What context should Ensemble assemble?"></label>
+<label>Token budget <input id="context-budget" type="number" min="1" max="32000" value="4000"></label>
+<label><input id="context-memory" type="checkbox" checked> Include Memory</label>
+<label><input id="context-search" type="checkbox" checked> Include Hybrid retrieval</label>
+<button type="submit">Assemble context</button>
+</form>
+<pre id="context-results">No context assembled.</pre>
+</section>
 <section id="entity-workbench">
 <h2>Entity Workbench</h2>
 <p>Extract candidates without persistence, explicitly resolve them to canonical Graph identities, and create typed relationships between resolved entities.</p>
