@@ -306,7 +306,7 @@ async function controlJson(path, method="GET", payload=null){
 const capabilities=[
  ["Embeddings","/api/v1/embeddings/health",null],
  ["Vector","/api/v1/vector/health",null],
- ["Lexical","/api/v1/lexical/health","/api/v1/lexical/ready"],
+ ["Lexical","/api/v1/search/lexical/health","/api/v1/search/lexical/ready"],
  ["Hybrid","/api/v1/search/hybrid/health","/api/v1/search/hybrid/ready"],
  ["Reranking","/api/v1/reranking/health","/api/v1/reranking/ready"],
  ["Chunking","/api/v1/chunking/health","/api/v1/chunking/ready"],
