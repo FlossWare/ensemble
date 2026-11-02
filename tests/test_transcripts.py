@@ -105,7 +105,7 @@ def test_zero_byte_incomplete_tail_retry_is_idempotent_but_changed_tail_can_retr
     first = _checkpoint_commit(store, start=0, end=0, payload=b'{"partial":')
     replay = _checkpoint_commit(store, start=0, end=0, payload=b'{"partial":')
     appended = _checkpoint_commit(
-        store, start=0, end=12, payload=b'{"partial":}\n', result={"inserted": 0}
+        store, start=0, end=13, payload=b'{"partial":}\n', result={"inserted": 0}
     )
 
     assert first["replayed"] is False
