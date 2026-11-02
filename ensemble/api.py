@@ -2099,8 +2099,6 @@ def create_app(
                     degraded.append("embeddings")
                 if ingested.embedded and not ingested.vector_indexed:
                     degraded.append("vector")
-                if ingested.embedded and not ingested.vector_indexed:
-                    degraded.append("vector")
                 if stored["status"] == "duplicate":
                     duplicates += 1
                 else:
