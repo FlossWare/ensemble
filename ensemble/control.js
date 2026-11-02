@@ -316,7 +316,7 @@ const capabilities=[
  ["Intent","/api/v1/intent/health","/api/v1/intent/ready"],
  ["Ranking","/api/v1/ranking/health","/api/v1/ranking/ready"],
  ["Knowledge","/api/v1/knowledge/health","/api/v1/knowledge/ready"],
- ["Memory","/api/v1/memory/health","/api/v1/memory/ready"],
+ ["Memory","/api/v1/memory/health","/api/v1/memory/memories/{name}y"],
  ["Graph","/api/v1/graph/health",null],
  ["Thompson","/api/v1/thompson/health","/api/v1/thompson/ready"],
  ["Learning","/api/v1/learning/health","/api/v1/learning/ready"],
@@ -402,18 +402,18 @@ const memoryKnowledge=document.getElementById("memory-knowledge");
 const memoryResults=document.getElementById("memory-results");
 document.getElementById("refresh-memories").addEventListener("click",async()=>{
  memoryNames.textContent="Loading memory names…";
- try{memoryNames.textContent=JSON.stringify(await controlJson("/api/v1/memory/list"),null,2);}
+ try{memoryNames.textContent=JSON.stringify(await controlJson("/api/v1/memory/memories"),null,2);}
  catch(error){memoryNames.textContent="Memory inspection failed: "+error.message;}
 });
 document.getElementById("refresh-memory-knowledge").addEventListener("click",async()=>{
  memoryKnowledge.textContent="Loading Knowledge status…";
- try{memoryKnowledge.textContent=JSON.stringify(await controlJson("/api/v1/memory/knowledge/status"),null,2);}
+ try{memoryKnowledge.textContent=JSON.stringify(await controlJson("/api/v1/memory/sources/status"),null,2);}
  catch(error){memoryKnowledge.textContent="Knowledge status failed: "+error.message;}
 });
 document.getElementById("memory-search-form").addEventListener("submit",async event=>{
  event.preventDefault();memoryResults.textContent="Searching Memory…";
  try{
-  memoryResults.textContent=JSON.stringify(await controlJson("/api/v1/memory/search-hybrid","POST",{
+  memoryResults.textContent=JSON.stringify(await controlJson("/api/v1/memory/search/keywords/hybrid","POST",{
    query:document.getElementById("memory-query").value.trim(),top_k:10
   }),null,2);
  }catch(error){memoryResults.textContent="Memory search failed: "+error.message;}
