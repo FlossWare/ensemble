@@ -34,7 +34,7 @@ The following endpoint groups were found in `ensemble/api.py` at the time of thi
 | Ranking | `/api/v1/ranking/health`, `/ready`, `POST /rank` | Health only |
 | Reranking | `/api/v1/reranking/health`, `/ready`, `POST /rerank` | Health only; hybrid query can opt in to reranking |
 | Vector | `/api/v1/vector/health`, collection list, collection existing/upsert/metadata/delete-superseded/query | Collection list only |
-| Lexical | `/api/v1/search/lexical/health`, `/ready`, document write, search | Health only; retrieval is not separately compared in UI |
+| Lexical | `/api/v1/search/lexical/health`, `/ready`, document write, search | Health/readiness only; retrieval is not separately compared in UI |
 | Hybrid | `/api/v1/search/hybrid/health`, `/ready`, search, knowledge search, session ingest, prompt capture | Hybrid search and session ingestion |
 | Index | `/api/v1/index/health`, `/ready`, revision decisions, tombstones, source lookup, manifest | Manifest/source inspection and tombstone |
 | Knowledge | `/api/v1/knowledge/health`, `/ready`, record write/read, tombstone | Indirect status only |
