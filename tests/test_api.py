@@ -429,7 +429,7 @@ def test_document_ingestion_uses_versioned_markdown_profile_and_persists_provena
         "source_id": "markdown-source",
         "revision": 1,
         "title": "Markdown source",
-        "content": "# Architecture\\n\\nThe retrieval pipeline preserves heading provenance.",
+        "content": "# Architecture\n\nThe retrieval pipeline preserves heading provenance.",
         "chunk_profile": "markdown-v1",
         "media_type": "text/markdown",
     }
