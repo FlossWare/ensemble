@@ -418,3 +418,19 @@ document.getElementById("memory-search-form").addEventListener("submit",async ev
   }),null,2);
  }catch(error){memoryResults.textContent="Memory search failed: "+error.message;}
 });
+
+document.getElementById("source-tombstone-form").addEventListener("submit",async event=>{
+ event.preventDefault();
+ const sourceId=document.getElementById("tombstone-source-id").value.trim();
+ const sequence=Number(document.getElementById("tombstone-sequence").value);
+ const output=document.getElementById("tombstone-result");
+ if(!window.confirm("Permanently tombstone source "+sourceId+" at revision "+sequence+"?"))return;
+ output.textContent="Recording tombstone…";
+ try{
+  const result=await controlJson("/api/v1/index/tombstones","POST",{
+   source_id:sourceId,revision_sequence:sequence
+  });
+  output.textContent=JSON.stringify(result,null,2);
+  document.getElementById("refresh-index").click();
+ }catch(error){output.textContent="Tombstone failed: "+error.message;}
+});
