@@ -786,6 +786,46 @@ def test_hybrid_session_ingestion_is_idempotent_and_populates_retrieval_graph():
         assert search.json()["results"][0]["is_subagent"] is True
 
 
+def test_transcript_message_content_change_replaces_active_revision():
+    app = create_app(store=InMemoryDocumentStore())
+    base = {
+        "session": {
+            "session_id": "session-revision",
+            "project": "ensemble",
+            "file": "/work/session-revision.jsonl",
+        },
+        "messages": [{
+            "uuid": "stable-message-uuid",
+            "role": "assistant",
+            "kind": "text",
+            "text": "The original transcript wording describes the old behavior.",
+        }],
+    }
+    with TestClient(app) as client:
+        first = client.post("/api/v1/ingest/sessions", json=base)
+        assert first.status_code == 200
+        assert first.json()["inserted"] == 1
+
+        updated = {
+            **base,
+            "messages": [{
+                **base["messages"][0],
+                "text": "The revised transcript wording describes the current behavior.",
+            }],
+        }
+        second = client.post("/api/v1/ingest/sessions", json=updated)
+        assert second.status_code == 200
+        assert second.json()["inserted"] == 1
+
+        old = client.post("/api/v1/search", json={"query": "original transcript wording"})
+        current = client.post("/api/v1/search", json={"query": "revised transcript wording"})
+        assert old.status_code == 200
+        assert all(hit["source_id"] != next(iter([]), "impossible") for hit in old.json())
+        assert len(current.json()) == 1
+        assert current.json()[0]["revision"] == 2
+        assert "revised transcript wording" in current.json()[0]["text"]
+
+
 def test_hybrid_session_ingestion_rejects_invalid_messages_before_writing():
     app = create_app(store=InMemoryDocumentStore())
     with TestClient(app) as client:
