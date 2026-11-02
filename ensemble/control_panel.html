@@ -31,6 +31,13 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <form id="retrieval-form"><input id="retrieval-query" type="text" required maxlength="2000" placeholder="Search documents and knowledge"><input id="retrieval-limit" type="number" min="1" max="100" value="10"><label><input id="retrieval-rerank" type="checkbox"> Rerank candidates</label><button type="submit">Search</button></form>
 <pre id="retrieval-results">No query run.</pre>
 </section>
+<section id="session-ingest">
+<h2>Transcript Session Ingestion</h2>
+<p>Paste a structured session export. Ensemble stores message documents, append-once events and Graph relationships; it does not read arbitrary local transcript paths.</p>
+<textarea id="session-payload" rows="10" style="width:100%" placeholder='{"session":{"session_id":"session-1","project":"project","file":"/logical/path/session.jsonl"},"messages":[{"uuid":"message-1","role":"user","kind":"text","text":"Example transcript message"}]}'></textarea>
+<div class="toolbar"><button id="session-ingest-button" type="button">Ingest session</button><span id="session-ingest-status">No session submitted.</span></div>
+<pre id="session-ingest-result"></pre>
+</section>
 <section id="index-inspector">
 <h2>Index and Vector Inspection</h2>
 <div class="toolbar"><button id="refresh-index" type="button">Refresh source manifest</button><button id="refresh-vectors" type="button">Refresh vector collections</button></div>
