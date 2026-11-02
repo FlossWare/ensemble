@@ -4,6 +4,7 @@ from alembic.config import Config
 from fastapi.testclient import TestClient
 
 from ensemble.api import create_app
+from ensemble.store import InMemoryDocumentStore
 
 
 def _client(tmp_path):
@@ -459,3 +460,56 @@ def test_document_ingestion_rejects_unknown_chunk_profile(tmp_path):
             "chunk_profile": "not-a-profile",
         })
         assert response.status_code == 422
+
+
+class _FailingEmbeddingProvider:
+    available = True
+
+    def status(self):
+        return {"ok": True, "ready": True, "model": "test-model"}
+
+    async def embed(self, texts, mode="document"):
+        raise RuntimeError("simulated embedding outage")
+
+
+def test_lexical_and_hybrid_capability_routes(tmp_path):
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        embedding_provider=_FailingEmbeddingProvider(),
+    )
+    with TestClient(app) as client:
+        ingested = client.post("/api/v1/lexical/documents", json={
+            "source_id": "lexical-doc",
+            "revision": 1,
+            "title": "Lexical retrieval",
+            "content": "Lexical retrieval must continue when embedding inference is unavailable.",
+        })
+        assert ingested.status_code == 201
+        lexical = client.post("/api/v1/lexical/search", json={"query": "embedding inference"})
+        assert lexical.status_code == 200
+        assert lexical.json()["results"][0]["source_id"] == "lexical-doc"
+
+        hybrid = client.post("/api/v1/hybrid/search", json={"query": "embedding inference"})
+        assert hybrid.status_code == 200
+        assert hybrid.json()["retrieval"] == "lexical"
+        assert hybrid.json()["degraded"] == ["embeddings"]
+        assert hybrid.json()["results"][0]["source_id"] == "lexical-doc"
+
+
+def test_hybrid_prompt_capture_is_idempotent(tmp_path):
+    app = create_app(store=InMemoryDocumentStore())
+    payload = {
+        "session_id": "session-1",
+        "prompt": "Find the prior decision about lexical indexing.",
+        "timestamp": "2026-11-02T12:00:00Z",
+        "cwd": "/home/test/project",
+    }
+    with TestClient(app) as client:
+        first = client.post("/api/v1/hybrid/prompts", json=payload)
+        second = client.post("/api/v1/hybrid/prompts", json=payload)
+        assert first.status_code == 200
+        assert first.json()["status"] == "stored"
+        assert second.json()["status"] == "duplicate"
+        assert first.json()["event_id"] == second.json()["event_id"]
+        assert first.json()["vector_indexed"] is False
+        assert first.json()["lexical_indexed"] is False
