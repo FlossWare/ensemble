@@ -107,7 +107,7 @@ The previous Hybrid search routes were removed rather than aliased. Control Cent
 - `POST /api/v1/ingest/sessions`
 - `POST /api/v1/memory/events`
 
-Prompt capture is not a search operation and remains under review against the Memory event/resource model. Structured session ingestion is now `POST /api/v1/ingest/sessions`, alongside the other source ingestion operations. Do not place ingestion routes under a generic Hybrid prefix.
+Prompt capture now uses `POST /api/v1/memory/events`. Structured session ingestion uses `POST /api/v1/ingest/sessions`, alongside the other source ingestion operations.
 
 ## 4. Audit findings and proposed direction
 
@@ -115,7 +115,7 @@ Prompt capture is not a search operation and remains under review against the Me
 |---|---|---|---|
 | Search | `/search`, `/search/lexical`, `/search/hybrid` | Three related contracts with distinct caller intent and response shape | Retain the default, lexical-only, and enriched Hybrid contracts under one Search namespace |
 | Ingestion | `/ingest/*` | Source ingestion now shares one namespace, including structured sessions | Complete ingestion route consistency and decide whether lexical document ingestion is still needed as a separate route |
-| Vector | Collection routes now use record resources for bulk upsert, lookup, metadata updates, and pruning; query remains an explicit vector operation | Mixes resource operations and implementation-flavored verbs | Bulk record replacement uses PUT; record lookup and query remain explicit operations; metadata updates use PATCH; pruning remains a named maintenance action whose lifecycle semantics need review |
+| Vector | Collection routes use record resources for bulk upsert, lookup, metadata updates, and pruning; query remains an explicit vector operation | Resource operations are now consistent; pruning is an explicit maintenance action | Review whether pruning should remain a public maintenance operation or be folded into source lifecycle orchestration |
 | Graph | `nodes`, `edges`, `nodes/{id}`, `query`, `traverse` | Resource paths now consistent; graph computations remain explicit operations | Node and edge mutations now use `/graph/nodes` and `/graph/edges`, with reads at `/graph/nodes/{node_id}`; query/traversal remain explicit operations |
 | Memory | Named memories, nested entries, search strategies, source imports/reconciliation, recall, events | Resource model is now explicit; search strategies are nested consistently | Review source identity and event lifecycle semantics; do not reintroduce action-only paths |
 | Knowledge / Index | Records, sources, revisions, tombstones | Mostly resource-oriented; tombstone is represented differently in the two groups | Decide one consistent tombstone lifecycle and preserve its revision semantics |
@@ -124,12 +124,21 @@ Prompt capture is not a search operation and remains under review against the Me
 | Processing capabilities | `chunk`, `tokenize`, `extract`, `classify`, `rank`, `rerank`, `embed` | These are computational operations, not durable CRUD resources | Explicit operation names are acceptable; keep capability roots and status suffixes consistent |
 | Configuration | `GET /api/v1/system/config` | Current implementation returns persistence root and database URL, exposing implementation details contrary to the contract principles | Reduce to caller-relevant, non-sensitive runtime configuration; keep storage internals private |
 
-## 5. Search contract semantics\n\n- `POST /api/v1/search`: default retrieval contract; returns the standard result collection.\n- `POST /api/v1/search/lexical`: lexical-only retrieval; returns lexical results and retrieval metadata.\n- `POST /api/v1/search/hybrid`: Hybrid orchestration; includes retrieval diagnostics, intent enrichment, and related-session context when available.\n- `POST /api/v1/search/hybrid/knowledge`: Knowledge-scoped Hybrid retrieval.\n\nThese contracts share implementation components but are not aliases: their response contracts and caller intent differ.\n\n## 6. Recommended cleanup sequence
+## 5. Search contract semantics
+
+- `POST /api/v1/search`: default retrieval contract; returns the standard result collection.
+- `POST /api/v1/search/lexical`: lexical-only retrieval; returns lexical results and retrieval metadata.
+- `POST /api/v1/search/hybrid`: Hybrid orchestration; includes retrieval diagnostics, intent enrichment, and related-session context when available.
+- `POST /api/v1/search/hybrid/knowledge`: Knowledge-scoped Hybrid retrieval.
+
+These contracts share implementation components but are not aliases: their response contracts and caller intent differ.
+
+## 6. Recommended cleanup sequence
 
 1. **Search semantics:** complete. Default, lexical-only, and enriched Hybrid retrieval now live under the Search namespace with explicit distinctions.
 2. **Ingestion:** structured session ingestion moved to `/ingest/sessions`; finish evaluating the lexical document convenience route and prompt-event placement.
 3. **Graph:** node and edge resources moved to plural resource paths; query and traversal remain explicit graph operations.
-4. **Vector:** define collection and record resource semantics, then replace action-heavy CRUD paths.
+4. **Vector:** collection record operations now use PUT/PATCH and resource-oriented paths; review the lifecycle ownership of pruning.
 5. **Memory:** named-memory and entry resources, search strategies, source import/reconciliation, recall, and event capture now have canonical paths; next review source identity and event lifecycle semantics.
 6. **Knowledge and Index:** align tombstone lifecycle semantics.
 7. **Learning and Thompson:** normalize state, outcomes, reports, and domain actions.
