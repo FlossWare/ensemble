@@ -11,15 +11,17 @@ from .embeddings import EmbeddingProvider
 from .models import Chunk, Document, DocumentIn, DocumentOut, SearchHit
 from .store import DocumentStore
 from .reranking import Reranker
+from .vector_store import VectorStore
 
 
 class DocumentService:
-    def __init__(self, store: DocumentStore, chunker: Chunker, embeddings: EmbeddingProvider):
+    def __init__(self, store: DocumentStore, chunker: Chunker, embeddings: EmbeddingProvider, vector_store: VectorStore | None = None):
         self.store = store
         self.chunker = chunker
         self.embeddings = embeddings
+        self.vector_store = vector_store
 
-    async def ingest(self, request: DocumentIn, *, embed: bool = True) -> DocumentOut:
+    async def ingest(self, request: DocumentIn, *, embed: bool = True, vector_collection: str | None = None) -> DocumentOut:
         document = Document(request.source_id, request.revision, request.title, request.content)
         records = chunk_text(request.chunk_profile, request.source_id, request.content, request.media_type)
         if not records:
@@ -39,6 +41,34 @@ class DocumentService:
         for chunk in chunks:
             chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
         document = await self.store.save(document, chunks)
+        if (
+            vector_collection and embed and self.vector_store is not None
+            and self.embeddings.available and chunks and all(chunk.embedding for chunk in chunks)
+        ):
+            status = self.embeddings.status()
+            model = status.get("model") or "unknown"
+            dimensions = status.get("dimensions") or len(chunks[0].embedding)
+            digest = hashlib.sha256(request.content.encode("utf-8")).hexdigest()
+            await self.vector_store.upsert(
+                vector_collection, model, dimensions,
+                [{
+                    "id": str(chunk.id),
+                    "embedding": chunk.embedding,
+                    "document": chunk.content,
+                    "metadata": {
+                        "source_id": document.source_id,
+                        "revision": document.revision,
+                        "title": document.title,
+                        "chunk_id": str(chunk.id),
+                        "chunk_ordinal": chunk.ordinal,
+                        "chunk_profile": chunk.profile,
+                        "chunk_start": chunk.start,
+                        "chunk_end": chunk.end,
+                        "chunk_header": chunk.header,
+                        "content_sha256": digest,
+                    },
+                } for chunk in chunks],
+            )
         return DocumentOut(
             id=document.id,
             source_id=document.source_id,
@@ -52,10 +82,11 @@ class DocumentService:
 
 
 class SearchService:
-    def __init__(self, store: DocumentStore, embeddings: EmbeddingProvider, reranker: Reranker | None = None):
+    def __init__(self, store: DocumentStore, embeddings: EmbeddingProvider, reranker: Reranker | None = None, vector_store: VectorStore | None = None):
         self.store = store
         self.embeddings = embeddings
         self.reranker = reranker
+        self.vector_store = vector_store
 
     async def lexical_search(self, query: str, limit: int = 10) -> list[SearchHit]:
         return (await self.search_with_status(query, limit, include_vector=False))["results"]
@@ -84,12 +115,20 @@ class SearchService:
         if include_vector and self.embeddings.available:
             try:
                 query_vector = (await self.embeddings.embed([query], mode="query"))[0]
-                vector_scores = {
-                    item.chunk.id: score
-                    for item in indexed
-                    if item.chunk.embedding
-                    and (score := _cosine(query_vector, item.chunk.embedding)) > 0
-                }
+                if self.vector_store is not None:
+                    vector_hits = await self.vector_store.query("transcript_text", query_vector, 200)
+                    known_ids = {str(item.chunk.id): item.chunk.id for item in indexed}
+                    vector_scores = {
+                        known_ids[hit["id"]]: float(hit["score"])
+                        for hit in vector_hits if hit["id"] in known_ids and float(hit["score"]) > 0
+                    }
+                if not vector_scores:
+                    vector_scores = {
+                        item.chunk.id: score
+                        for item in indexed
+                        if item.chunk.embedding
+                        and (score := _cosine(query_vector, item.chunk.embedding)) > 0
+                    }
             except Exception:
                 # Preserve lexical results when the embedding dependency is degraded.
                 degraded.append("embeddings")
