@@ -422,3 +422,40 @@ def test_knowledge_validation_rejects_missing_provenance_and_profiles(tmp_path):
         payload["profiles"] = {}
         assert client.post("/api/v1/knowledge/records", json=payload).status_code == 400
         assert client.get("/api/v1/knowledge/records/missing").status_code == 404
+
+
+def test_document_ingestion_uses_versioned_markdown_profile_and_persists_provenance(tmp_path):
+    payload = {
+        "source_id": "markdown-source",
+        "revision": 1,
+        "title": "Markdown source",
+        "content": "# Architecture\\n\\nThe retrieval pipeline preserves heading provenance.",
+        "chunk_profile": "markdown-v1",
+        "media_type": "text/markdown",
+    }
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/documents", json=payload)
+        assert ingested.status_code == 201
+        assert ingested.json()["chunk_profile"] == "markdown-v1"
+        hits = client.post("/api/v1/search", json={"query": "retrieval pipeline"}).json()
+        assert len(hits) == 1
+        assert hits[0]["chunk_profile"] == "markdown-v1"
+        assert hits[0]["chunk_header"] == "Architecture"
+        assert payload["content"][hits[0]["chunk_start"]:hits[0]["chunk_end"]] == hits[0]["text"]
+
+    with _client(tmp_path) as client:
+        hits = client.post("/api/v1/search", json={"query": "heading provenance"}).json()
+        assert hits[0]["chunk_profile"] == "markdown-v1"
+        assert hits[0]["chunk_header"] == "Architecture"
+
+
+def test_document_ingestion_rejects_unknown_chunk_profile(tmp_path):
+    with _client(tmp_path) as client:
+        response = client.post("/api/v1/documents", json={
+            "source_id": "invalid-profile",
+            "revision": 1,
+            "title": "Invalid profile",
+            "content": "This should not be ingested.",
+            "chunk_profile": "not-a-profile",
+        })
+        assert response.status_code == 422
