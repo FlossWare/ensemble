@@ -1354,11 +1354,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.get("/api/v1/search/hybrid/health", tags=["hybrid"])
+    @app.get("/api/v1/search/hybrid/health", tags=["search"])
     async def hybrid_health():
         return {"ok": True, "service": "hybrid"}
 
-    @app.get("/api/v1/search/hybrid/ready", tags=["hybrid"])
+    @app.get("/api/v1/search/hybrid/ready", tags=["search"])
     async def hybrid_ready():
         try:
             await document_store.check_ready()
@@ -1370,7 +1370,7 @@ def create_app(
             "degraded_mode": "lexical fallback",
         }
 
-    @app.post("/api/v1/search/hybrid", tags=["hybrid"])
+    @app.post("/api/v1/search/hybrid", tags=["search"])
     async def hybrid_search(request: SearchIn):
         try:
             result = await search.search_with_status(request.query, request.limit, rerank=request.rerank)
@@ -1436,7 +1436,7 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail="hybrid search failed") from exc
 
-    @app.post("/api/v1/search/hybrid/knowledge", tags=["hybrid"])
+    @app.post("/api/v1/search/hybrid/knowledge", tags=["search"])
     async def hybrid_knowledge_search(request: SearchIn):
         if not embeddings.available:
             raise HTTPException(status_code=503, detail="knowledge search requires an available embedding provider")
