@@ -449,3 +449,107 @@ document.getElementById("session-ingest-button").addEventListener("click",async(
  }catch(error){status.textContent="Session ingestion failed: "+error.message;}
  finally{button.disabled=false;}
 });
+
+/* Read-only capability workbenches and interactive diagnostic pipeline. */
+async function loadProfileOptions(path,selectId,resultsId){
+ const select=document.getElementById(selectId),output=document.getElementById(resultsId);
+ try{
+  const data=await controlJson(path);
+  const profiles=Array.isArray(data.profiles)?data.profiles:[];
+  select.replaceChildren();
+  for(const profile of profiles){
+   const name=typeof profile==="string"?profile:profile.name;
+   if(!name)continue;
+   const option=document.createElement("option");option.value=name;option.textContent=name;select.append(option);
+  }
+  output.textContent=JSON.stringify(data,null,2);
+  return profiles;
+ }catch(error){output.textContent="Could not load profiles: "+error.message;return [];}
+}
+document.getElementById("chunking-refresh").addEventListener("click",()=>loadProfileOptions("/api/v1/chunking/profiles","chunking-profile","chunking-results"));
+document.getElementById("tokenization-refresh").addEventListener("click",()=>loadProfileOptions("/api/v1/tokenization/profiles","tokenization-profile","tokenization-results"));
+loadProfileOptions("/api/v1/chunking/profiles","chunking-profile","chunking-results");
+loadProfileOptions("/api/v1/tokenization/profiles","tokenization-profile","tokenization-results");
+document.getElementById("chunking-preview").addEventListener("click",async()=>{
+ const button=document.getElementById("chunking-preview"),output=document.getElementById("chunking-results");
+ button.disabled=true;
+ try{
+  const result=await controlJson("/api/v1/chunking/chunk","POST",{
+   profile:document.getElementById("chunking-profile").value,
+   source_id:"control-center-preview",
+   text:document.getElementById("chunking-text").value,
+   media_type:"text/plain"
+  });
+  output.textContent=JSON.stringify(result,null,2);
+ }catch(error){output.textContent="Chunk preview failed: "+error.message;}
+ finally{button.disabled=false;}
+});
+document.getElementById("tokenization-preview").addEventListener("click",async()=>{
+ const button=document.getElementById("tokenization-preview"),output=document.getElementById("tokenization-results");
+ button.disabled=true;
+ try{
+  const result=await controlJson("/api/v1/tokenization/tokenize","POST",{
+   profile:document.getElementById("tokenization-profile").value,
+   text:document.getElementById("tokenization-text").value
+  });
+  output.textContent=JSON.stringify(result,null,2);
+ }catch(error){output.textContent="Tokenization failed: "+error.message;}
+ finally{button.disabled=false;}
+});
+document.getElementById("graph-query-form").addEventListener("submit",async event=>{
+ event.preventDefault();const output=document.getElementById("graph-results");
+ try{
+  let properties=JSON.parse(document.getElementById("graph-node-properties").value||"{}");
+  if(!properties||Array.isArray(properties)||typeof properties!=="object")throw new Error("Properties must be a JSON object.");
+  const result=await controlJson("/api/v1/graph/query","POST",{
+   type:document.getElementById("graph-node-type").value.trim()||null,properties
+  });
+  output.textContent=JSON.stringify(result,null,2);
+ }catch(error){output.textContent="Graph query failed: "+error.message;}
+});
+document.getElementById("graph-node-form").addEventListener("submit",async event=>{
+ event.preventDefault();const output=document.getElementById("graph-results");
+ try{output.textContent=JSON.stringify(await controlJson("/api/v1/graph/node/"+encodeURIComponent(document.getElementById("graph-node-id").value.trim())),null,2);}
+ catch(error){output.textContent="Node lookup failed: "+error.message;}
+});
+document.getElementById("graph-traverse-form").addEventListener("submit",async event=>{
+ event.preventDefault();const output=document.getElementById("graph-results");
+ try{
+  const edgeType=document.getElementById("graph-edge-type").value.trim();
+  const result=await controlJson("/api/v1/graph/traverse","POST",{
+   start:document.getElementById("graph-start-id").value.trim(),
+   direction:document.getElementById("graph-direction").value,
+   max_depth:Number(document.getElementById("graph-depth").value),
+   edge_type:edgeType||null
+  });
+  output.textContent=JSON.stringify(result,null,2);
+ }catch(error){output.textContent="Graph traversal failed: "+error.message;}
+});
+document.getElementById("knowledge-lookup-form").addEventListener("submit",async event=>{
+ event.preventDefault();const output=document.getElementById("knowledge-results");
+ try{
+  const id=document.getElementById("knowledge-source-id").value.trim();
+  output.textContent=JSON.stringify(await controlJson("/api/v1/knowledge/records/"+encodeURIComponent(id)),null,2);
+ }catch(error){output.textContent="Knowledge lookup failed: "+error.message;}
+});
+document.getElementById("pipeline-run").addEventListener("click",async()=>{
+ const button=document.getElementById("pipeline-run"),output=document.getElementById("pipeline-results");
+ const textValue=document.getElementById("pipeline-text").value;
+ if(!textValue.trim()){output.textContent="Enter text before running the diagnostic pipeline.";return;}
+ button.disabled=true;output.textContent="Running independent read-only capability probes…";
+ const stages=[
+  ["Tokenization",()=>controlJson("/api/v1/tokenization/tokenize","POST",{profile:document.getElementById("tokenization-profile").value||"default",text:textValue})],
+  ["Extraction",()=>controlJson("/api/v1/extraction/extract","POST",{text:textValue})],
+  ["Intent",()=>controlJson("/api/v1/intent/classify","POST",{text:textValue})],
+  ["Chunking",()=>controlJson("/api/v1/chunking/chunk","POST",{profile:document.getElementById("chunking-profile").value||"default",source_id:"control-center-diagnostic",text:textValue,media_type:"text/plain"})]
+ ];
+ const trace={kind:"interactive-diagnostic-preview",persisted:false,warning:"These are independent current capability probes, not a correlated execution trace of ingestion.",stages:[]};
+ try{
+  for(const [name,run] of stages){
+   const started=performance.now();
+   try{const result=await run();trace.stages.push({name,status:"completed",duration_ms:Math.round(performance.now()-started),result});}
+   catch(error){trace.stages.push({name,status:"failed",duration_ms:Math.round(performance.now()-started),error:error.message});}
+  }
+  output.textContent=JSON.stringify(trace,null,2);
+ }finally{button.disabled=false;}
+});
