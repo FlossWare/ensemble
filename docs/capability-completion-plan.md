@@ -41,10 +41,9 @@ These items are implemented foundations, not claims that every operational requi
 
 ### 2. Complete transcript ingestion lifecycle
 
-- Turn the existing incremental JSONL parser into a durable ingestion workflow; the current caller-supplied byte-slice parser and synchronous session ingestion are not durable jobs.
-- Persist source identity, revision, byte checkpoint, operation state, and failure details.
-- Make retries idempotent and prevent acknowledgement before durable indexing succeeds.
-- Resume safely after process restart.
+- The raw JSONL path now has durable per-slice job records, revision-scoped byte checkpoints, attempt/error/result tracking, idempotent retries, and startup recovery of interrupted operations.
+- Job payload bytes are not retained. After a restart, the caller must resubmit the same slice; ingestion is still synchronous and not queue-backed.
+- Continue validating that a checkpoint advances only after durable indexing succeeds, including failures between document, Memory, Graph, Vector, and checkpoint writes.
 - Handle changed source revisions, truncation, malformed records, and incomplete trailing records.
 - Keep filesystem access caller-authorized and scope-restricted; do not allow arbitrary server-side paths.
 
@@ -156,11 +155,11 @@ The following work is implemented in the current review branch, with CI verifica
 - Memory context assembly is exposed as a REST capability with deterministic ordering, approximate character-based token budgeting, extractive compression, and source metadata.
 - System configuration reports listener and durable-persistence status without exposing filesystem paths or database URLs.
 
-These are implemented slices, not a declaration that the platform is production-ready. In particular, transcript parsing still relies on caller-supplied byte slices; it does not yet own durable ingestion jobs or restart checkpoints.
+These are implemented slices, not a declaration that the platform is production-ready. Transcript ingestion now owns durable per-slice job/checkpoint state, but it still relies on caller-supplied bytes and synchronous request processing; automatic payload replay after restart is not implemented.
 
 ## Remaining implementation sequence
 
-1. Durable transcript ingestion jobs with persisted byte checkpoints, retries, revision handling, and restart recovery.
+1. Close remaining transcript lifecycle gaps: source revision replacement/truncation semantics, retry reconciliation across partially completed capability writes, and the decision on durable payload retention versus caller resubmission.
 2. Close remaining source lifecycle gaps: cleanup retry state, stale vector reconciliation, rebuild/reindex semantics, and failure recovery across Index, document, Knowledge, Graph, and Vector stores.
 3. Complete Memory scoped-source reconciliation, event lifecycle semantics, conflict/deletion policy, and retrieval quality.
 4. Add bounded deadlines/cancellation and durable operation tracking for long-running ingestion and rebuild operations.
