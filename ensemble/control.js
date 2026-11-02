@@ -442,7 +442,7 @@ document.getElementById("session-ingest-button").addEventListener("click",async(
  button.disabled=true;status.textContent="Validating and ingesting session…";
  try{
   const payload=JSON.parse(document.getElementById("session-payload").value);
-  const result=await controlJson("/api/v1/hybrid/sessions/ingest","POST",payload);
+  const result=await controlJson("/api/v1/ingest/sessions","POST",payload);
   status.textContent=result.inserted+" new, "+result.already_present+" already present.";
   output.textContent=JSON.stringify(result,null,2);
   document.getElementById("refresh-index").click();
