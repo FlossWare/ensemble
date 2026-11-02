@@ -433,11 +433,8 @@ def create_app(
         settings = app.state.settings
         return {
             "ok": True,
-            "host": settings.host,
-            "port": settings.port,
-            "persistence_root": str(settings.persistence_root),
-            "database": "sqlite",
-            "database_url": settings.database_url,
+            "listener": {"host": settings.host, "port": settings.port},
+            "persistence": {"mode": "durable", "configured": True},
         }
 
     @app.get("/health", tags=["operations"])
