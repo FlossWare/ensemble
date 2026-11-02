@@ -493,7 +493,7 @@ def test_lexical_and_hybrid_capability_routes(tmp_path):
         assert lexical.status_code == 200
         assert lexical.json()["results"][0]["source_id"] == "lexical-doc"
 
-        hybrid = client.post("/api/v1/hybrid/search", json={"query": "embedding inference"})
+        hybrid = client.post("/api/v1/search/hybrid", json={"query": "embedding inference"})
         assert hybrid.status_code == 200
         assert hybrid.json()["retrieval"] == "lexical"
         assert hybrid.json()["degraded"] == ["embeddings"]
@@ -581,7 +581,7 @@ def test_hybrid_search_can_apply_opt_in_cross_encoder_reranking():
             })
             assert response.status_code == 201
 
-        result = client.post("/api/v1/hybrid/search", json={
+        result = client.post("/api/v1/search/hybrid", json={
             "query": "topic", "limit": 10, "rerank": True,
         })
         assert result.status_code == 200
@@ -605,7 +605,7 @@ def test_hybrid_search_enriches_intent_and_related_graph_sessions():
     asyncio.run(seed_graph())
     app = create_app(store=InMemoryDocumentStore(), graph_store=graph)
     with TestClient(app) as client:
-        result = client.post("/api/v1/hybrid/search", json={
+        result = client.post("/api/v1/search/hybrid", json={
             "query": "why does /work/ensemble/ensemble/api.py fail",
         })
         assert result.status_code == 200
@@ -695,7 +695,7 @@ def test_hybrid_session_ingestion_is_idempotent_and_populates_retrieval_graph():
         assert second.status_code == 200
         assert second.json()["already_present"] == 2
 
-        search = client.post("/api/v1/hybrid/search", json={
+        search = client.post("/api/v1/search/hybrid", json={
             "query": "why does /work/ensemble/config.py fail",
         })
         assert search.status_code == 200
@@ -768,7 +768,7 @@ def test_hybrid_session_ingestion_populates_vector_collection_and_searches_it():
         transcript = next(item for item in collections if item["name"] == "transcript_text")
         assert transcript["count"] == 1
 
-        result = client.post("/api/v1/hybrid/search", json={
+        result = client.post("/api/v1/search/hybrid", json={
             "query": "hybrid search", "limit": 10,
         })
         assert result.status_code == 200
@@ -860,7 +860,7 @@ def test_successful_hybrid_search_is_recorded_in_memory_search_ledger():
             "source_id": "search-ledger-doc", "revision": 1,
             "title": "Search ledger", "content": "The retrieval pipeline is observable.",
         })
-        response = client.post("/api/v1/hybrid/search", json={"query": "retrieval pipeline"})
+        response = client.post("/api/v1/search/hybrid", json={"query": "retrieval pipeline"})
         assert response.status_code == 200
         entries = client.post("/api/v1/memory/entries", json={
             "name": "search-ledger",
@@ -886,7 +886,7 @@ def test_search_ledger_failure_does_not_fail_successful_hybrid_search():
             "source_id": "search-ledger-failure", "revision": 1,
             "title": "Search ledger", "content": "Retrieval remains available.",
         })
-        response = client.post("/api/v1/hybrid/search", json={"query": "retrieval"})
+        response = client.post("/api/v1/search/hybrid", json={"query": "retrieval"})
         assert response.status_code == 200
         assert response.json()["results"]
 
