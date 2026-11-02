@@ -114,3 +114,14 @@ Prefer the first increment for capability previews and the second only when the 
 - Endpoint existence does not establish complete POC parity, production readiness, or suitability for an administrative UI.
 - Some endpoint groups include mutation operations. The Control Center should expose them only when explicitly required and protected by the accepted interaction model.
 - The route list and UI will evolve; update this document when endpoint contracts or workbench coverage change.
+
+
+## Intent and entities
+
+- Intent preview: `POST /api/v1/intent/classify`
+- Entity extraction preview: `POST /api/v1/entities/extract`
+- Explicit canonical identity resolution: `POST /api/v1/entities/resolve`
+- Explicit canonical relationship creation: `POST /api/v1/entities/link`
+- Entity capability status: `GET /api/v1/entities/health` and `GET /api/v1/entities/ready`
+
+The Entity Workbench keeps extraction read-only. Resolution and linking require separate operator actions because they persist canonical nodes and Graph edges.
