@@ -137,8 +137,9 @@ def test_reingest_is_idempotent_and_latest_revision_is_searchable(tmp_path):
         assert current[0]["revision"] == 2
         assert current[0]["document_id"] == second["id"]
 
-        historical = client.post("/api/v1/ingest/documents", json=original).json()
-        assert historical["id"] == first["id"]
+        historical = client.post("/api/v1/ingest/documents", json=original)
+        assert historical.status_code == 409
+        assert historical.json()["status"] == 409
         still_current = client.post("/api/v1/search", json={"query": "indexing behavior"}).json()
         assert len(still_current) == 1
         assert still_current[0]["revision"] == 2
@@ -578,7 +579,7 @@ def test_sqlite_lexical_index_replaces_reingested_revision(tmp_path):
             "content": "obsolete terminology lives here",
         }
         assert client.post("/api/v1/ingest/documents", json=payload).status_code == 201
-        replacement = {**payload, "content": "current terminology lives here"}
+        replacement = {**payload, "revision": 2, "content": "current terminology lives here"}
         assert client.post("/api/v1/ingest/documents", json=replacement).status_code == 201
         old = client.post("/api/v1/search/lexical", json={"query": "obsolete"}).json()
         current = client.post("/api/v1/search/lexical", json={"query": "current"}).json()
