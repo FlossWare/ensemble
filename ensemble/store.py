@@ -13,6 +13,8 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
 
+from .tokenization import tokenize
+
 from .models import Chunk, Document
 
 
@@ -59,6 +61,7 @@ class DocumentStore(Protocol):
     async def check_ready(self) -> None: ...
     async def save(self, document: Document, chunks: list[Chunk]) -> Document: ...
     async def all_chunks(self) -> list[IndexedChunk]: ...
+    async def lexical_search(self, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]: ...
 
 
 class InMemoryDocumentStore:
@@ -102,6 +105,18 @@ class InMemoryDocumentStore:
             )
         return result
 
+    async def lexical_search(self, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]:
+        terms = {item["term"] for item in tokenize("lexical-v1", query)}
+        if not terms:
+            return []
+        matches = []
+        for item in await self.all_chunks():
+            content_terms = {token["term"] for token in tokenize("lexical-v1", item.chunk.content)}
+            overlap = len(terms & content_terms)
+            if overlap:
+                matches.append((item, overlap / len(terms)))
+        return sorted(matches, key=lambda pair: (-pair[1], str(pair[0].chunk.id)))[:limit]
+
 
 class SqlDocumentStore:
     """Durable SQLite store. Alternative persistence implementations belong to FlossWare proper."""
@@ -134,14 +149,14 @@ class SqlDocumentStore:
             raise RuntimeError(
                 "Ensemble database schema is not initialized; run 'alembic upgrade head'"
             )
-        missing = {"ensemble_documents", "ensemble_chunks", "ensemble_vector_collections", "ensemble_vector_records", "ensemble_index_sources", "ensemble_knowledge_records", "ensemble_graph_nodes", "ensemble_graph_edges", "ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources", "ensemble_ga_runs", "ensemble_ga_promotions", "ensemble_thompson_models", "ensemble_thompson_events", "ensemble_learning_outcomes", "ensemble_learning_artifacts"} - set(tables)
+        missing = {"ensemble_documents", "ensemble_chunks", "ensemble_vector_collections", "ensemble_vector_records", "ensemble_index_sources", "ensemble_knowledge_records", "ensemble_graph_nodes", "ensemble_graph_edges", "ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources", "ensemble_ga_runs", "ensemble_ga_promotions", "ensemble_thompson_models", "ensemble_thompson_events", "ensemble_learning_outcomes", "ensemble_learning_artifacts", "ensemble_lexical_fts"} - set(tables)
         if missing:
             raise RuntimeError(
                 "Ensemble database schema is incomplete; run 'alembic upgrade head'"
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0012_chunk_provenance":
+        if revision != "0013_lexical_fts":
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )
@@ -209,6 +224,10 @@ class SqlDocumentStore:
             )
 
             await connection.execute(
+                text("DELETE FROM ensemble_lexical_fts WHERE document_id = :document_id"),
+                {"document_id": str(document.id)},
+            )
+            await connection.execute(
                 delete(self.chunks).where(self.chunks.c.document_id == str(document.id))
             )
             if chunks:
@@ -226,6 +245,24 @@ class SqlDocumentStore:
                     }
                     for chunk in chunks
                 ])
+                lexical_rows = []
+                for chunk in chunks:
+                    analyzed = " ".join(token["term"] for token in tokenize("lexical-v1", chunk.content))
+                    lexical_rows.append({
+                        "chunk_id": str(chunk.id),
+                        "document_id": str(document.id),
+                        "source_id": document.source_id,
+                        "title": document.title,
+                        "analyzed": analyzed,
+                    })
+                await connection.execute(
+                    text(
+                        "INSERT INTO ensemble_lexical_fts "
+                        "(chunk_id, document_id, source_id, title, analyzed) "
+                        "VALUES (:chunk_id, :document_id, :source_id, :title, :analyzed)"
+                    ),
+                    lexical_rows,
+                )
         return document
 
     async def all_chunks(self) -> list[IndexedChunk]:
@@ -268,3 +305,34 @@ class SqlDocumentStore:
             chunk.id = UUID(row["chunk_id"])
             result.append(IndexedChunk(document, chunk))
         return result
+
+    async def lexical_search(self, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]:
+        terms = []
+        seen = set()
+        for token in tokenize("lexical-v1", query):
+            term = token["term"]
+            if term not in seen:
+                seen.add(term)
+                terms.append('"' + term.replace('"', '""') + '"')
+        if not terms:
+            return []
+        expression = " OR ".join(terms)
+        statement = text("""
+            SELECT chunk_id, bm25(ensemble_lexical_fts) AS score
+            FROM ensemble_lexical_fts
+            WHERE analyzed MATCH :expression
+            ORDER BY score
+            LIMIT :limit
+        """)
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(
+                statement, {"expression": expression, "limit": limit}
+            )).mappings().all()
+        if not rows:
+            return []
+        by_id = {str(item.chunk.id): item for item in await self.all_chunks()}
+        return [
+            (by_id[row["chunk_id"]], -float(row["score"]))
+            for row in rows if row["chunk_id"] in by_id
+        ]
+
