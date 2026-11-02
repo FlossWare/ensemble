@@ -45,6 +45,7 @@ class SearchHit(BaseModel):
     lexical_score: float
     vector_score: float
     fusion_score: float
+    graph_score: float = 0.0
     chunk_profile: str = "window-v1"
     chunk_start: int = 0
     chunk_end: int = 0
