@@ -995,7 +995,7 @@ def create_app(
         }
 
 
-    @app.post("/api/v1/memory/search-semantic", tags=["memory"])
+    @app.post("/api/v1/memory/search/semantic", tags=["memory"])
     async def memory_search_semantic(payload: dict[str, Any]):
         try:
             top_k = payload.get("top_k", payload.get("limit", 10))
@@ -1006,7 +1006,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "results": result}
 
-    @app.post("/api/v1/memory/search-hybrid", tags=["memory"])
+    @app.post("/api/v1/memory/search/hybrid", tags=["memory"])
     async def memory_search_hybrid(payload: dict[str, Any]):
         try:
             top_k = payload.get("top_k", payload.get("limit", 10))
@@ -1015,8 +1015,16 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "results": result}
 
-    @app.post("/api/v1/memory/ingest", tags=["memory"])
-    async def memory_ingest(payload: dict[str, Any]):
+    @app.post("/api/v1/memory/search/keywords", tags=["memory"])
+    async def memory_search_keywords(payload: dict[str, Any]):
+        try:
+            result = await active_memory_store.search(payload.get("keywords", []), payload.get("limit", 50))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "results": result}
+
+    @app.post("/api/v1/memory/sources/import", tags=["memory"])
+    async def memory_source_import(payload: dict[str, Any]):
         try:
             result = await active_memory_store.ingest_claude_markdown(
                 payload.get("path", ""), payload.get("content", ""),
@@ -1028,8 +1036,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, **result}
 
-    @app.post("/api/v1/memory/reconcile", tags=["memory"])
-    async def memory_reconcile(payload: dict[str, Any]):
+    @app.post("/api/v1/memory/sources/reconcile", tags=["memory"])
+    async def memory_sources_reconcile(payload: dict[str, Any]):
         try:
             result = await active_memory_store.reconcile_claude_markdown(
                 payload.get("source", ""), payload.get("scope", ""), payload.get("paths", [])
@@ -1038,8 +1046,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, **result}
 
-    @app.get("/api/v1/memory/knowledge/status", tags=["memory"])
-    async def memory_knowledge_status():
+    @app.get("/api/v1/memory/sources/status", tags=["memory"])
+    async def memory_sources_status():
         return {"ok": True, **(await active_memory_store.knowledge_status())}
 
     @app.get("/api/v1/memory/health", tags=["memory"])
@@ -1054,41 +1062,45 @@ def create_app(
             raise HTTPException(status_code=503, detail="memory persistence unavailable") from exc
         return {"ok": True, "ready": True, "backend": "sqlite"}
 
-    @app.post("/api/v1/memory/read", tags=["memory"])
-    async def memory_read(payload: dict[str, Any]):
+    @app.get("/api/v1/memory/memories", tags=["memory"])
+    async def memory_list():
+        return {"ok": True, "memories": await active_memory_store.list_names()}
+
+    @app.get("/api/v1/memory/memories/{name}", tags=["memory"])
+    async def memory_read(name: str):
         try:
-            content = await active_memory_store.read(payload.get("name"))
+            content = await active_memory_store.read(name)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if content is None:
             raise HTTPException(status_code=404, detail="memory not found")
         return {"ok": True, "content": content}
 
-    @app.post("/api/v1/memory/write", tags=["memory"])
-    async def memory_write(payload: dict[str, Any]):
+    @app.put("/api/v1/memory/memories/{name}", tags=["memory"])
+    async def memory_write(name: str, payload: dict[str, Any]):
         try:
-            await active_memory_store.write(payload.get("name"), payload.get("content"))
+            await active_memory_store.write(name, payload.get("content"))
         except OverflowError as exc:
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True}
 
-    @app.post("/api/v1/memory/append", tags=["memory"])
-    async def memory_append(payload: dict[str, Any]):
+    @app.post("/api/v1/memory/memories/{name}/entries", tags=["memory"])
+    async def memory_append(name: str, payload: dict[str, Any]):
         try:
-            result = await active_memory_store.append(payload.get("name"), payload.get("entry", {}))
+            result = await active_memory_store.append(name, payload.get("entry", {}))
         except OverflowError as exc:
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, **result}
 
-    @app.post("/api/v1/memory/append-once", tags=["memory"])
-    async def memory_append_once(payload: dict[str, Any]):
+    @app.put("/api/v1/memory/memories/{name}/entries/{event_id}", tags=["memory"])
+    async def memory_append_once(name: str, event_id: str, payload: dict[str, Any]):
         try:
             result = await active_memory_store.append(
-                payload.get("name"), payload.get("entry", {}), payload.get("event_id")
+                name, payload.get("entry", {}), event_id
             )
         except OverflowError as exc:
             raise HTTPException(status_code=413, detail=str(exc)) from exc
@@ -1096,16 +1108,16 @@ def create_app(
             raise HTTPException(status_code=409 if "already exists" in str(exc) else 400, detail=str(exc)) from exc
         return {"ok": True, **result}
 
-    @app.post("/api/v1/memory/entries", tags=["memory"])
-    async def memory_entries(payload: dict[str, Any]):
+    @app.get("/api/v1/memory/memories/{name}/entries", tags=["memory"])
+    async def memory_entries(name: str, limit: int = 1000):
         try:
-            result = await active_memory_store.read_entries(payload.get("name"), payload.get("limit", 1000))
+            result = await active_memory_store.read_entries(name, limit)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "entries": result}
 
-    @app.post("/api/v1/memory/retrieve", tags=["memory"])
-    async def memory_retrieve(payload: dict[str, Any]):
+    @app.post("/api/v1/memory/recall", tags=["memory"])
+    async def memory_recall(payload: dict[str, Any]):
         try:
             result = await active_memory_store.retrieve(
                 payload.get("name"), payload.get("context", {}), payload.get("limit", 10)
@@ -1114,25 +1126,43 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "results": result}
 
-    @app.get("/api/v1/memory/list", tags=["memory"])
-    async def memory_list():
-        return {"ok": True, "memories": await active_memory_store.list_names()}
-
-    @app.post("/api/v1/memory/search", tags=["memory"])
-    async def memory_search(payload: dict[str, Any]):
-        try:
-            result = await active_memory_store.search(payload.get("keywords", []), payload.get("limit", 50))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "results": result}
-
-    @app.post("/api/v1/memory/chunk", tags=["memory"])
+    @app.post("/api/v1/memory/chunking", tags=["memory"])
     async def memory_chunk(payload: dict[str, Any]):
         try:
             result = await active_memory_store.chunk(payload.get("name"), payload.get("size", 2000))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "chunks": result}
+
+    @app.post("/api/v1/memory/events", tags=["memory"])
+    async def memory_capture_prompt(payload: dict[str, Any], request: Request):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > 262_144:
+            raise HTTPException(status_code=413, detail="request body exceeds 256 KiB")
+        session_id, prompt = payload.get("session_id"), payload.get("prompt")
+        timestamp, cwd = payload.get("timestamp"), payload.get("cwd")
+        if not isinstance(session_id, str) or not session_id or len(session_id) > 256:
+            raise HTTPException(status_code=400, detail="session_id must be a non-empty string of at most 256 characters")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 65_536:
+            raise HTTPException(status_code=400, detail="prompt must be a non-empty string of at most 65536 characters")
+        if not isinstance(timestamp, str) or not timestamp or len(timestamp) > 128:
+            raise HTTPException(status_code=400, detail="timestamp must be a non-empty string of at most 128 characters")
+        if not isinstance(cwd, str) or len(cwd) > 4096:
+            raise HTTPException(status_code=400, detail="cwd must be a string of at most 4096 characters")
+        event_id = hashlib.sha256(f"{session_id}|{timestamp}|{prompt}".encode("utf-8")).hexdigest()
+        try:
+            stored = await active_memory_store.append(
+                "prompt-ledger",
+                {"session_id": session_id, "timestamp": timestamp, "cwd": cwd, "prompt": prompt},
+                event_id=event_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "ok": True, "event_id": event_id, "status": stored["status"],
+            "vector_indexed": False, "lexical_indexed": False,
+            "index_error": None,
+        }
 
     @app.get("/api/v1/graph/health", tags=["graph"])
     async def graph_health():
