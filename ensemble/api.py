@@ -347,19 +347,46 @@ def create_app(
         decision = await active_index_store.record_revision(source_id, sequence, revision_id, profiles)
         if decision["decision"] not in {"accepted", "duplicate"}:
             return {"ok": True, "decision": decision["decision"], "source_id": source_id, "stored": False}
-        digest = await active_knowledge_store.put({
-            "source_id": source_id,
-            "revision_sequence": sequence,
-            "revision_id": revision_id,
-            "title": title,
-            "content": content,
-            "origin": provenance["origin"],
-            "locator": provenance["locator"],
-            "profiles": profiles,
-        })
+        chunk_profile = profiles.get("chunking", "window-v1")
+        media_type = profiles.get("media_type", "text/plain")
+        document = DocumentIn(
+            source_id=source_id, revision=sequence, title=title, content=content,
+            chunk_profile=chunk_profile, media_type=media_type,
+            metadata={
+                "origin": provenance["origin"], "locator": provenance["locator"],
+                "revision_id": revision_id, "profiles": profiles,
+            },
+        )
+        try:
+            indexed = await documents.ingest(
+                document, vector_collection="knowledge_chunks"
+            )
+            digest = await active_knowledge_store.put({
+                "source_id": source_id,
+                "revision_sequence": sequence,
+                "revision_id": revision_id,
+                "title": title,
+                "content": content,
+                "origin": provenance["origin"],
+                "locator": provenance["locator"],
+                "profiles": profiles,
+            })
+        except ChunkingError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            graph_entities = await index_document_entities(
+                source_id, sequence, content,
+                origin=provenance["origin"], locator=provenance["locator"],
+            )
+        except Exception:
+            graph_entities = 0
         return {
             "ok": True, "decision": decision["decision"], "source_id": source_id,
             "stored": True, "content_sha256": digest,
+            "document": indexed, "vector_indexed": indexed.vector_indexed,
+            "graph_entities_indexed": graph_entities,
         }
 
     @app.get("/api/v1/knowledge/records/{source_id}", tags=["knowledge"])
@@ -378,7 +405,9 @@ def create_app(
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         decision = await active_index_store.record_tombstone(source_id, sequence)
         if decision["decision"] == "tombstoned":
+            await document_store.tombstone_source(source_id)
             await active_knowledge_store.tombstone(source_id)
+            await active_vector_store.delete_superseded("knowledge_chunks", source_id, "")
         return {"ok": True, "decision": decision["decision"], "source_id": source_id}
 
     @app.get("/api/v1/index/health", tags=["index"])
@@ -419,6 +448,10 @@ def create_app(
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         result = await active_index_store.record_tombstone(source_id, sequence)
+        if result["decision"] == "tombstoned":
+            await document_store.tombstone_source(source_id)
+            await active_knowledge_store.tombstone(source_id)
+            await active_vector_store.delete_superseded("knowledge_chunks", source_id, "")
         return {"ok": True, **result}
 
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
