@@ -142,8 +142,8 @@ def create_app(
         description="REST-first memory, knowledge, and retrieval platform.",
         lifespan=lifespan,
     )
-    documents = DocumentService(document_store, Chunker(), embeddings)
-    search = SearchService(document_store, embeddings, active_reranker)
+    documents = DocumentService(document_store, Chunker(), embeddings, active_vector_store)
+    search = SearchService(document_store, embeddings, active_reranker, active_vector_store)
 
     app.state.store = document_store
     app.state.embedding_provider = embeddings
@@ -1417,14 +1417,13 @@ def create_app(
                     chunk_profile="message-v1",
                     media_type="text/plain",
                 )
-                try:
-                    await documents.ingest(document)
-                except Exception:
-                    if embeddings.available:
-                        degraded.append("embeddings")
-                        await documents.ingest(document, embed=False)
-                    else:
-                        raise
+                ingested = await documents.ingest(
+                    document, vector_collection="transcript_text"
+                )
+                if embeddings.available and not ingested.embedded:
+                    degraded.append("embeddings")
+                if ingested.embedded and not ingested.vector_indexed:
+                    degraded.append("vector")
                 if stored["status"] == "duplicate":
                     duplicates += 1
                 else:
