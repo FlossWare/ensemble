@@ -1998,7 +1998,13 @@ def create_app(
                 offset == checkpoint["last_start_offset"]
                 and payload_digest == checkpoint["last_payload_sha256"]
             ):
-                return {**checkpoint["last_result"], "replayed": True, "checkpoint": checkpoint}
+                replay_result = dict(checkpoint["last_result"])
+                replayed_count = int(replay_result.get("inserted", 0)) + int(
+                    replay_result.get("already_present", 0)
+                )
+                replay_result["inserted"] = 0
+                replay_result["already_present"] = replayed_count
+                return {**replay_result, "replayed": True, "checkpoint": checkpoint}
             raise HTTPException(
                 status_code=409,
                 detail=f"transcript checkpoint mismatch; expected byte offset {checkpoint['byte_offset']}",
@@ -2123,9 +2129,9 @@ def create_app(
                 }
                 stored = await active_memory_store.append("session-events", event, event_id=event_id)
                 source_identity = hashlib.sha256(
-                    f"{message['uuid']}|{kind}".encode("utf-8")
+                    f"{session_id}|{message['uuid']}|{kind}".encode("utf-8")
                 ).hexdigest()
-                source_id = f"transcript:{session_id}:{source_identity}"
+                source_id = f"transcript:{source_identity}"
                 source_state = await active_index_store.get_source(source_id)
                 if source_state is None:
                     revision = 1
