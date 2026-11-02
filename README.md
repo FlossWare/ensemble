@@ -15,11 +15,11 @@ Ensemble is the product and implementation boundary. It is not a Claude Code ext
 - MCP is an optional adapter over REST capabilities. It contains no duplicate business logic.
 - Ensemble uses SQLite for its own persistence. Alternative persistence implementations and shared infrastructure belong to FlossWare proper.
 
-See [Architecture and decisions](docs/architecture.md), [REST contract conventions](docs/rest-contracts.md), [POC capability parity](docs/poc-parity.md), [parity execution plan](docs/poc-parity-execution-plan.md), [Control Center requirements](docs/control-center-requirements.md), [Control Center API mapping](docs/control-center-api-mapping.md), and [current implementation status](docs/implementation-status.md).
+See [Architecture and decisions](docs/architecture.md), [REST contract conventions](docs/rest-contracts.md), [POC capability inventory](docs/poc-parity.md), [functionality-first capability completion plan](docs/capability-completion-plan.md), [Control Center requirements](docs/control-center-requirements.md), [Control Center API mapping](docs/control-center-api-mapping.md), and [current implementation status](docs/implementation-status.md).
 
 ## Current implementation
 
-The Python application provides health/readiness, durable document ingestion, versioned window/Markdown/message chunking with persisted provenance, SQLite FTS5 lexical indexing with shared tokenization and BM25, exact SQLite vector collections, Hybrid lexical/vector retrieval with degraded-mode fallback, optional cross-encoder reranking, intent enrichment and graph-based related-session lookup. It also includes SQLite-backed episodic Memory and Knowledge, Index revision/tombstone management, Graph, Thompson sampling, Learning outcomes/artifacts, a bounded GA optimizer, extraction, tokenization, and explainable ranking through one FastAPI application. Raw JSONL transcript ingestion now supports caller-supplied incremental slices with UTF-8 byte checkpoints; bounded PDF uploads and public single-page HTML/plain-text URI ingestion feed the shared document pipeline. Durable transcript checkpoint jobs, broad website crawling, OCR, complete hybrid channel orchestration, and several deeper Memory/GA operational behaviors remain tracked in the parity inventory.
+The Python application provides health/readiness, durable document ingestion, versioned window/Markdown/message chunking with persisted provenance, SQLite FTS5 lexical indexing with shared tokenization and BM25, exact SQLite vector collections, Hybrid lexical/vector retrieval with degraded-mode fallback, optional cross-encoder reranking, intent enrichment and graph-based related-session lookup. It also includes SQLite-backed episodic Memory and Knowledge, Index revision/tombstone management, Graph, Thompson sampling, Learning outcomes/artifacts, a bounded GA optimizer, extraction, tokenization, and explainable ranking through one FastAPI application. Raw JSONL transcript ingestion supports caller-supplied incremental slices with UTF-8 byte checkpoints; bounded PDF uploads and public single-page HTML/plain-text URI ingestion feed the shared document pipeline. Durable transcript checkpoint jobs, broad website crawling, OCR, complete hybrid channel orchestration, and several deeper Memory/GA operational behaviors remain open in the [capability completion plan](docs/capability-completion-plan.md).
 
 SQLite is the only persistence implementation in this repository. The storage adapter is private to the implementation; REST contracts expose neither database choice nor schema. Database schema changes are managed with Alembic migrations.
 
@@ -44,7 +44,7 @@ ENSEMBLE_PERSISTENCE_ROOT=/var/lib/ensemble python -m ensemble --host 127.0.0.1 
 
 The API refuses to start against an unmigrated or incomplete database. Apply migrations as a deployment step before starting the application.
 
-Run tests:
+Run the existing tests:
 
 ```bash
 pytest
@@ -58,7 +58,7 @@ This repository contains the Ensemble platform only.
 
 Client-specific integrations belong in separate consumer repositories (for example, ensemble-claude, ensemble-codex, ensemble-cursor, and ensemble-crush). The broader FlossWare ecosystem is not part of this repository's scope.
 
-The historical claude-ensemble and poc-claude-ensemble repositories are reference material for capability discovery, behavior, and contract compatibility. They are not runtime dependencies or the target implementation.
+The historical claude-ensemble and poc-claude-ensemble repositories are reference material for capability discovery and useful behavior. They are not runtime dependencies or the target implementation. Their internal designs and test suites are not specifications that Ensemble must reproduce.
 
 Existing POC services and data must remain undisturbed during this work. Ensemble must not couple itself to POC process internals, database files, or persistence directories. Any required data migration will use an explicitly designed, supported interface or export/import process.
 
