@@ -1,7 +1,7 @@
 # REST Route Inventory and Naming Audit
 
 **Status:** Working inventory for the capability-first REST convention.
-**Branch:** `parity/poc-capability-inventory`
+**Branch:** `review/core-services-2026-11-02`
 **Purpose:** Record the current public route surface, identify inconsistent naming, and sequence cleanup without making speculative breaking changes.
 
 ## 1. Governing rule
@@ -108,7 +108,7 @@ The previous Hybrid search routes were removed rather than aliased. Control Cent
 - GA: `GET /api/v1/ga/health`, `/ready`, `/optimizers`, `/runs`, `/runs/{run_id}`
 - GA mutations: `POST /api/v1/ga/runs`, `/runs/{run_id}/promote`
 
-### Remaining Hybrid orchestration routes
+### Ingestion and event routes
 
 - `POST /api/v1/ingest/sessions`
 - `POST /api/v1/memory/events`
@@ -125,11 +125,11 @@ Prompt capture now uses `POST /api/v1/memory/events`. Structured session ingesti
 | Graph | `nodes`, `edges`, `nodes/{id}`, `query`, `traverse` | Resource paths now consistent; graph computations remain explicit operations | Node and edge mutations now use `/graph/nodes` and `/graph/edges`, with reads at `/graph/nodes/{node_id}`; query/traversal remain explicit operations |
 | Memory | Named memories, nested entries, search strategies, source imports/reconciliation, recall, events | Resource model is explicit; source lifecycle is being unified with Index and document retrieval | Review source identity and event lifecycle semantics |
 | Context | `GET /api/v1/context/health`, `/ready`, `POST /api/v1/context/assemble` | New bounded cross-capability assembly contract; token count is explicitly approximate and compression is extractive | Add exact tokenizer integration only when a concrete model/tokenizer contract is selected |
-| Knowledge / Index | Records, sources, revisions, tombstones | Mostly resource-oriented; tombstone is represented differently in the two groups | Decide one consistent tombstone lifecycle and preserve its revision semantics |
+| Knowledge / Index | Records, sources, revisions, tombstones | Both tombstone routes now consult the same Index revision authority and deactivate document, Knowledge, and vector records | Keep the shared tombstone helper as the lifecycle boundary; extend it if new source stores are added |
 | Learning / Thompson | Outcomes and runs are resources; reset/select/report/ping/root POST are mixed | Some operations are resources, others are action verbs or duplicate status calls | Keep meaningful domain actions; remove redundant ping if health/readiness fully covers it; clarify root POST operations |
 | GA | Runs and optimizers are resources; promote is an action | Mostly coherent | Keep promotion as an explicit domain action unless promotion records become first-class resources |
 | Processing capabilities | `chunk`, `tokenize`, `classify`, `rank`, `rerank`, `embed`; entity operations under `/entities` | Computational operations remain explicit; durable canonical entity identity and relationships belong to Graph | Keep extraction stateless, resolution identity-oriented, and linking graph-backed |
-| Configuration | `GET /api/v1/system/config` | Current implementation returns persistence root and database URL, exposing implementation details contrary to the contract principles | Reduce to caller-relevant, non-sensitive runtime configuration; keep storage internals private |
+| Configuration | `GET /api/v1/system/config` | Returns listener configuration and durable-persistence status without filesystem paths or database URLs | Keep secrets and persistence internals out of the public response |
 
 ## 5. Search contract semantics
 
@@ -147,9 +147,9 @@ These contracts share implementation components but are not aliases: their respo
 3. **Graph:** node and edge resources moved to plural resource paths; query and traversal remain explicit graph operations.
 4. **Vector:** collection record operations now use PUT/PATCH and resource-oriented paths; review the lifecycle ownership of pruning.
 5. **Memory:** named-memory and entry resources, search strategies, source import/reconciliation, recall, and event capture now have canonical paths; next review source identity and event lifecycle semantics.
-6. **Knowledge and Index:** align tombstone lifecycle semantics.
+6. **Knowledge and Index:** shared Index-gated revision and tombstone lifecycle is implemented; add new stores to the shared lifecycle helper.
 7. **Learning and Thompson:** normalize state, outcomes, reports, and domain actions.
-8. **Configuration and operational status:** remove storage leakage and make capability health/readiness coverage consistent.
+8. **Configuration and operational status:** system configuration no longer exposes storage paths or database URLs; continue reviewing capability health/readiness semantics.
 
 ## 7. Change discipline
 
