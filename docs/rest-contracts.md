@@ -53,10 +53,10 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 |---|---|---|
 | GET | /health | Liveness |
 | GET | /ready | Application readiness and persistence configuration |
-| POST | /api/v1/documents | Register or replace a document revision, chunk it, optionally embed it, and durably store it |
-| POST | /api/v1/ingestion/pdf | Upload a bounded PDF, extract page-aware text, and ingest it through the shared document pipeline |
-| POST | /api/v1/scrape/preview, /api/v1/scrape/ingest | Preview or explicitly ingest a public HTTP(S) HTML/plain-text page |
-| POST | /api/v1/hybrid/transcripts/ingest | Parse caller-supplied JSONL transcript slices and return a UTF-8 byte checkpoint |
+| POST | /api/v1/ingest/documents | Register or replace a document revision, chunk it, optionally embed it, and durably store it |
+| POST | /api/v1/ingest/files | Upload a bounded supported file (currently PDF), extract text and ingest it through the shared document pipeline |
+| POST | /api/v1/ingest/urls/preview, /api/v1/ingest/urls | Preview or ingest a public HTTP(S) HTML/plain-text page |
+| POST | /api/v1/ingest/transcripts | Parse caller-supplied JSONL transcript slices and return a UTF-8 byte checkpoint |
 | GET | /api/v1/chunking/health, /ready, /profiles | Chunking capability status and versioned profiles |
 | POST | /api/v1/chunking/chunk | Generate deterministic chunks with offsets and provenance |
 | POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |
@@ -130,7 +130,11 @@ Decorators wrap capability implementations or REST clients while preserving the 
 Security-sensitive decorators are defense in depth. Enforcement also belongs at the trusted authorization and storage/query boundaries.
 
 
-## 11. Multi-format source ingestion
+## 11. Ingestion API conventions
+
+All source ingestion operations share the `/api/v1/ingest` namespace. Use the source collection (`documents`, `files`, `urls`, `transcripts`) to express the source type; use nested resources such as `/urls/preview` for non-mutating preparation. Format-specific extraction remains an internal adapter concern. Legacy routes remain temporary compatibility aliases and are excluded from the published OpenAPI schema; new clients should use only the canonical ingestion paths.
+
+## 12. Multi-format source ingestion
 
 All source types converge on the same document, chunking, embedding, indexing and retrieval pipeline. Extractors are responsible for source-specific parsing and provenance, not for maintaining separate search implementations.
 
