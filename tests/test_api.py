@@ -373,6 +373,52 @@ def test_knowledge_store_readback_and_provenance(tmp_path):
         assert len(record["content_sha256"]) == 64
 
 
+def test_knowledge_vector_records_follow_revision_and_tombstone():
+    from ensemble.vector_memory import InMemoryVectorStore
+
+    class Embeddings:
+        available = True
+
+        def status(self):
+            return {"ok": True, "ready": True, "model": "knowledge-test", "dimensions": 3}
+
+        async def embed(self, texts, mode="document"):
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+    vectors = InMemoryVectorStore()
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        embedding_provider=Embeddings(),
+        vector_store=vectors,
+    )
+    with TestClient(app) as client:
+        first = client.post("/api/v1/knowledge/records", json=_knowledge_record(
+            source_id="vector-knowledge", content="Knowledge vector revision one."
+        ))
+        assert first.status_code == 200
+        collection = next(item for item in client.get("/api/v1/vector/collections").json()["collections"]
+                          if item["name"] == "knowledge_chunks")
+        assert collection["count"] == 1
+
+        second = client.post("/api/v1/knowledge/records", json=_knowledge_record(
+            source_id="vector-knowledge", sequence=2, revision_id="rev-2",
+            content="Knowledge vector revision two.",
+        ))
+        assert second.status_code == 200
+        collection = next(item for item in client.get("/api/v1/vector/collections").json()["collections"]
+                          if item["name"] == "knowledge_chunks")
+        assert collection["count"] == 1
+
+        tombstone = client.post(
+            "/api/v1/knowledge/records/vector-knowledge/tombstone",
+            json={"revision_sequence": 3},
+        )
+        assert tombstone.json()["decision"] == "tombstoned"
+        collection = next(item for item in client.get("/api/v1/vector/collections").json()["collections"]
+                          if item["name"] == "knowledge_chunks")
+        assert collection["count"] == 0
+
+
 def test_knowledge_publication_enters_hybrid_search_and_graph(tmp_path):
     with _client(tmp_path) as client:
         payload = _knowledge_record(
