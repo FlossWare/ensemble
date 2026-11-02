@@ -83,7 +83,13 @@ def test_intent_returns_evidence_and_zero_confidence_without_evidence():
     assert result["evidence"]
     assert result["scores"]["debug"] > 0
     empty = classify("blue chair")
-    assert empty == {"label": "other", "confidence": 0.0, "evidence": [], "scores": {}}
+    assert empty["label"] == "other"
+    assert empty["confidence"] == 0.0
+    assert empty["evidence"] == []
+    assert empty["scores"] == {}
+    assert empty["intents"] == []
+    assert empty["constraints"] == []
+    assert empty["required_capabilities"] == []
 
 
 def test_intent_is_deterministic_and_bounded():
@@ -148,7 +154,7 @@ def test_stateless_capabilities_are_exposed_through_rest():
         assert any(token["term"] == "memory-service" for token in tokenized.json()["tokens"])
 
         extracted = client.post(
-            "/api/v1/extraction/extract",
+            "/api/v1/entities/extract",
             json={"text": "issue CPSEARCH-10177"},
         )
         assert extracted.status_code == 200
