@@ -14,6 +14,7 @@ from .store import DocumentStore, IndexedChunk
 from .reranking import Reranker
 from .tokenization import TOKENIZER_ID, tokenize, split_by_tokens
 from .knowledge_store import KnowledgeStore
+from .extraction import extract_text
 
 
 class ChunkRequest(BaseModel):
@@ -24,6 +25,11 @@ class ChunkRequest(BaseModel):
 
 class EmbeddingRequest(BaseModel):
     texts: list[str]
+
+
+class ExtractionRequest(BaseModel):
+    media_type: str = Field(min_length=1, max_length=128)
+    content: str = Field(min_length=1)
 
 
 class MemoryUpsertRequest(BaseModel):
@@ -91,6 +97,14 @@ class IndexDocumentRequest(BaseModel):
 def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider, reranker: Reranker, knowledge_store: KnowledgeStore | None) -> APIRouter:
     router = APIRouter()
     chunker = Chunker()
+
+    @router.post("/capabilities/extraction/text", tags=["capabilities", "extraction"])
+    async def extract_content(request: ExtractionRequest):
+        try:
+            text = extract_text(request.content, request.media_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        return {"text": text, "character_count": len(text)}
 
     @router.post("/capabilities/memory", tags=["capabilities", "memory"])
     async def upsert_memory(request: MemoryUpsertRequest, http_request: Request):

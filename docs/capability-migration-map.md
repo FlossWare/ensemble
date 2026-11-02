@@ -15,7 +15,7 @@
 | Capability | POC reference | Ensemble contract | Status |
 |---|---|---|---|
 | Document ingestion | Knowledge/index/revision APIs | `POST /api/v1/documents` | Implemented |
-| Tokenization | Tokenizer service | `POST /api/v1/capabilities/tokenization/tokenize` | Implemented deterministic Unicode tokenizer; not model-BPE compatible |
+| Extraction | Dedicated POC extraction service | `POST /api/v1/capabilities/extraction/text` | Implemented plain text, Markdown, HTML/XHTML extraction |\n| Tokenization | Tokenizer service | `POST /api/v1/capabilities/tokenization/tokenize` | Implemented deterministic Unicode tokenizer; not model-BPE compatible |
 | Chunking | `POST /chunk` | `POST /api/v1/capabilities/chunking/split` and `/split-tokens` | Implemented character and Unicode-token window profiles |
 | Embeddings | `POST /embeddings` | `POST /api/v1/capabilities/embeddings` | Implemented provider adapter |
 | Reranking | `POST /rerank` | `POST /api/v1/capabilities/reranking/rerank` | Implemented Cohere-compatible adapter; provider required |

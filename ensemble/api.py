@@ -94,6 +94,7 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
             or path.endswith("/embeddings")
             or path.endswith("/rerank")
             or path.endswith("/tokenize")
+            or path.endswith("/extract")
         )
         required = "read" if read_only else "write"
         if required not in principal.permissions and "admin" not in principal.permissions:

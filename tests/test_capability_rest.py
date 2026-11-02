@@ -180,3 +180,22 @@ def test_partition_scoped_memory_and_graph_capabilities(tmp_path):
         assert graph.status_code == 200
         assert len(graph.json()["nodes"]) == 2
         assert len(graph.json()["edges"]) == 1
+
+
+def test_html_extraction_removes_script_and_style_content(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'extraction.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    with TestClient(
+        create_app(database_url=database_url),
+        headers={"Authorization": "Bearer test-key", "X-Ensemble-Partition": "default"},
+    ) as client:
+        response = client.post("/api/v1/capabilities/extraction/text", json={
+            "media_type": "text/html",
+            "content": "<html><style>.hidden{}</style><body><h1>Title</h1><p>Useful text</p><script>alert(1)</script></body></html>",
+        })
+        assert response.status_code == 200
+        assert response.json()["text"] == "Title\nUseful text"
+        assert "alert" not in response.json()["text"]

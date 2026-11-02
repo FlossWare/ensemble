@@ -38,7 +38,7 @@ Implemented:
 ## Retrieval and model capabilities
 
 Implemented:
-- Deterministic Unicode word/punctuation tokenizer (`ensemble-unicode-v1`); this is not model-BPE compatible.
+- Text extraction for plain text, Markdown, HTML, and XHTML (scripts/styles excluded).\n- Deterministic Unicode word/punctuation tokenizer (`ensemble-unicode-v1`); this is not model-BPE compatible.
 - Character-window chunking with overlap and token-window chunking using the deterministic Unicode tokenizer.
 - Optional OpenAI-compatible embedding provider.
 - PostgreSQL pgvector HNSW cosine index; SQLite exhaustive local vector fallback.
