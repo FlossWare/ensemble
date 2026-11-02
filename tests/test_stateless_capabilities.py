@@ -155,7 +155,7 @@ def test_stateless_capabilities_are_exposed_through_rest():
 
         extracted = client.post(
             "/api/v1/entities/extract",
-            json={"text": "issue CPSEARCH-10177"},
+            json={"text": "issue CPSEARCH-10177", "source": "control-center.entity-workbench"},
         )
         assert extracted.status_code == 200
         candidates = extracted.json()["entities"]
