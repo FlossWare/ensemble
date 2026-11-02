@@ -70,7 +70,7 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | GET | /api/v1/search/hybrid/health, /api/v1/search/hybrid/ready | Hybrid retrieval capability status |
 | POST | /api/v1/search/hybrid | Unified hybrid retrieval |
 | POST | /api/v1/search/hybrid/knowledge | Knowledge-scoped hybrid retrieval |
-| POST | /api/v1/hybrid/prompts, /api/v1/hybrid/sessions/ingest | Existing prompt capture and structured session ingestion routes; pending broader route audit |
+| POST | /api/v1/ingest/sessions | Ingest a structured transcript session and its messages through Memory, Graph, and retrieval indexing |\n| POST | /api/v1/hybrid/prompts | Existing prompt capture route; placement under the Memory event model remains under audit |
 | GET | /api/v1/tokenization/health, /ready, /profiles | Tokenization capability status and analyzer profiles |
 | POST | /api/v1/tokenization/tokenize | Versioned deterministic text analysis |
 | GET | /api/v1/extraction/health, /ready | Extraction capability status |
