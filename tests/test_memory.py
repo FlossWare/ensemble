@@ -17,15 +17,15 @@ def test_memory_health_and_readiness_share_ensemble_application():
 
 def test_memory_write_read_and_missing_record():
     with client() as http:
-        missing = http.post("/api/v1/memory/read", json={"name": "notes"})
+        missing = http.get("/api/v1/memory/memories/notes")
         assert missing.status_code == 404
 
-        written = http.post(
-            "/api/v1/memory/write",
-            json={"name": "notes", "content": "Ensemble memory is durable."},
+        written = http.put(
+            "/api/v1/memory/memories/notes",
+            json={"content": "Ensemble memory is durable."},
         )
         assert written.status_code == 200
-        assert http.post("/api/v1/memory/read", json={"name": "notes"}).json() == {
+        assert http.get("/api/v1/memory/memories/notes").json() == {
             "ok": True,
             "content": "Ensemble memory is durable.",
         }
@@ -34,11 +34,11 @@ def test_memory_write_read_and_missing_record():
 def test_memory_append_once_is_idempotent_and_rejects_key_reuse():
     with client() as http:
         payload = {"name": "session", "event_id": "event-1", "entry": {"result": "success"}}
-        first = http.post("/api/v1/memory/append-once", json=payload)
-        retry = http.post("/api/v1/memory/append-once", json=payload)
-        conflict = http.post(
-            "/api/v1/memory/append-once",
-            json={"name": "session", "event_id": "event-1", "entry": {"result": "failure"}},
+        first = http.put("/api/v1/memory/memories/session/entries/event-1", json={"entry": payload["entry"]})
+        retry = http.put("/api/v1/memory/memories/session/entries/event-1", json={"entry": payload["entry"]})
+        conflict = http.put(
+            "/api/v1/memory/memories/session/entries/event-1",
+            json={"entry": {"result": "failure"}},
         )
 
         assert first.status_code == 200
@@ -46,16 +46,15 @@ def test_memory_append_once_is_idempotent_and_rejects_key_reuse():
         assert retry.status_code == 200
         assert retry.json()["status"] == "duplicate"
         assert conflict.status_code == 409
-        entries = http.post("/api/v1/memory/entries", json={"name": "session"}).json()["entries"]
+        entries = http.get("/api/v1/memory/memories/session/entries").json()["entries"]
         assert len(entries) == 1
 
 
 def test_memory_context_retrieval_prioritizes_parent_and_search_is_bounded():
     with client() as http:
-        http.post(
-            "/api/v1/memory/append",
+        http.put(
+            "/api/v1/memory/memories/execution/entries",
             json={
-                "name": "execution",
                 "entry": {
                     "result": "parent result",
                     "execution_context": {
@@ -67,10 +66,9 @@ def test_memory_context_retrieval_prioritizes_parent_and_search_is_bounded():
                 },
             },
         )
-        http.post(
-            "/api/v1/memory/append",
+        http.put(
+            "/api/v1/memory/memories/execution/entries",
             json={
-                "name": "execution",
                 "entry": {
                     "result": "same request result",
                     "execution_context": {
@@ -90,15 +88,15 @@ def test_memory_context_retrieval_prioritizes_parent_and_search_is_bounded():
             "lineage": ["parent-1", "child-1"],
         }
         recalled = http.post(
-            "/api/v1/memory/retrieve",
+            "/api/v1/memory/recall",
             json={"name": "execution", "context": context},
         ).json()["results"]
         assert recalled[0]["relation"] == "parent"
 
-        http.post("/api/v1/memory/write", json={"name": "execution", "content": "parent memory result"})
-        http.post("/api/v1/memory/write", json={"name": "unrelated", "content": "different document"})
+        http.put("/api/v1/memory/memories/execution", json={"content": "parent memory result"})
+        http.put("/api/v1/memory/memories/unrelated", json={"content": "different document"})
         search = http.post(
-            "/api/v1/memory/search",
+            "/api/v1/memory/search/keywords",
             json={"keywords": ["parent", "memory"]},
         )
         assert search.status_code == 200
@@ -107,15 +105,15 @@ def test_memory_context_retrieval_prioritizes_parent_and_search_is_bounded():
 
 def test_memory_chunking_and_name_validation():
     with client() as http:
-        http.post("/api/v1/memory/write", json={"name": "chunked", "content": "# Intro\nalpha\n# Second\nbeta\n"})
+        http.put("/api/v1/memory/memories/chunked", json={"content": "# Intro\nalpha\n# Second\nbeta\n"})
         chunks = http.post(
-            "/api/v1/memory/chunk", json={"name": "chunked", "size": 2000}
+            "/api/v1/memory/chunking", json={"name": "chunked", "size": 2000}
         ).json()["chunks"]
         assert [item["header"] for item in chunks] == ["Intro", "Second"]
         assert [item["content"] for item in chunks] == ["# Intro\nalpha\n", "# Second\nbeta\n"]
 
-        invalid = http.post(
-            "/api/v1/memory/write",
+        invalid = http.put(
+            "/api/v1/memory/memories/notes",
             json={"name": "../outside", "content": "no"},
         )
         assert invalid.status_code == 400
@@ -134,36 +132,36 @@ def test_memory_knowledge_ingest_is_idempotent_and_reconcile_marks_stale():
         "metadata": {"scope": "/workspace", "title": "Search"},
     }
     with client() as http:
-        first = http.post("/api/v1/memory/ingest", json=payload)
-        second = http.post("/api/v1/memory/ingest", json=payload)
+        first = http.post("/api/v1/memory/sources/import", json=payload)
+        second = http.post("/api/v1/memory/sources/import", json=payload)
         assert first.status_code == 200
         assert first.json()["status"] == "ingested"
         assert second.status_code == 200
         assert second.json()["status"] == "unchanged"
-        assert http.get("/api/v1/memory/knowledge/status").json()["indexed_document_count"] == 1
+        assert http.get("/api/v1/memory/sources/status").json()["indexed_document_count"] == 1
 
         semantic = http.post(
-            "/api/v1/memory/search-semantic",
+            "/api/v1/memory/search/semantic",
             json={"query": "provenance retrieval context", "source": "claude-code"},
         )
         assert semantic.status_code == 200
         assert semantic.json()["results"][0]["source"] == "claude-code"
         hybrid = http.post(
-            "/api/v1/memory/search-hybrid",
+            "/api/v1/memory/search/hybrid",
             json={"query": "provenance retrieval"},
         )
         assert hybrid.status_code == 200
         assert hybrid.json()["results"]
 
         reconciled = http.post(
-            "/api/v1/memory/reconcile",
+            "/api/v1/memory/sources/reconcile",
             json={"source": "claude-code", "scope": "/workspace", "paths": []},
         )
         assert reconciled.status_code == 200
         assert reconciled.json()["count"] == 1
-        assert http.get("/api/v1/memory/knowledge/status").json()["indexed_document_count"] == 0
+        assert http.get("/api/v1/memory/sources/status").json()["indexed_document_count"] == 0
         stale_search = http.post(
-            "/api/v1/memory/search-semantic",
+            "/api/v1/memory/search/semantic",
             json={"query": "provenance", "source": "claude-code"},
         )
         assert stale_search.json()["results"] == []
@@ -176,7 +174,7 @@ def test_memory_knowledge_ingest_rejects_bad_digest_and_scope_escape():
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     with client() as http:
         bad_digest = http.post(
-            "/api/v1/memory/ingest",
+            "/api/v1/memory/sources/import",
             json={
                 "path": "/workspace/a.md",
                 "content": content,
@@ -185,7 +183,7 @@ def test_memory_knowledge_ingest_rejects_bad_digest_and_scope_escape():
             },
         )
         escaped = http.post(
-            "/api/v1/memory/ingest",
+            "/api/v1/memory/sources/import",
             json={
                 "path": "/outside/a.md",
                 "content": content,
