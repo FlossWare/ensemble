@@ -17,7 +17,7 @@
 | GA | Run, history, detail, candidate promotion/export | `/api/v1/ga/runs`, `/api/v1/ga/runs/{run_id}`, `POST /api/v1/ga/runs/{run_id}/promote` | Initial workbench; synthetic evaluators must remain clearly labeled |
 | Thompson | State, selection, reset | `GET /api/v1/thompson/state`, `POST /api/v1/thompson/select`, `POST /api/v1/thompson/reset` | Model-level state and operations; task/capability filtering is not implemented |
 | Learning | Report, recent outcomes, artifacts, confirmed reset | `GET /api/v1/learning/report`, `GET /api/v1/learning/outcomes`, `GET /api/v1/learning/artifacts`, `POST /api/v1/learning/reset` | Initial workbench |
-| Runtime configuration | Display process configuration | `GET /api/v1/system/config` | Must continue redacting secrets and avoid implying hot reload |
+| Entities | Extract candidates, explicitly resolve canonical identities, and explicitly create typed Graph links | `/api/v1/entities/extract`, `/resolve`, `/link` | Extraction is non-persistent; resolution and linking are explicit mutations |\n| Intent | Inspect multi-intent classification and evidence | `POST /api/v1/intent/classify` | Rule-based heuristic, not calibrated model confidence |\n| Runtime configuration | Display process configuration | `GET /api/v1/system/config` | Must continue redacting secrets and avoid implying hot reload |
 
 ## 2. REST capability inventory
 
@@ -29,7 +29,7 @@ The following endpoint groups were found in `ensemble/api.py` at the time of thi
 | Embeddings | `/api/v1/embeddings/health`, `/model`, `POST /embed` | Health only |
 | Chunking | `/api/v1/chunking/health`, `/ready`, `/profiles`, `POST /chunk` | Health only |
 | Tokenization | `/api/v1/tokenization/health`, `/ready`, `/profiles`, `POST /tokenize` | Health only |
-| Extraction | `/api/v1/extraction/health`, `/ready`, `POST /extract` | Health only |
+| Entities | `/api/v1/entities/health`, `/ready`, `POST /extract`, `/resolve`, `/link` | Extraction preview plus explicit identity and relationship actions |
 | Intent | `/api/v1/intent/health`, `/ready`, `POST /classify` | Health only |
 | Ranking | `/api/v1/ranking/health`, `/ready`, `POST /rank` | Health only |
 | Reranking | `/api/v1/reranking/health`, `/ready`, `POST /rerank` | Health only; hybrid query can opt in to reranking |
@@ -47,13 +47,13 @@ The following endpoint groups were found in `ensemble/api.py` at the time of thi
 
 ## 3. Implemented in the current parity branch
 
-The Control Center now includes initial read-only workbenches backed by existing REST contracts:
+The Control Center includes read-only inspection and explicitly separated mutation workbenches backed by existing REST contracts:
 
-- **Graph:** property-filtered node queries, node lookup, and bounded traversal.
+- **Graph:** property-filtered node queries, node lookup, and bounded traversal.\n- **Entities:** non-persistent candidate extraction, explicit Graph-backed canonical resolution, and explicit typed relationship creation.
 - **Chunking:** profile inventory and non-persistent chunk previews.
 - **Tokenization:** analyzer profile inventory and token previews.
 - **Knowledge:** record lookup by source identifier.
-- **Pipeline Inspector (diagnostic preview):** sequentially invokes current Tokenization, Extraction, Intent, and Chunking operations and reports each stage's result or failure.
+- **Pipeline Inspector (diagnostic preview):** sequentially invokes current Tokenization, entity extraction, Intent, and Chunking operations and reports each stage's result or failure.
 
 The diagnostic pipeline is deliberately labeled as an interactive preview. It does not mutate persistence and does not claim to be a trace of a real ingestion or retrieval execution. It currently does not include embedding, vector writes, lexical writes, fusion, or reranking.
 
@@ -101,9 +101,9 @@ Prefer the first increment for capability previews and the second only when the 
 
 ## 6. Immediate implementation order
 
-1. Add Graph, Chunking, Tokenization, and Knowledge read-only workbenches from existing endpoints.
+1. Add Graph, Entities, Chunking, Tokenization, and Knowledge workbenches from existing endpoints, keeping mutations explicit.
 2. Add Lexical/Vector/Hybrid comparison with explicit channel provenance and truthful limits.
-3. Add Embeddings, Extraction, Intent, Ranking, and Reranking diagnostic workbenches.
+3. Add Embeddings, Entity and Intent, Ranking, and Reranking diagnostic workbenches.
 4. Implement the interactive Pipeline Inspector for preview/probe flows, clearly marked as a new diagnostic run.
 5. Define correlated server-side pipeline traces for actual ingestion and retrieval execution.
 6. Add backend-owned operational statistics and carefully scoped maintenance only where justified.
