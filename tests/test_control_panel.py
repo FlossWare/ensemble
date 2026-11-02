@@ -25,6 +25,7 @@ def test_control_panel_is_served_by_the_api():
         assert "Reset Learning outcomes" in response.text
         assert "Capability Explorer" in response.text
         assert "Retrieval Explorer" in response.text
+        assert "Context Assembly" in response.text
         assert "Index and Vector Inspection" in response.text
         assert "Memory and Knowledge Inspection" in response.text
         assert "Tombstone source" in response.text
@@ -36,6 +37,7 @@ def test_control_panel_is_served_by_the_api():
         assert "/api/v1/thompson/state" in script.text
         assert 'textContent="Reset"' in script.text
         assert "/api/v1/search/hybrid" in script.text
+        assert "/api/v1/context/assemble" in script.text
         assert "/api/v1/index/manifest" in script.text
         assert "/api/v1/memory/search/hybrid" in script.text
         assert "refreshCapabilityTable" in script.text
