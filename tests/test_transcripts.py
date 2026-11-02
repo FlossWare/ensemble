@@ -133,3 +133,50 @@ def test_checkpoint_rejects_invalid_offsets_and_payload_digests(start, end, dige
             "source-1", "revision-1", "project", "transcript.jsonl",
             start, end, digest, {"inserted": 0},
         ))
+
+
+def test_transcript_jobs_record_completion_failures_and_restart_recovery():
+    store = InMemoryTranscriptCheckpointStore()
+    job_id = "a" * 64
+
+    first = asyncio.run(store.start_job(
+        job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+        64, hashlib.sha256(b"slice").hexdigest(),
+    ))
+    duplicate = asyncio.run(store.start_job(
+        job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+        64, hashlib.sha256(b"slice").hexdigest(),
+    ))
+    assert first == {"status": "running", "attempts": 1, "created": True}
+    assert duplicate == {"status": "running", "attempts": 1, "created": False}
+
+    recovered = asyncio.run(store.recover_interrupted())
+    interrupted = asyncio.run(store.get_job(job_id))
+    assert recovered == 1
+    assert interrupted["status"] == "interrupted"
+    assert "Process restarted" in interrupted["last_error"]
+
+    retry = asyncio.run(store.start_job(
+        job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+        64, hashlib.sha256(b"slice").hexdigest(),
+    ))
+    assert retry == {"status": "running", "attempts": 2, "created": True}
+
+    asyncio.run(store.fail_job(job_id, "temporary indexing failure"))
+    failed = asyncio.run(store.get_job(job_id))
+    assert failed["status"] == "failed"
+    assert failed["last_error"] == "temporary indexing failure"
+
+    retry = asyncio.run(store.start_job(
+        job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+        64, hashlib.sha256(b"slice").hexdigest(),
+    ))
+    assert retry["status"] == "running"
+    assert retry["attempts"] == 3
+
+    completed = asyncio.run(store.complete_job(job_id, 96, {"inserted": 2}))
+    assert completed["status"] == "completed"
+    assert completed["end_offset"] == 96
+    assert completed["result"] == {"inserted": 2}
+    assert asyncio.run(store.get_job(job_id))["status"] == "completed"
+    assert asyncio.run(store.list_jobs(10))[0]["job_id"] == job_id
