@@ -147,6 +147,68 @@ def create_app(
     documents = DocumentService(document_store, Chunker(), embeddings, active_vector_store)
     search = SearchService(document_store, embeddings, active_reranker, active_vector_store)
 
+    async def index_document_entities(source_id: str, revision: int, content: str, *, origin: str, locator: str) -> int:
+        """Associate exact extracted entities with a durable source revision."""
+        identity = hashlib.sha256(f"{source_id}:{revision}".encode("utf-8")).hexdigest()
+        source_node = await active_graph_store.add_node(
+            "source",
+            {"source_id": source_id, "revision": revision, "origin": origin, "locator": locator},
+            node_id="source_" + identity,
+        )
+        linked = 0
+        for candidate in extract(content[:1_000_000], source="ingestion"):
+            if not candidate.get("exact"):
+                continue
+            kind, normalized = candidate["type"], candidate["normalized"]
+            matches = await active_graph_store.query_nodes(
+                "entity", {"entity_type": kind, "normalized": normalized}
+            )
+            if len(matches) > 1:
+                continue
+            if matches:
+                entity_node = matches[0]
+            else:
+                entity_identity = hashlib.sha256(f"{kind}:{normalized}".encode("utf-8")).hexdigest()
+                entity_node = await active_graph_store.add_node(
+                    "entity",
+                    {"entity_type": kind, "normalized": normalized, "canonical_name": normalized},
+                    node_id="entity_" + entity_identity,
+                )
+            await active_graph_store.add_edge(
+                source_node["id"], entity_node["id"], "mentions",
+                {"source_id": source_id, "revision": revision,
+                 "start": candidate["start"], "end": candidate["end"]},
+            )
+            linked += 1
+        return linked
+
+    async def ingest_indexed_document(
+        request: DocumentIn, *, embed: bool = True, vector_collection: str | None = None,
+        origin: str = "document", locator: str | None = None,
+    ):
+        revision_id = hashlib.sha256(request.content.encode("utf-8")).hexdigest()
+        profiles = {"chunking": request.chunk_profile, "media_type": request.media_type}
+        decision = await active_index_store.record_revision(
+            request.source_id, request.revision, revision_id, profiles
+        )
+        if decision["decision"] not in {"accepted", "duplicate"}:
+            raise HTTPException(
+                status_code=409,
+                detail="source revision rejected: " + decision["decision"],
+            )
+        result = await documents.ingest(
+            request, embed=embed, vector_collection=vector_collection
+        )
+        try:
+            linked = await index_document_entities(
+                request.source_id, request.revision, request.content,
+                origin=origin, locator=locator or request.source_id,
+            )
+            result.metadata = {**result.metadata, "graph_entities_indexed": linked}
+        except Exception:
+            result.metadata = {**result.metadata, "graph_entities_indexed": 0, "graph_degraded": True}
+        return result, decision["decision"]
+
     app.state.store = document_store
     app.state.embedding_provider = embeddings
     app.state.reranker = active_reranker
