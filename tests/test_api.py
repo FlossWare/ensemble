@@ -939,3 +939,25 @@ def test_long_transcript_messages_are_fully_chunked_and_embedding_batches_are_bo
         assert results
         assert results[0]["chunk_profile"] == "window-v1"
         assert "tailmarkerunique" in results[0]["text"]
+
+def test_ingestion_routes_use_only_the_canonical_namespace():
+    app = create_app(store=InMemoryDocumentStore())
+    paths = app.openapi()["paths"]
+
+    expected = {
+        "/api/v1/ingest/documents",
+        "/api/v1/ingest/files",
+        "/api/v1/ingest/urls",
+        "/api/v1/ingest/urls/preview",
+        "/api/v1/ingest/transcripts",
+    }
+    obsolete = {
+        "/api/v1/documents",
+        "/api/v1/ingestion/pdf",
+        "/api/v1/scrape/preview",
+        "/api/v1/scrape/ingest",
+        "/api/v1/hybrid/transcripts/ingest",
+    }
+
+    assert expected <= paths.keys()
+    assert obsolete.isdisjoint(paths)
