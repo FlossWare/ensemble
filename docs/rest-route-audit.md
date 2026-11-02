@@ -56,10 +56,10 @@ The previous Hybrid search routes were removed rather than aliased. Control Cent
 - `POST /api/v1/embeddings/embed`
 - `GET /api/v1/vector/health`
 - `GET /api/v1/vector/collections`
-- `POST /api/v1/vector/collections/{name}/existing`
-- `POST /api/v1/vector/collections/{name}/upsert`
-- `POST /api/v1/vector/collections/{name}/metadata`
-- `POST /api/v1/vector/collections/{name}/delete-superseded`
+- `POST /api/v1/vector/collections/{name}/records/lookup`
+- `POST /api/v1/vector/collections/{name}/records`
+- `POST /api/v1/vector/collections/{name}/records/metadata`
+- `POST /api/v1/vector/collections/{name}/records/prune`
 - `POST /api/v1/vector/collections/{name}/query`
 
 ### Processing and ranking
@@ -111,7 +111,7 @@ Prompt capture is not a search operation and remains under review against the Me
 |---|---|---|---|
 | Search | `/search`, `/search/lexical`, `/search/hybrid` | Three related contracts with distinct caller intent and response shape | Retain the default, lexical-only, and enriched Hybrid contracts under one Search namespace |
 | Ingestion | `/ingest/*` | Source ingestion now shares one namespace, including structured sessions | Complete ingestion route consistency and decide whether lexical document ingestion is still needed as a separate route |
-| Vector | Collection routes end in `existing`, `upsert`, `metadata`, `delete-superseded`, `query` | Mixes resource operations and implementation-flavored verbs | Model records as resources; retain explicit query and revision-cleanup actions only where semantics justify them |
+| Vector | Collection routes now use record resources for bulk upsert, lookup, metadata updates, and pruning; query remains an explicit vector operation | Mixes resource operations and implementation-flavored verbs | Bulk record replacement uses PUT; record lookup and query remain explicit operations; metadata updates use PATCH; pruning remains a named maintenance action whose lifecycle semantics need review |
 | Graph | `nodes`, `edges`, `nodes/{id}`, `query`, `traverse` | Inconsistent singular/plural and verb-led mutation paths | Node and edge mutations now use `/graph/nodes` and `/graph/edges`, with reads at `/graph/nodes/{node_id}`; query/traversal remain explicit operations |
 | Memory | Mixed `read`, `write`, `append`, `entries`, `retrieve`, `list`, and three search paths | No single resource model; semantic strategy appears in some paths but not others | Define Memory resources and operation semantics before renaming; avoid mechanical string replacement |
 | Knowledge / Index | Records, sources, revisions, tombstones | Mostly resource-oriented; tombstone is represented differently in the two groups | Decide one consistent tombstone lifecycle and preserve its revision semantics |
