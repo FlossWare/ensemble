@@ -195,6 +195,7 @@ class SearchService:
                 role=item.document.metadata.get("role"),
                 kind=item.document.metadata.get("kind"),
                 is_subagent=item.document.metadata.get("is_subagent"),
+                text_sha=hashlib.sha256(item.chunk.content.encode("utf-8")).hexdigest(),
             ))
         results = sorted(
             hits, key=lambda hit: (hit.fusion_score, hit.lexical_score, str(hit.chunk_id)),
