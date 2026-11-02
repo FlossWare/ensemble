@@ -1349,6 +1349,106 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=503, detail="knowledge retrieval dependency unavailable") from exc
 
+    @app.post("/api/v1/hybrid/sessions/ingest", tags=["hybrid"])
+    async def hybrid_ingest_session(payload: dict[str, Any], request: Request):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > 8 * 1_048_576:
+            raise HTTPException(status_code=413, detail="request body exceeds 8 MiB")
+        session = payload.get("session")
+        messages = payload.get("messages")
+        if not isinstance(session, dict):
+            raise HTTPException(status_code=400, detail="session must be an object")
+        for field in ("session_id", "project", "file"):
+            value = session.get(field)
+            if not isinstance(value, str) or not value.strip() or len(value) > 4096:
+                raise HTTPException(status_code=400, detail=f"session.{field} must be a non-empty string of at most 4096 characters")
+        if not isinstance(messages, list) or len(messages) > 500:
+            raise HTTPException(status_code=400, detail="messages must be a list of at most 500 entries")
+        total_chars = 0
+        for message in messages:
+            if not isinstance(message, dict):
+                raise HTTPException(status_code=400, detail="each message must be an object")
+            if not isinstance(message.get("uuid"), str) or not message["uuid"] or len(message["uuid"]) > 256:
+                raise HTTPException(status_code=400, detail="each message requires a non-empty uuid")
+            if message.get("role") not in {"user", "assistant"}:
+                raise HTTPException(status_code=400, detail="message role must be user or assistant")
+            if message.get("kind", "text") not in {"text", "thinking", "tool_use", "tool_result"}:
+                raise HTTPException(status_code=400, detail="message kind is unsupported")
+            text_value = message.get("text")
+            if not isinstance(text_value, str) or not text_value.strip() or len(text_value) > 200_000:
+                raise HTTPException(status_code=400, detail="message text must be non-empty and at most 200000 characters")
+            total_chars += len(text_value)
+            if total_chars > 4_000_000:
+                raise HTTPException(status_code=413, detail="session content exceeds 4000000 characters")
+        session_id, project, file_path = session["session_id"], session["project"], session["file"]
+        try:
+            session_node = await active_graph_store.add_node("session", {
+                "session_id": session_id, "project": project,
+                "title": session.get("title"), "file": file_path,
+            })
+            file_node = await active_graph_store.add_node("file", {
+                "path": file_path, "session_id": session_id, "project": project,
+            })
+            await active_graph_store.add_edge(
+                session_node["id"], file_node["id"], "contains", {}
+            )
+            inserted = duplicates = 0
+            degraded = []
+            for message in messages:
+                kind = message.get("kind", "text")
+                event_id = hashlib.sha256(
+                    f"{session_id}|{message['uuid']}|{kind}|{message['text']}".encode("utf-8")
+                ).hexdigest()
+                event = {
+                    "session_id": session_id, "project": project, "file": file_path,
+                    "uuid": message["uuid"], "role": message["role"],
+                    "kind": kind, "text": message["text"],
+                    "timestamp": message.get("ts", ""),
+                }
+                stored = await active_memory_store.append("session-events", event, event_id=event_id)
+                source_digest = hashlib.sha256(
+                    f"{message['uuid']}|{kind}|{message['text']}".encode("utf-8")
+                ).hexdigest()
+                document = DocumentIn(
+                    source_id=f"transcript:{session_id}:{source_digest}",
+                    revision=1,
+                    title=f"{project}/{session_id} · {message['role']} · {kind}",
+                    content=message["text"],
+                    chunk_profile="message-v1",
+                    media_type="text/plain",
+                )
+                try:
+                    await documents.ingest(document)
+                except Exception:
+                    if embeddings.available:
+                        degraded.append("embeddings")
+                        await documents.ingest(document, embed=False)
+                    else:
+                        raise
+                if stored["status"] == "duplicate":
+                    duplicates += 1
+                else:
+                    inserted += 1
+                for entity in extract(message["text"]):
+                    if entity.get("exact") and entity.get("type") in {"path", "file"}:
+                        path_node = await active_graph_store.add_node("file", {
+                            "path": entity["text"], "session_id": session_id,
+                            "project": project,
+                        })
+                        await active_graph_store.add_edge(
+                            session_node["id"], path_node["id"], "touched", {}
+                        )
+            return {
+                "ok": True, "session_id": session_id,
+                "inserted": inserted, "already_present": duplicates,
+                "messages_received": len(messages),
+                "degraded": sorted(set(degraded)),
+            }
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="session ingestion dependency unavailable") from exc
+
     @app.post("/api/v1/hybrid/prompts", tags=["hybrid"])
     async def hybrid_capture_prompt(payload: dict[str, Any], request: Request):
         content_length = request.headers.get("content-length")
