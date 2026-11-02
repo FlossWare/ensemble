@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 import secrets
 import random
@@ -440,7 +441,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "ga", "thompson", "learning"],
+            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
@@ -1388,6 +1389,74 @@ def create_app(
     @app.get("/api/v1/memory/sources/status", tags=["memory"])
     async def memory_sources_status():
         return {"ok": True, **(await active_memory_store.knowledge_status())}
+
+    @app.get("/api/v1/context/health", tags=["context"])
+    async def context_health():
+        return {"ok": True, "service": "context", "assembly": "extractive"}
+
+    @app.get("/api/v1/context/ready", tags=["context"])
+    async def context_ready():
+        try:
+            await document_store.check_ready()
+            await active_memory_store.check_ready()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="context dependencies unavailable") from exc
+        return {"ok": True, "ready": True, "token_estimator": "characters-divided-by-four"}
+
+    @app.post("/api/v1/context/assemble", tags=["context"])
+    async def context_assemble(payload: dict[str, Any]):
+        query = payload.get("query")
+        limit = payload.get("limit", 10)
+        max_tokens = payload.get("max_tokens", 4000)
+        if not isinstance(query, str) or not query.strip() or len(query) > 20_000:
+            raise HTTPException(status_code=400, detail="query must be a non-empty string of at most 20000 characters")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise HTTPException(status_code=400, detail="limit must be an integer between 1 and 100")
+        candidates = []
+        degraded = []
+        try:
+            found = await search.search_with_status(query, limit=limit, rerank=False)
+            entities = extract(query, source="context.query")
+            hits, graph = await expand_graph_results(query, entities, found["results"], limit)
+            degraded.extend(found.get("degraded", []))
+            if graph.get("degraded"):
+                degraded.append("graph")
+            for hit in hits:
+                candidates.append({
+                    "source": "ensemble-retrieval", "title": hit.title,
+                    "content": hit.text, "score": hit.fusion_score,
+                    "source_id": hit.source_id, "revision": hit.revision,
+                    "chunk_id": str(hit.chunk_id), "graph_score": hit.graph_score,
+                })
+        except Exception:
+            degraded.append("search")
+        if payload.get("include_memory", True):
+            try:
+                for item in await active_memory_store.search_semantic(query, top_k=limit):
+                    file_name, section = item.get("file"), item.get("section", "full")
+                    content = item.get("content", "")
+                    if isinstance(file_name, str):
+                        chunks = await active_memory_store.chunk(file_name, size=2000)
+                        selected = next((part for part in chunks if part.get("header") == section), None)
+                        if selected:
+                            content = selected.get("content", content)
+                    candidates.append({
+                        "source": "memory-document", "title": f"{file_name} · {section}",
+                        "content": content, "score": float(item.get("score", 0.0)),
+                        "file": file_name, "section": section,
+                    })
+            except Exception:
+                degraded.append("memory")
+        candidates.sort(key=lambda item: -float(item.get("score", 0.0)))
+        try:
+            assembled = _assemble_context(candidates, query, max_tokens)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "ok": True, **assembled, "query": query,
+            "intent": classify(query), "entities": extract(query, source="context.query"),
+            "degraded": sorted(set(degraded)),
+        }
 
     @app.get("/api/v1/memory/health", tags=["memory"])
     async def memory_health():
