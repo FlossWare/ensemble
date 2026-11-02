@@ -1195,7 +1195,8 @@ def create_app(
         from fastapi.responses import Response
         return Response(Path(__file__).with_name("control.js").read_text(encoding="utf-8"), media_type="application/javascript")
 
-    @app.post("/api/v1/ingestion/pdf", status_code=201, tags=["ingestion"])
+    @app.post("/api/v1/ingest/files", status_code=201, tags=["ingestion"])
+    @app.post("/api/v1/ingestion/pdf", status_code=201, tags=["ingestion"], include_in_schema=False)
     async def ingest_pdf(request: Request, source_id: str, title: str, revision: int = 1):
         """Extract text from a bounded PDF upload and pass it through document ingestion."""
         if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/pdf":
@@ -1237,14 +1238,16 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail="PDF ingestion failed") from exc
 
-    @app.post("/api/v1/scrape/preview", tags=["scraping"])
+    @app.post("/api/v1/ingest/urls/preview", tags=["ingestion"])
+    @app.post("/api/v1/scrape/preview", tags=["scraping"], include_in_schema=False)
     async def scrape_preview(payload: dict[str, Any]):
         try:
             return await preview_uri(payload.get("uri"))
         except ScrapeError as exc:
             raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
 
-    @app.post("/api/v1/scrape/ingest", status_code=201, tags=["scraping"])
+    @app.post("/api/v1/ingest/urls", status_code=201, tags=["ingestion"])
+    @app.post("/api/v1/scrape/ingest", status_code=201, tags=["scraping"], include_in_schema=False)
     async def scrape_and_ingest(payload: dict[str, Any]):
         try:
             preview = await preview_uri(payload.get("uri"))
@@ -1420,7 +1423,8 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=503, detail="knowledge retrieval dependency unavailable") from exc
 
-    @app.post("/api/v1/hybrid/transcripts/ingest", tags=["hybrid"])
+    @app.post("/api/v1/ingest/transcripts", tags=["ingestion"])
+    @app.post("/api/v1/hybrid/transcripts/ingest", tags=["hybrid"], include_in_schema=False)
     async def hybrid_ingest_transcript(payload: dict[str, Any], request: Request):
         """Ingest a caller-supplied JSONL byte slice; never opens a server-side path."""
         content_length = request.headers.get("content-length")
@@ -1605,7 +1609,8 @@ def create_app(
             "index_error": None,
         }
 
-    @app.post("/api/v1/documents", response_model=DocumentOut, status_code=201, tags=["documents"])
+    @app.post("/api/v1/ingest/documents", response_model=DocumentOut, status_code=201, tags=["ingestion"])
+    @app.post("/api/v1/documents", response_model=DocumentOut, status_code=201, tags=["documents"], include_in_schema=False)
     async def ingest_document(request: DocumentIn):
         try:
             return await documents.ingest(request)
