@@ -33,6 +33,7 @@ from .ranking import DEFAULT_K, fuse
 from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_reranker, validate_rerank_request
 from .scraping import ScrapeError, preview_uri
 from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
+from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpointStore, InMemoryTranscriptCheckpointStore
 from .file_ingestion import extract_pdf, PDFExtractionError, MAX_PDF_BYTES
 from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
 from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
@@ -170,6 +171,7 @@ def create_app(
     ga_store: GAStore | None = None,
     thompson_store: ThompsonStore | None = None,
     learning_store: LearningStore | None = None,
+    transcript_store: TranscriptCheckpointStore | None = None,
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
     document_store = store or SqlDocumentStore(database_url)
@@ -208,6 +210,10 @@ def create_app(
         InMemoryLearningStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteLearningStore(database_url)
     )
+    active_transcript_store = transcript_store or (
+        InMemoryTranscriptCheckpointStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteTranscriptCheckpointStore(database_url)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -222,8 +228,10 @@ def create_app(
             await active_ga_store.recover_interrupted_runs()
             await active_thompson_store.initialize()
             await active_learning_store.initialize()
+            await active_transcript_store.initialize()
             yield
         finally:
+            await active_transcript_store.close()
             await active_learning_store.close()
             await active_thompson_store.close()
             await active_ga_store.close()
