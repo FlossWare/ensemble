@@ -43,9 +43,9 @@ Implemented:
 - Vector similarity over stored chunk embeddings when embeddings are enabled.
 - Document and chunk provenance in search responses.
 - Tests for API behavior, migration setup, restart durability, and revision replacement.
-- Python 3.12 GitHub Actions workflow validates installer shell syntax, Control Center JavaScript syntax, and the full Python test suite. The latest review-branch run passed 147 tests with 1 skipped.
+- Python 3.12 GitHub Actions workflow validates installer shell syntax, Control Center JavaScript syntax, and the full Python test suite. The latest verified review-branch run passed 150 tests with 1 skipped.
 
-Implemented on the review branch (GitHub Actions has verified the latest completed test run):
+Implemented on the review branch (latest verified CI: 150 passed, 1 skipped):
 - POC-compatible lexical-v1 tokenization capability and REST endpoints.
 - POC-compatible identifier extraction capability and REST endpoints.
 - POC-compatible rule-based intent classification capability and REST endpoints.
@@ -66,7 +66,7 @@ Not yet implemented:
 - Additional tokenization/analyzer profiles beyond lexical-v1.
 - Dedicated approximate-nearest-neighbor vector index; exact dot-product search currently scans SQLite collection records.
 - Remaining retrieval work: external ranking-service fallback, calibrated channel weighting, bounded request deadlines/cancellation, and more complete retrieval tracing. Knowledge records now share the durable document/chunk index and participate in the same lexical/vector candidate fusion; Graph-linked exact entities can expand the candidate set. ANN indexing remains intentionally absent.
-- Durable ingestion jobs and restart-safe transcript checkpoints remain incomplete. Context assembly currently uses a character-based token estimate and extractive sentence selection; exact model-tokenizer budgeting and model-backed summarization are not implemented. Current transcript JSONL parsing accepts caller-supplied slices and returns byte offsets, while structured session ingestion is idempotent but synchronous.
+- Durable ingestion jobs and restart-safe transcript checkpoints remain incomplete. Context assembly is available through `POST /api/v1/context/assemble` and Memory recall. It uses a character-based token estimate and extractive sentence selection; exact model-tokenizer budgeting and model-backed summarization are not implemented. Current transcript JSONL parsing accepts caller-supplied slices and returns byte offsets, while structured session ingestion is idempotent but synchronous.
 - Broader learned/model-backed entity extraction and fuzzy entity resolution; current extraction and resolution are deterministic and rule-based.
 - Model-backed intent providers and calibrated confidence; current intent classification is deterministic and heuristic.
 - Remaining POC Memory parity: direct scoped filesystem scanning and symlink-safe path traversal, full session-event compatibility and deeper matching against the POC's 48 memory tests. Current semantic search is deterministic local term-vector cosine, not an embedding-backed ANN index; the source-import endpoint accepts content and verified path metadata rather than opening arbitrary paths. Initial Learning capability is implemented on the same REST listener: task outcome validation, payload-digest idempotency, SQLite checkpoint/status, Memory event publication, idempotent Thompson outcome updates, Thompson state snapshots, report/recent-outcome APIs, portable artifact persistence and explicit reset. Migrations `0010_learning` and `0011_thompson_events` support the workflow. Remaining Learning parity includes a deeper POC test/edge-case audit and any future client/circuit-breaker behavior outside the co-located service boundary. Scrape-ledger remains unimplemented. GA Tuning has an initial optimizer/API/persistence slice, but full POC evaluator parity, scheduled execution/recovery, portable learning artifacts, and Control Center configuration/progress/candidate comparison are not complete. The GA's Thompson evaluator is not the standalone Thompson service.
