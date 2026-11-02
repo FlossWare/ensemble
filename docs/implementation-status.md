@@ -26,7 +26,7 @@ PostgreSQL and other alternative persistence implementations are not part of Ens
 Implemented:
 - FastAPI application with generated OpenAPI documentation at /docs.
 - Durable SQLite document and chunk storage.
-- Deterministic character-window chunking in the initial document-ingestion path.
+- Versioned window-v1, markdown-v1, and message-v1 profiles are integrated into document ingestion; selected profile, exact offsets, and Markdown heading provenance persist in SQLite and are returned by search.
 - Standalone versioned window-v1, markdown-v1, and message-v1 chunk profiles with stable IDs, source offsets, and heading provenance.
 - Optional OpenAI-compatible embedding provider.
 - Versioned lexical-v1 tokenization with deterministic compound identifier handling and source offsets.
@@ -34,7 +34,7 @@ Implemented:
 - Explainable rule-based intent classification with evidence and per-label scores.
 - Deterministic reciprocal-rank fusion with per-list contributions and tie-breaking.
 - Optional local cross-encoder reranking provider with pinned model identity, bounded inputs, serialized scoring, and fail-closed readiness.
-- Lexical retrieval and reciprocal-rank fusion.
+- SQLite FTS5 lexical indexing uses the shared lexical-v1 tokenizer, Porter stemming, compound identifier analysis, OR query matching, BM25 ranking, and transactional replacement with document revisions.\n- Hybrid retrieval exposes independent Lexical and Hybrid REST groups, combines lexical and vector rankings, and preserves lexical results with explicit degraded dependency reporting when embeddings fail.\n- Hybrid prompt capture is stored in the SQLite Memory event ledger with deterministic event IDs and append-once idempotency; it explicitly reports that prompt capture alone does not index transcript content.
 - Vector similarity over stored chunk embeddings when embeddings are enabled.
 - Document and chunk provenance in search responses.
 - Tests for API behavior, migration setup, restart durability, and revision replacement.
@@ -62,7 +62,7 @@ Not yet implemented:
 - Additional tokenization/analyzer profiles beyond lexical-v1.
 - Dedicated approximate-nearest-neighbor vector index; exact dot-product search currently scans SQLite collection records.
 - Integration of reranking into the hybrid retrieval pipeline.
-- Full POC hybrid-search orchestration and degraded-dependency behavior.
+- Full POC hybrid-search orchestration: independent knowledge/transcript channels, related-session graph lookup, intent enrichment, ranking-service fallback, optional cross-encoder reranking, and transcript/session ingestion are not yet complete. Current Hybrid endpoint has lexical/vector retrieval and embedding-degradation fallback; knowledge-only search is exposed separately.
 - Generalize the Index-to-Knowledge publication pipeline to all document ingestion paths; the URI scraper currently uses it.
 - Broader learned/entity extraction beyond the POC's rule-based identifier extraction.
 - Any future model-backed intent providers, which are not part of the current POC behavior.
@@ -71,4 +71,4 @@ Not yet implemented:
 - Multi-page bounded crawling, robots.txt policy, DNS-to-connection pinning, durable ingestion jobs, retries, and scheduled source refresh.
 - Authentication, partition enforcement, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging.
 
-SQLite is the only persistence implementation in this repository. Embeddings are currently stored as JSON and scored in the application; this is not a scalable vector index.
+SQLite is the only persistence implementation in this repository. FTS5 provides the lexical index. Embeddings are stored as JSON and scored by exact scan in the application; this is not a scalable approximate-nearest-neighbor vector index.
