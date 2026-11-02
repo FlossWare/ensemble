@@ -96,6 +96,14 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | GET | /api/v1/reranking/health, /ready | Local cross-encoder model readiness and provenance |
 | POST | /api/v1/reranking/rerank | Score a bounded candidate list with the configured cross-encoder |
 | POST | /api/v1/ranking/rank | Explainable reciprocal-rank fusion |
+| GET | /api/v1/memory/health, /ready | Memory capability status |
+| GET | /api/v1/memory/memories, /memories/{name}, /memories/{name}/entries | List and read memory resources and entries |
+| PUT | /api/v1/memory/memories/{name}, /memories/{name}/entries/{event_id} | Replace memory content or append an idempotent event |
+| POST | /api/v1/memory/memories/{name}/entries | Append a memory entry |
+| POST | /api/v1/memory/search/keywords, /search/semantic, /search/hybrid | Keyword, semantic, and hybrid Memory retrieval |
+| POST | /api/v1/memory/recall, /chunking, /events | Context-aware recall, chunking, and prompt event capture |
+| POST | /api/v1/memory/sources/import, /sources/reconcile | Import and reconcile sourced Knowledge |
+| GET | /api/v1/memory/sources/status | Imported Knowledge source status |
 
 Ingestion is idempotent for a given source identifier and revision. Re-ingesting that revision replaces its chunk set transactionally. Search returns only the highest registered revision for each source identifier; historical revisions remain stored but are not included in the active search view.
 
