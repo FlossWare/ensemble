@@ -125,7 +125,7 @@ The POC parity inventory in docs/poc-parity.md defines the complete capability b
 | Chunking | Profile discovery and deterministic chunk generation |
 | Tokenization | Analyzer profile discovery and deterministic tokenization |
 | Index | Revision decisions, tombstones, source lookup and bounded manifest listing |
-| Extraction | Exact identifier and uncertain entity extraction with evidence |
+| Entities | Typed entity extraction, canonical resolution, and graph-backed linking |
 | Intent | Explainable intent classification with confidence and evidence |
 | Ranking | Reciprocal-rank fusion with per-channel contributions |
 | Knowledge | Sourced record create/read/tombstone with revision and provenance |
