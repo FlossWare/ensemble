@@ -143,7 +143,7 @@ def create_app(
         lifespan=lifespan,
     )
     documents = DocumentService(document_store, Chunker(), embeddings)
-    search = SearchService(document_store, embeddings)
+    search = SearchService(document_store, embeddings, active_reranker)
 
     app.state.store = document_store
     app.state.embedding_provider = embeddings
@@ -1293,7 +1293,7 @@ def create_app(
     @app.post("/api/v1/hybrid/search", tags=["hybrid"])
     async def hybrid_search(request: SearchIn):
         try:
-            return await search.search_with_status(request.query, request.limit)
+            return await search.search_with_status(request.query, request.limit, rerank=request.rerank)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
