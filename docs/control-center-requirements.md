@@ -119,7 +119,7 @@ The Control Center should organize workbenches by platform concern. Navigation l
 - Reconciliation and stale-revision decisions.
 - Rebuild/reindex operations only as explicit, confirmed actions with bounded scope.
 
-**Extraction and Intent**
+**Entities and Intent**
 - Extracted identifiers/entities, confidence, and uncertainty.
 - Intent labels, evidence, and per-label scores.
 - Distinguish rule-based behavior from any future model-backed provider.
@@ -158,7 +158,7 @@ The Pipeline Inspector is an explicit first-class workbench, not merely a debug 
 For a supplied document or supported source, inspect applicable stages:
 
 1. Source identification and validation.
-2. Extraction/content normalization.
+2. Entity extraction and intent classification.
 3. Tokenization and analyzer output.
 4. Chunking profile selection and chunk boundaries.
 5. Embedding provider/model and vector dimensions, when enabled.
