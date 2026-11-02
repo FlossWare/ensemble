@@ -16,10 +16,13 @@ A canonical route has one name. When it changes, update server routes, all clien
 
 | Capability | Canonical route(s) | Decision |
 |---|---|---|
+| Default retrieval | `POST /api/v1/search` | Default search contract under the Search capability |
+| Lexical retrieval | `POST /api/v1/search/lexical` | Explicit lexical-only strategy beneath Search |
+| Lexical search status | `GET /api/v1/search/lexical/health`, `GET /api/v1/search/lexical/ready` | Status endpoints live beneath the capability |
 | Unified Hybrid retrieval | `POST /api/v1/search/hybrid` | Search capability first, retrieval strategy second |
 | Knowledge-scoped Hybrid retrieval | `POST /api/v1/search/hybrid/knowledge` | Keep only as a genuinely distinct caller-facing scope |
 | Hybrid search status | `GET /api/v1/search/hybrid/health`, `GET /api/v1/search/hybrid/ready` | Status endpoints live beneath the capability |
-| Source ingestion | `POST /api/v1/ingest/documents`, `/files`, `/urls`, `/transcripts` | One ingestion namespace, source type as the resource |
+| Source ingestion | `POST /api/v1/ingest/documents`, `/files`, `/urls`, `/transcripts`, `/sessions` | One ingestion namespace, source type as the resource |
 | URL preview | `POST /api/v1/ingest/urls/preview` | Preview is subordinate to the URL source resource |
 
 The previous Hybrid search routes were removed rather than aliased. Control Center and existing API/UI tests were updated to use the canonical search paths.
@@ -39,10 +42,13 @@ The previous Hybrid search routes were removed rather than aliased. Control Cent
 - `POST /api/v1/ingest/urls/preview`
 - `POST /api/v1/ingest/urls`
 - `POST /api/v1/ingest/transcripts`
+- `POST /api/v1/ingest/sessions`
 
 ### Search and retrieval
 
 - `POST /api/v1/search`
+- `GET /api/v1/search/lexical/health`
+- `GET /api/v1/search/lexical/ready`
 - `POST /api/v1/search/lexical`
 - `POST /api/v1/search/hybrid`
 - `POST /api/v1/search/hybrid/knowledge`
