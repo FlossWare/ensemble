@@ -72,10 +72,12 @@ def _checkpoint_commit(store, *, start=0, end=4, payload=b"data", result=None):
     ))
 
 
-def test_checkpoint_requires_first_chunk_to_start_at_zero():
+def test_checkpoint_accepts_caller_supplied_initial_offset():
     store = InMemoryTranscriptCheckpointStore()
-    with pytest.raises(ValueError, match="expected byte offset 0"):
-        _checkpoint_commit(store, start=4, end=8)
+    first = _checkpoint_commit(store, start=4, end=8)
+
+    assert first["replayed"] is False
+    assert first["checkpoint"]["byte_offset"] == 8
 
 
 def test_checkpoint_advances_and_exact_retry_is_reported_as_replay():
