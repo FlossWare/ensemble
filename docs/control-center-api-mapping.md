@@ -1,6 +1,6 @@
 # Control Center API and UI Mapping
 
-**Status:** Initial inventory on `parity/poc-capability-inventory`.
+**Status:** Review-branch inventory for `review/core-services-2026-11-02`.
 **Purpose:** Record what the current REST application exposes and what the current browser Control Center actually uses. This is an implementation inventory, not a claim that every requirement is complete.
 
 ## 1. Current browser workbench coverage
@@ -17,7 +17,9 @@
 | GA | Run, history, detail, candidate promotion/export | `/api/v1/ga/runs`, `/api/v1/ga/runs/{run_id}`, `POST /api/v1/ga/runs/{run_id}/promote` | Initial workbench; synthetic evaluators must remain clearly labeled |
 | Thompson | State, selection, reset | `GET /api/v1/thompson/state`, `POST /api/v1/thompson/select`, `POST /api/v1/thompson/reset` | Model-level state and operations; task/capability filtering is not implemented |
 | Learning | Report, recent outcomes, artifacts, confirmed reset | `GET /api/v1/learning/report`, `GET /api/v1/learning/outcomes`, `GET /api/v1/learning/artifacts`, `POST /api/v1/learning/reset` | Initial workbench |
-| Entities | Extract candidates, explicitly resolve canonical identities, and explicitly create typed Graph links | `/api/v1/entities/extract`, `/resolve`, `/link` | Extraction is non-persistent; resolution and linking are explicit mutations |\n| Intent | Inspect multi-intent classification and evidence | `POST /api/v1/intent/classify` | Rule-based heuristic, not calibrated model confidence |\n| Runtime configuration | Display process configuration | `GET /api/v1/system/config` | Must continue redacting secrets and avoid implying hot reload |
+| Entities | Extract candidates, explicitly resolve canonical identities, and explicitly create typed Graph links | `/api/v1/entities/extract`, `/resolve`, `/link` | Extraction is non-persistent; resolution and linking are explicit mutations |
+| Intent | Inspect multi-intent classification and evidence | `POST /api/v1/intent/classify` | Rule-based heuristic, not calibrated model confidence |
+| Runtime configuration | Display process configuration | `GET /api/v1/system/config` | Must continue redacting secrets and avoid implying hot reload |
 
 ## 2. REST capability inventory
 
@@ -25,7 +27,7 @@ The following endpoint groups were found in `ensemble/api.py` at the time of thi
 
 | Capability | Existing REST surface | Current Control Center depth |
 |---|---|---|
-| System/operations | `/health`, `/ready`, `/api/v1/system/config` | Basic |
+| System/operations | `/health`, `/ready`, `/api/v1/system/config` | Basic |\n| Context | `/api/v1/context/health`, `/ready`, `POST /api/v1/context/assemble` | REST capability; bounded extractive assembly |
 | Embeddings | `/api/v1/embeddings/health`, `/model`, `POST /embed` | Health only |
 | Chunking | `/api/v1/chunking/health`, `/ready`, `/profiles`, `POST /chunk` | Health only |
 | Tokenization | `/api/v1/tokenization/health`, `/ready`, `/profiles`, `POST /tokenize` | Health only |
@@ -47,9 +49,10 @@ The following endpoint groups were found in `ensemble/api.py` at the time of thi
 
 ## 3. Implemented in the current parity branch
 
-The Control Center includes read-only inspection and explicitly separated mutation workbenches backed by existing REST contracts:
+The Control Center includes read-only inspection and explicitly separated mutation workbenches backed by existing REST contracts. Context assembly is currently API-first and is not yet exposed as a dedicated Control Center workbench:
 
-- **Graph:** property-filtered node queries, node lookup, and bounded traversal.\n- **Entities:** non-persistent candidate extraction, explicit Graph-backed canonical resolution, and explicit typed relationship creation.
+- **Graph:** property-filtered node queries, node lookup, and bounded traversal.
+- **Entities:** non-persistent candidate extraction, explicit Graph-backed canonical resolution, and explicit typed relationship creation.
 - **Chunking:** profile inventory and non-persistent chunk previews.
 - **Tokenization:** analyzer profile inventory and token previews.
 - **Knowledge:** record lookup by source identifier.
