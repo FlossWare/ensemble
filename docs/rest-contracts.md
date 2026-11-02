@@ -54,6 +54,9 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | GET | /health | Liveness |
 | GET | /ready | Application readiness and persistence configuration |
 | POST | /api/v1/documents | Register or replace a document revision, chunk it, optionally embed it, and durably store it |
+| POST | /api/v1/ingestion/pdf | Upload a bounded PDF, extract page-aware text, and ingest it through the shared document pipeline |
+| POST | /api/v1/scrape/preview, /api/v1/scrape/ingest | Preview or explicitly ingest a public HTTP(S) HTML/plain-text page |
+| POST | /api/v1/hybrid/transcripts/ingest | Parse caller-supplied JSONL transcript slices and return a UTF-8 byte checkpoint |
 | GET | /api/v1/chunking/health, /ready, /profiles | Chunking capability status and versioned profiles |
 | POST | /api/v1/chunking/chunk | Generate deterministic chunks with offsets and provenance |
 | POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |
@@ -125,3 +128,19 @@ A Control Center is also a required product surface. It is served by the same ap
 Decorators wrap capability implementations or REST clients while preserving the same request/response contract. Cross-cutting behavior must not require consumers to call a different API.
 
 Security-sensitive decorators are defense in depth. Enforcement also belongs at the trusted authorization and storage/query boundaries.
+
+
+## 11. Multi-format source ingestion
+
+All source types converge on the same document, chunking, embedding, indexing and retrieval pipeline. Extractors are responsible for source-specific parsing and provenance, not for maintaining separate search implementations.
+
+| Source type | Current support | Provenance retained | Important limits |
+|---|---|---|---|
+| Plain text / Markdown | Document API; public text URI preview and ingestion | Source ID, title, media type, caller metadata or final URI | URI preview is bounded to 2 MiB and 15 seconds |
+| HTML websites | Public HTTP(S) page preview and explicit ingestion | Requested/final URL, title, discovered links | Single page only; discovered links are not crawled automatically |
+| PDF | Raw application/pdf upload | Source ID, title, page count and extracted-page count; page markers retained in extracted text | 20 MiB, 1000 pages, 4 million extracted characters; scanned PDFs require OCR |
+| JSONL transcripts | Caller-supplied JSONL content slices | Session ID, project, logical source label, message UUID, timestamp, byte checkpoint | 8 MiB per request; only complete newline-terminated records advance the checkpoint |
+
+The JSONL endpoint does not open a caller-supplied server filesystem path. The caller reads the file and submits content plus its current byte offset; the response returns next_offset. Persisting and coordinating checkpoints across clients remains a separate durable-job concern.
+
+Planned source adapters include DOCX, HTML/URL crawl jobs, source-code repositories, email exports, and structured JSON/CSV. OCR, JavaScript-rendered web pages, authenticated sites, broad crawling, and scheduled refresh are not claimed by the current implementation.
