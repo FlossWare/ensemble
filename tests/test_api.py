@@ -723,11 +723,21 @@ def test_hybrid_raw_jsonl_transcript_ingestion_returns_byte_checkpoint_and_is_id
         assert body["bytes_consumed"] == len(complete.encode("utf-8"))
         assert body["next_offset"] == 4096 + len(complete.encode("utf-8"))
         assert body["incomplete_tail"] is True
+        assert body["job"]["status"] == "completed"
+        assert body["job_id"] == body["job"]["job_id"]
+        job_response = client.get(f"/api/v1/ingest/transcripts/jobs/{body['job_id']}")
+        assert job_response.status_code == 200
+        assert job_response.json()["job"]["status"] == "completed"
+        listed_jobs = client.get("/api/v1/ingest/transcripts/jobs")
+        assert listed_jobs.status_code == 200
+        assert listed_jobs.json()["jobs"][0]["job_id"] == body["job_id"]
 
         retry = client.post("/api/v1/ingest/transcripts", json=payload)
         assert retry.status_code == 200
         assert retry.json()["inserted"] == 0
         assert retry.json()["already_present"] == 1
+        assert retry.json()["replayed"] is True
+        assert retry.json()["job"]["status"] == "completed"
 
 
 def test_pdf_ingestion_rejects_non_extractable_pdf_with_clear_error():
