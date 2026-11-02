@@ -94,3 +94,12 @@ Start review as soon as a slice meets its exit criteria. Do not wait for all fiv
 6. A short list of remaining gaps, each tied to an issue or follow-up commit.
 
 The immediate engineering order is Memory parity tests and Hybrid transcript-ingestion parity. Control Center work continues only when it exposes a real diagnostic or review need.
+
+
+## Implementation update: ingestion adapters
+
+The branch now includes a pure JSONL transcript parser and REST ingestion route at POST /api/v1/hybrid/transcripts/ingest. It accepts caller-supplied content slices, extracts text/thinking/tool-use/tool-result records, detects file touches, consumes only complete newline-terminated records, computes UTF-8 byte offsets, and returns the next checkpoint. It does not open server-side filesystem paths or persist checkpoints; durable job/checkpoint coordination remains open. Regression coverage was added for multibyte UTF-8 offsets, incomplete tails, malformed complete lines, event extraction, and retry idempotency.
+
+A bounded PDF adapter is also present at POST /api/v1/ingestion/pdf. It extracts page-aware text and sends it through the existing document ingestion path. Limits are 20 MiB, 1000 pages, and 4 million extracted characters. Encrypted and textless/scanned PDFs are rejected; OCR is not implemented. Public HTML/plain-text URI preview and explicit single-page ingestion already existed; broad crawling, robots policy, DNS connection binding, refresh jobs, and JavaScript rendering remain open.
+
+These are implementation commits, not a claim of passing tests. The branch has not yet produced a verifiable CI run in this workflow.
