@@ -1594,7 +1594,7 @@ def create_app(
                     candidates.append({
                         "source": "memory:" + str(payload.get("name")),
                         "title": str(record.get("title") or record.get("event_id") or "memory entry"),
-                        "content": "\n.join(parts),
+                        "content": "\n".join(parts),
                         "event_id": record.get("event_id"),
                         "relation": item.get("relation"),
                         "execution_context": execution,
