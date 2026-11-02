@@ -312,7 +312,7 @@ const capabilities=[
  ["Chunking","/api/v1/chunking/health","/api/v1/chunking/ready"],
  ["Tokenization","/api/v1/tokenization/health","/api/v1/tokenization/ready"],
  ["Index","/api/v1/index/health","/api/v1/index/ready"],
- ["Extraction","/api/v1/extraction/health","/api/v1/extraction/ready"],
+ ["Entities","/api/v1/entities/health","/api/v1/entities/ready"],
  ["Intent","/api/v1/intent/health","/api/v1/intent/ready"],
  ["Ranking","/api/v1/ranking/health","/api/v1/ranking/ready"],
  ["Knowledge","/api/v1/knowledge/health","/api/v1/knowledge/ready"],
@@ -539,7 +539,7 @@ document.getElementById("pipeline-run").addEventListener("click",async()=>{
  button.disabled=true;output.textContent="Running independent read-only capability probes…";
  const stages=[
   ["Tokenization",()=>controlJson("/api/v1/tokenization/tokenize","POST",{profile:document.getElementById("tokenization-profile").value||"lexical-v1",text:textValue})],
-  ["Extraction",()=>controlJson("/api/v1/extraction/extract","POST",{text:textValue})],
+  ["Extraction",()=>(async()=>{const extracted=await controlJson("/api/v1/entities/extract","POST",{text:textValue,source:"control-center.diagnostic"});const resolved=extracted.entities.length?await controlJson("/api/v1/entities/resolve","POST",{entities:extracted.entities}):{ok:true,results:[]};return {extraction:extracted,resolution:resolved};})()],
   ["Intent",()=>controlJson("/api/v1/intent/classify","POST",{text:textValue})],
   ["Chunking",()=>controlJson("/api/v1/chunking/chunk","POST",{profile:document.getElementById("chunking-profile").value||"window-v1",source_id:"control-center-diagnostic",text:textValue,media_type:"text/plain"})]
  ];
