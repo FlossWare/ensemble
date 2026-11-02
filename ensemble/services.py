@@ -4,7 +4,7 @@ import re
 import math
 from collections.abc import Sequence
 from uuid import uuid5, NAMESPACE_URL
-from .chunking import Chunker
+from .chunking import Chunker, chunk as chunk_text
 from .embeddings import EmbeddingProvider
 from .models import Chunk, Document, DocumentIn, DocumentOut, SearchHit
 from .store import DocumentStore
@@ -18,15 +18,20 @@ class DocumentService:
 
     async def ingest(self, request: DocumentIn) -> DocumentOut:
         document = Document(request.source_id, request.revision, request.title, request.content)
-        texts = self.chunker.split(request.content)
-        if not texts:
+        records = chunk_text(request.chunk_profile, request.source_id, request.content, request.media_type)
+        if not records:
             raise ValueError("document content contains no usable text")
+        texts = [record["text"] for record in records]
         vectors = await self.embeddings.embed(texts, mode="document") if self.embeddings.available else [[] for _ in texts]
         if len(vectors) != len(texts):
             raise RuntimeError("embedding provider returned an unexpected vector count")
         chunks = [
-            Chunk(document.id, ordinal, text, vectors[ordinal])
-            for ordinal, text in enumerate(texts)
+            Chunk(
+                document.id, record["index"], record["text"], vectors[index],
+                profile=request.chunk_profile, start=record["start"], end=record["end"],
+                header=record["header"],
+            )
+            for index, record in enumerate(records)
         ]
         for chunk in chunks:
             chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
@@ -39,6 +44,7 @@ class DocumentService:
             chunk_count=len(chunks),
             embedded=all(bool(chunk.embedding) for chunk in chunks),
             created_at=document.created_at,
+            chunk_profile=request.chunk_profile,
         )
 
 
@@ -90,6 +96,10 @@ class SearchService:
                 lexical_score=lexical_scores.get(item.chunk.id, 0.0),
                 vector_score=vector_scores.get(item.chunk.id, 0.0),
                 fusion_score=fusion,
+                chunk_profile=item.chunk.profile,
+                chunk_start=item.chunk.start,
+                chunk_end=item.chunk.end,
+                chunk_header=item.chunk.header,
             ))
         return sorted(hits, key=lambda hit: (hit.fusion_score, hit.lexical_score), reverse=True)[:limit]
 
