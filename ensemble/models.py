@@ -28,6 +28,7 @@ class DocumentOut(BaseModel):
 class SearchIn(BaseModel):
     query: str = Field(min_length=1)
     limit: int = Field(default=10, ge=1, le=100)
+    rerank: bool | None = None
 
 
 class SearchHit(BaseModel):
@@ -45,6 +46,7 @@ class SearchHit(BaseModel):
     chunk_start: int = 0
     chunk_end: int = 0
     chunk_header: str = ""
+    rerank_score: float | None = None
 
 
 class Document:
