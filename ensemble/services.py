@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 import math
 import asyncio
 import os
@@ -27,7 +28,15 @@ class DocumentService:
         if not records:
             raise ValueError("document content contains no usable text")
         texts = [record["text"] for record in records]
-        vectors = await self.embeddings.embed(texts, mode="document") if embed and self.embeddings.available else [[] for _ in texts]
+        if embed and self.embeddings.available:
+            try:
+                vectors = await self.embeddings.embed(texts, mode="document")
+            except Exception:
+                if vector_collection is None:
+                    raise
+                vectors = [[] for _ in texts]
+        else:
+            vectors = [[] for _ in texts]
         if len(vectors) != len(texts):
             raise RuntimeError("embedding provider returned an unexpected vector count")
         chunks = [
@@ -41,6 +50,7 @@ class DocumentService:
         for chunk in chunks:
             chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
         document = await self.store.save(document, chunks)
+        vector_indexed = False
         if (
             vector_collection and embed and self.vector_store is not None
             and self.embeddings.available and chunks and all(chunk.embedding for chunk in chunks)
@@ -49,9 +59,10 @@ class DocumentService:
             model = status.get("model") or "unknown"
             dimensions = status.get("dimensions") or len(chunks[0].embedding)
             digest = hashlib.sha256(request.content.encode("utf-8")).hexdigest()
-            await self.vector_store.upsert(
-                vector_collection, model, dimensions,
-                [{
+            try:
+                await self.vector_store.upsert(
+                    vector_collection, model, dimensions,
+                    [{
                     "id": str(chunk.id),
                     "embedding": chunk.embedding,
                     "document": chunk.content,
@@ -67,8 +78,11 @@ class DocumentService:
                         "chunk_header": chunk.header,
                         "content_sha256": digest,
                     },
-                } for chunk in chunks],
-            )
+                    } for chunk in chunks],
+                )
+                vector_indexed = True
+            except Exception:
+                vector_indexed = False
         return DocumentOut(
             id=document.id,
             source_id=document.source_id,
@@ -78,6 +92,7 @@ class DocumentService:
             embedded=all(bool(chunk.embedding) for chunk in chunks),
             created_at=document.created_at,
             chunk_profile=request.chunk_profile,
+            vector_indexed=vector_indexed,
         )
 
 
