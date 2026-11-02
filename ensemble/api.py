@@ -1971,7 +1971,7 @@ def create_app(
 
     @app.post("/api/v1/ingest/transcripts", tags=["ingestion"])
     async def hybrid_ingest_transcript(payload: dict[str, Any], request: Request):
-        """Ingest a caller-supplied JSONL byte slice; never opens a server-side path."""
+        """Ingest a caller-supplied JSONL slice with a durable, revision-scoped checkpoint."""
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > MAX_TRANSCRIPT_BYTES + 65_536:
             raise HTTPException(status_code=413, detail="request body exceeds transcript limit")
@@ -1980,10 +1980,29 @@ def create_app(
         project = payload.get("project")
         file_path = payload.get("file", "transcript.jsonl")
         offset = payload.get("offset", 0)
+        revision_id = payload.get("revision_id", "1")
+        if not isinstance(raw_content, str):
+            raise HTTPException(status_code=400, detail="content must be a string")
         if not isinstance(project, str) or not project.strip() or len(project) > 256:
             raise HTTPException(status_code=400, detail="project must be a non-empty string of at most 256 characters")
         if not isinstance(file_path, str) or not file_path.strip() or len(file_path) > 4096:
             raise HTTPException(status_code=400, detail="file must be a non-empty logical source label of at most 4096 characters")
+        if not isinstance(revision_id, str) or not revision_id.strip() or len(revision_id) > 256:
+            raise HTTPException(status_code=400, detail="revision_id must be a non-empty string of at most 256 characters")
+        source_key = hashlib.sha256(f"{project}|{file_path}".encode("utf-8")).hexdigest()
+        source_id = "transcript-file:" + source_key
+        payload_digest = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
+        checkpoint = await active_transcript_store.get(source_id, revision_id)
+        if checkpoint is not None and offset != checkpoint["byte_offset"]:
+            if (
+                offset == checkpoint["last_start_offset"]
+                and payload_digest == checkpoint["last_payload_sha256"]
+            ):
+                return {**checkpoint["last_result"], "replayed": True, "checkpoint": checkpoint}
+            raise HTTPException(
+                status_code=409,
+                detail=f"transcript checkpoint mismatch; expected byte offset {checkpoint['byte_offset']}",
+            )
         try:
             parsed = parse_jsonl(raw_content, session_id=session_id, offset=offset)
         except OverflowError as exc:
@@ -1991,31 +2010,59 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not parsed["messages"]:
-            return {
+            result = {
                 "ok": True, "session_id": parsed["session_id"],
                 "inserted": 0, "already_present": 0, "messages_received": 0,
                 "bytes_consumed": parsed["bytes_consumed"],
                 "next_offset": parsed["end_offset"],
                 "incomplete_tail": parsed["incomplete_tail"],
+                "touches_detected": len(parsed["touches"]),
                 "degraded": [],
             }
-        session_payload = {
-            "session": {
-                "session_id": parsed["session_id"], "project": project,
-                "file": file_path, "first_ts": parsed["first_ts"],
-                "last_ts": parsed["last_ts"],
-                "is_subagent": bool(payload.get("is_subagent", False)),
-            },
-            "messages": parsed["messages"],
+        else:
+            session_payload = {
+                "session": {
+                    "session_id": parsed["session_id"], "project": project,
+                    "file": file_path, "first_ts": parsed["first_ts"],
+                    "last_ts": parsed["last_ts"],
+                    "is_subagent": bool(payload.get("is_subagent", False)),
+                },
+                "messages": parsed["messages"],
+            }
+            result = await ingest_session(session_payload, request)
+            result.update({
+                "bytes_consumed": parsed["bytes_consumed"],
+                "next_offset": parsed["end_offset"],
+                "incomplete_tail": parsed["incomplete_tail"],
+                "touches_detected": len(parsed["touches"]),
+            })
+        try:
+            committed = await active_transcript_store.commit(
+                source_id, revision_id, project, file_path, offset, parsed["end_offset"],
+                payload_digest, result,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if committed["replayed"]:
+            return {**committed["result"], "replayed": True, "checkpoint": committed["checkpoint"]}
+        return {
+            **result, "replayed": False, "source_id": source_id,
+            "revision_id": revision_id, "checkpoint": committed["checkpoint"],
         }
-        result = await ingest_session(session_payload, request)
-        result.update({
-            "bytes_consumed": parsed["bytes_consumed"],
-            "next_offset": parsed["end_offset"],
-            "incomplete_tail": parsed["incomplete_tail"],
-            "touches_detected": len(parsed["touches"]),
-        })
-        return result
+
+    @app.get("/api/v1/ingest/transcripts/checkpoint", tags=["ingestion"])
+    async def transcript_checkpoint(project: str, file: str, revision_id: str = "1"):
+        if not project.strip() or len(project) > 256 or not file.strip() or len(file) > 4096:
+            raise HTTPException(status_code=400, detail="project and file must be non-empty and within their length limits")
+        if not revision_id.strip() or len(revision_id) > 256:
+            raise HTTPException(status_code=400, detail="revision_id must be a non-empty string of at most 256 characters")
+        source_id = "transcript-file:" + hashlib.sha256(
+            f"{project}|{file}".encode("utf-8")
+        ).hexdigest()
+        checkpoint = await active_transcript_store.get(source_id, revision_id)
+        if checkpoint is None:
+            raise HTTPException(status_code=404, detail="transcript checkpoint not found")
+        return {"ok": True, "checkpoint": checkpoint}
 
     @app.post("/api/v1/ingest/sessions", tags=["ingestion"])
     async def ingest_session(payload: dict[str, Any], request: Request):
