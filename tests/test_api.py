@@ -37,7 +37,7 @@ def test_health_and_ready(tmp_path):
 
 def test_ingest_then_lexical_search_returns_provenance(tmp_path):
     with _client(tmp_path) as client:
-        response = client.post("/api/v1/documents", json={
+        response = client.post("/api/v1/ingest/documents", json={
             "source_id": "architecture-note",
             "revision": 1,
             "title": "Vector retrieval",
@@ -59,7 +59,7 @@ def test_ingest_then_lexical_search_returns_provenance(tmp_path):
 
 def test_validation_errors_use_problem_details(tmp_path):
     with _client(tmp_path) as client:
-        response = client.post("/api/v1/documents", json={})
+        response = client.post("/api/v1/ingest/documents", json={})
         assert response.status_code == 422
         assert response.headers["content-type"].startswith("application/problem+json")
         body = response.json()
@@ -76,7 +76,7 @@ def test_documents_survive_application_restart(tmp_path):
         "content": "Durable storage must survive application restarts and process replacement.",
     }
     with _client(tmp_path) as client:
-        first = client.post("/api/v1/documents", json=payload).json()
+        first = client.post("/api/v1/ingest/documents", json=payload).json()
 
     with _client(tmp_path) as client:
         hits = client.post("/api/v1/search", json={"query": "durable storage"}).json()
@@ -92,12 +92,12 @@ def test_reingest_replaces_chunk_content_for_same_revision(tmp_path):
             "title": "Mutable source",
             "content": "The original content contains obsolete terminology.",
         }
-        first = client.post("/api/v1/documents", json=original).json()
+        first = client.post("/api/v1/ingest/documents", json=original).json()
         replacement = {
             **original,
             "content": "The replacement content contains current terminology.",
         }
-        second = client.post("/api/v1/documents", json=replacement).json()
+        second = client.post("/api/v1/ingest/documents", json=replacement).json()
         assert second["id"] == first["id"]
 
         old_hits = client.post("/api/v1/search", json={"query": "obsolete"}).json()
@@ -115,8 +115,8 @@ def test_reingest_is_idempotent_and_latest_revision_is_searchable(tmp_path):
             "title": "First revision",
             "content": "The original document discusses obsolete indexing behavior.",
         }
-        first = client.post("/api/v1/documents", json=original).json()
-        again = client.post("/api/v1/documents", json=original).json()
+        first = client.post("/api/v1/ingest/documents", json=original).json()
+        again = client.post("/api/v1/ingest/documents", json=original).json()
         assert again["id"] == first["id"]
 
         revised = {
@@ -125,7 +125,7 @@ def test_reingest_is_idempotent_and_latest_revision_is_searchable(tmp_path):
             "title": "Second revision",
             "content": "The current document discusses durable indexing behavior.",
         }
-        second = client.post("/api/v1/documents", json=revised).json()
+        second = client.post("/api/v1/ingest/documents", json=revised).json()
         assert second["id"] != first["id"]
 
         current = client.post("/api/v1/search", json={"query": "indexing behavior"}).json()
@@ -133,7 +133,7 @@ def test_reingest_is_idempotent_and_latest_revision_is_searchable(tmp_path):
         assert current[0]["revision"] == 2
         assert current[0]["document_id"] == second["id"]
 
-        historical = client.post("/api/v1/documents", json=original).json()
+        historical = client.post("/api/v1/ingest/documents", json=original).json()
         assert historical["id"] == first["id"]
         still_current = client.post("/api/v1/search", json={"query": "indexing behavior"}).json()
         assert len(still_current) == 1
@@ -439,7 +439,7 @@ def test_document_ingestion_uses_versioned_markdown_profile_and_persists_provena
         "media_type": "text/markdown",
     }
     with _client(tmp_path) as client:
-        ingested = client.post("/api/v1/documents", json=payload)
+        ingested = client.post("/api/v1/ingest/documents", json=payload)
         assert ingested.status_code == 201
         assert ingested.json()["chunk_profile"] == "markdown-v1"
         hits = client.post("/api/v1/search", json={"query": "retrieval pipeline"}).json()
@@ -456,7 +456,7 @@ def test_document_ingestion_uses_versioned_markdown_profile_and_persists_provena
 
 def test_document_ingestion_rejects_unknown_chunk_profile(tmp_path):
     with _client(tmp_path) as client:
-        response = client.post("/api/v1/documents", json={
+        response = client.post("/api/v1/ingest/documents", json={
             "source_id": "invalid-profile",
             "revision": 1,
             "title": "Invalid profile",
@@ -521,7 +521,7 @@ def test_hybrid_prompt_capture_is_idempotent(tmp_path):
 
 def test_sqlite_lexical_index_uses_shared_analyzer_and_porter_stemming(tmp_path):
     with _client(tmp_path) as client:
-        ingested = client.post("/api/v1/documents", json={
+        ingested = client.post("/api/v1/ingest/documents", json={
             "source_id": "stemmed-source",
             "revision": 1,
             "title": "Runtime behavior",
@@ -544,9 +544,9 @@ def test_sqlite_lexical_index_replaces_reingested_revision(tmp_path):
             "title": "FTS replacement",
             "content": "obsolete terminology lives here",
         }
-        assert client.post("/api/v1/documents", json=payload).status_code == 201
+        assert client.post("/api/v1/ingest/documents", json=payload).status_code == 201
         replacement = {**payload, "content": "current terminology lives here"}
-        assert client.post("/api/v1/documents", json=replacement).status_code == 201
+        assert client.post("/api/v1/ingest/documents", json=replacement).status_code == 201
         old = client.post("/api/v1/lexical/search", json={"query": "obsolete"}).json()
         current = client.post("/api/v1/lexical/search", json={"query": "current"}).json()
         assert old["results"] == []
@@ -573,7 +573,7 @@ def test_hybrid_search_can_apply_opt_in_cross_encoder_reranking():
             ("first", "topic ordinary candidate"),
             ("preferred", "topic preferred candidate"),
         ]:
-            response = client.post("/api/v1/documents", json={
+            response = client.post("/api/v1/ingest/documents", json={
                 "source_id": source_id,
                 "revision": 1,
                 "title": source_id,
@@ -635,7 +635,7 @@ def test_hybrid_raw_jsonl_transcript_ingestion_returns_byte_checkpoint_and_is_id
         "content": complete + partial,
     }
     with TestClient(app) as client:
-        first = client.post("/api/v1/hybrid/transcripts/ingest", json=payload)
+        first = client.post("/api/v1/ingest/transcripts", json=payload)
         assert first.status_code == 200
         body = first.json()
         assert body["session_id"] == "raw-jsonl-session"
@@ -644,7 +644,7 @@ def test_hybrid_raw_jsonl_transcript_ingestion_returns_byte_checkpoint_and_is_id
         assert body["next_offset"] == 4096 + len(complete.encode("utf-8"))
         assert body["incomplete_tail"] is True
 
-        retry = client.post("/api/v1/hybrid/transcripts/ingest", json=payload)
+        retry = client.post("/api/v1/ingest/transcripts", json=payload)
         assert retry.status_code == 200
         assert retry.json()["inserted"] == 0
         assert retry.json()["already_present"] == 1
@@ -654,7 +654,7 @@ def test_pdf_ingestion_rejects_non_extractable_pdf_with_clear_error():
     app = create_app(store=InMemoryDocumentStore())
     with TestClient(app) as client:
         response = client.post(
-            "/api/v1/ingestion/pdf",
+            "/api/v1/ingest/files",
             params={"source_id": "upload:test.pdf", "title": "Test PDF"},
             content=b"%PDF-not-a-valid-document",
             headers={"content-type": "application/pdf"},
@@ -856,7 +856,7 @@ def test_lexical_search_suppresses_identical_message_text_across_sessions():
 def test_successful_hybrid_search_is_recorded_in_memory_search_ledger():
     app = create_app(store=InMemoryDocumentStore())
     with TestClient(app) as client:
-        client.post("/api/v1/documents", json={
+        client.post("/api/v1/ingest/documents", json={
             "source_id": "search-ledger-doc", "revision": 1,
             "title": "Search ledger", "content": "The retrieval pipeline is observable.",
         })
@@ -882,7 +882,7 @@ def test_search_ledger_failure_does_not_fail_successful_hybrid_search():
         memory_store=FailingSearchLedger(),
     )
     with TestClient(app) as client:
-        client.post("/api/v1/documents", json={
+        client.post("/api/v1/ingest/documents", json={
             "source_id": "search-ledger-failure", "revision": 1,
             "title": "Search ledger", "content": "Retrieval remains available.",
         })
