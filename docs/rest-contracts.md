@@ -11,6 +11,15 @@
 
 ## 2. Resource and operation conventions
 
+- Organize paths by caller-facing capability or resource first; place strategy, scope, or representation beneath it.
+- A path should express caller intent, not an internal implementation, storage engine, table, collection, class, or provider.
+- Use HTTP methods for standard resource operations. Use a subordinate action resource only when the operation is a meaningful domain action that is not ordinary CRUD.
+- Use plural resource collections and stable resource identifiers.
+- Avoid verb-led paths such as `/add-node`, `/upsert`, or `/delete-superseded` when a resource-oriented path and HTTP method express the operation clearly.
+- Keep related operations under a consistent resource root. For example, retrieval is `/search/hybrid`, with a narrower Knowledge scope at `/search/hybrid/knowledge`.
+- Do not create alternate aliases for canonical routes. When a route is replaced, update every consumer and remove the old route.
+- Health and readiness endpoints belong beneath the capability they describe, using `/health` and `/ready` suffixes.
+
 - Use nouns for resources and HTTP methods for operations.
 - Use stable resource identifiers in paths.
 - Use explicit operation endpoints for domain actions that do not map cleanly to CRUD (for example, POST /api/v1/search and POST /api/v1/rerank).
@@ -61,7 +70,7 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/chunking/chunk | Generate deterministic chunks with offsets and provenance |
 | POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |
 | GET/POST | /api/v1/lexical/health, /ready, /documents, /search | Independent Lexical ingestion and BM25 search capability |
-| GET/POST | /api/v1/hybrid/health, /ready, /search, /knowledge/search, /prompts, /sessions/ingest | Hybrid retrieval, knowledge-only search, idempotent prompt capture, and bounded transcript-session ingestion |
+| GET/POST | /api/v1/search/hybrid/health, /ready, /search, /knowledge/search, /prompts, /sessions/ingest | Hybrid retrieval, knowledge-only search, idempotent prompt capture, and bounded transcript-session ingestion |
 | GET | /api/v1/tokenization/health, /ready, /profiles | Tokenization capability status and analyzer profiles |
 | POST | /api/v1/tokenization/tokenize | Versioned deterministic text analysis |
 | GET | /api/v1/extraction/health, /ready | Extraction capability status |
@@ -130,11 +139,15 @@ Decorators wrap capability implementations or REST clients while preserving the 
 Security-sensitive decorators are defense in depth. Enforcement also belongs at the trusted authorization and storage/query boundaries.
 
 
-## 11. Ingestion API conventions
+## 11. Search API conventions
+
+Search paths are capability-first. The canonical unified retrieval operation is `POST /api/v1/search/hybrid`; the Knowledge-scoped operation is `POST /api/v1/search/hybrid/knowledge`. The scope segment is present only because Knowledge-only retrieval is a distinct caller-facing operation. Do not expose channel implementation details such as FTS5, SQLite, vector collection names, or model providers in search paths. Other strategies or scopes should be added only when a real consumer requirement exists.
+
+## 12. Ingestion API conventions
 
 All source ingestion operations share the `/api/v1/ingest` namespace. Use the source collection (`documents`, `files`, `urls`, `transcripts`) to express the source type; use nested resources such as `/urls/preview` for non-mutating preparation. Format-specific extraction remains an internal adapter concern. The canonical ingestion namespace is the only supported public route structure. New ingestion capabilities must be added beneath this namespace rather than creating parallel source-specific route families.
 
-## 12. Multi-format source ingestion
+## 13. Multi-format source ingestion
 
 All source types converge on the same document, chunking, embedding, indexing and retrieval pipeline. Extractors are responsible for source-specific parsing and provenance, not for maintaining separate search implementations.
 
