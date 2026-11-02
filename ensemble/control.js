@@ -307,7 +307,7 @@ const capabilities=[
  ["Embeddings","/api/v1/embeddings/health",null],
  ["Vector","/api/v1/vector/health",null],
  ["Lexical","/api/v1/lexical/health","/api/v1/lexical/ready"],
- ["Hybrid","/api/v1/hybrid/health","/api/v1/hybrid/ready"],
+ ["Hybrid","/api/v1/search/hybrid/health","/api/v1/search/hybrid/ready"],
  ["Reranking","/api/v1/reranking/health","/api/v1/reranking/ready"],
  ["Chunking","/api/v1/chunking/health","/api/v1/chunking/ready"],
  ["Tokenization","/api/v1/tokenization/health","/api/v1/tokenization/ready"],
@@ -368,7 +368,7 @@ const retrievalResults=document.getElementById("retrieval-results");
 retrievalForm.addEventListener("submit",async event=>{
  event.preventDefault();retrievalResults.textContent="Searching…";
  try{
-  const result=await controlJson("/api/v1/hybrid/search","POST",{
+  const result=await controlJson("/api/v1/search/hybrid","POST",{
    query:retrievalQuery.value.trim(),limit:Number(retrievalLimit.value),
    rerank:document.getElementById("retrieval-rerank").checked
   });
