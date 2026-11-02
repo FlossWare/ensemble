@@ -688,8 +688,8 @@ def test_hybrid_session_ingestion_is_idempotent_and_populates_retrieval_graph():
         ],
     }
     with TestClient(app) as client:
-        first = client.post("/api/v1/hybrid/sessions/ingest", json=payload)
-        second = client.post("/api/v1/hybrid/sessions/ingest", json=payload)
+        first = client.post("/api/v1/ingest/sessions", json=payload)
+        second = client.post("/api/v1/ingest/sessions", json=payload)
         assert first.status_code == 200
         assert first.json()["inserted"] == 2
         assert second.status_code == 200
@@ -709,7 +709,7 @@ def test_hybrid_session_ingestion_is_idempotent_and_populates_retrieval_graph():
 def test_hybrid_session_ingestion_rejects_invalid_messages_before_writing():
     app = create_app(store=InMemoryDocumentStore())
     with TestClient(app) as client:
-        response = client.post("/api/v1/hybrid/sessions/ingest", json={
+        response = client.post("/api/v1/ingest/sessions", json={
             "session": {
                 "session_id": "session-invalid",
                 "project": "ensemble",
@@ -749,7 +749,7 @@ def test_hybrid_session_ingestion_populates_vector_collection_and_searches_it():
         }],
     }
     with TestClient(app) as client:
-        ingested = client.post("/api/v1/hybrid/sessions/ingest", json=payload)
+        ingested = client.post("/api/v1/ingest/sessions", json=payload)
         assert ingested.status_code == 200
         assert ingested.json()["inserted"] == 1
 
@@ -759,7 +759,7 @@ def test_hybrid_session_ingestion_populates_vector_collection_and_searches_it():
             **payload,
             "messages": [{**payload["messages"][0], "ts": "2026-11-02T11:00:00Z"}],
         }
-        retried = client.post("/api/v1/hybrid/sessions/ingest", json=retry_payload)
+        retried = client.post("/api/v1/ingest/sessions", json=retry_payload)
         assert retried.status_code == 200
         assert retried.json()["inserted"] == 0
         assert retried.json()["already_present"] == 1
@@ -813,7 +813,7 @@ def test_transcript_metadata_survives_sqlite_restart(tmp_path):
         }],
     }
     with _client(tmp_path) as client:
-        response = client.post("/api/v1/hybrid/sessions/ingest", json=payload)
+        response = client.post("/api/v1/ingest/sessions", json=payload)
         assert response.status_code == 200
         assert response.json()["inserted"] == 1
 
@@ -916,7 +916,7 @@ def test_long_transcript_messages_are_fully_chunked_and_embedding_batches_are_bo
     )
     message_text = ("ordinary transcript words " * 5000) + "tailmarkerunique"
     with TestClient(app) as client:
-        response = client.post("/api/v1/hybrid/sessions/ingest", json={
+        response = client.post("/api/v1/ingest/sessions", json={
             "session": {
                 "session_id": "long-session",
                 "project": "ensemble",
