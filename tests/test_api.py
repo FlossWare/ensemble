@@ -827,3 +827,53 @@ def test_search_ledger_failure_does_not_fail_successful_hybrid_search():
         response = client.post("/api/v1/hybrid/search", json={"query": "retrieval"})
         assert response.status_code == 200
         assert response.json()["results"]
+
+
+class _BatchCountingEmbeddingProvider:
+    available = True
+
+    def __init__(self):
+        self.batch_sizes = []
+
+    def status(self):
+        return {"ok": True, "ready": True, "model": "batch-test", "dimensions": 3}
+
+    async def embed(self, texts, mode="document"):
+        self.batch_sizes.append(len(texts))
+        assert len(texts) <= 64
+        return [[1.0, 0.0, 0.0] for _ in texts]
+
+
+def test_long_transcript_messages_are_fully_chunked_and_embedding_batches_are_bounded():
+    provider = _BatchCountingEmbeddingProvider()
+    vectors = InMemoryVectorStore()
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        embedding_provider=provider,
+        vector_store=vectors,
+    )
+    message_text = ("ordinary transcript words " * 5000) + "tailmarkerunique"
+    with TestClient(app) as client:
+        response = client.post("/api/v1/hybrid/sessions/ingest", json={
+            "session": {
+                "session_id": "long-session",
+                "project": "ensemble",
+                "file": "/work/long-session.jsonl",
+            },
+            "messages": [{
+                "uuid": "long-message", "role": "assistant", "kind": "text",
+                "text": message_text,
+            }],
+        })
+        assert response.status_code == 200
+        assert len(provider.batch_sizes) > 1
+        assert max(provider.batch_sizes) <= 64
+        collections = client.get("/api/v1/vector/collections").json()["collections"]
+        transcript = next(item for item in collections if item["name"] == "transcript_text")
+        assert transcript["count"] > 64
+        results = client.post("/api/v1/lexical/search", json={
+            "query": "tailmarkerunique", "limit": 10,
+        }).json()["results"]
+        assert results
+        assert results[0]["chunk_profile"] == "window-v1"
+        assert "tailmarkerunique" in results[0]["text"]
