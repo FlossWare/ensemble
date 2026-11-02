@@ -1562,9 +1562,36 @@ def create_app(
             result = await active_memory_store.retrieve(
                 payload.get("name"), payload.get("context", {}), payload.get("limit", 10)
             )
+            response = {"ok": True, "results": result}
+            if "max_tokens" in payload:
+                candidates = []
+                for item in result:
+                    record = item.get("record", {})
+                    if not isinstance(record, dict):
+                        continue
+                    parts = []
+                    for key in ("content", "text", "summary", "prompt", "response", "output"):
+                        value = record.get(key)
+                        if isinstance(value, str) and value.strip():
+                            parts.append(f"{key}: {value.strip()}")
+                    if not parts:
+                        continue
+                    execution = item.get("execution_context", {})
+                    candidates.append({
+                        "source": "memory:" + str(payload.get("name")),
+                        "title": str(record.get("title") or record.get("event_id") or "memory entry"),
+                        "content": "\\n".join(parts),
+                        "event_id": record.get("event_id"),
+                        "relation": item.get("relation"),
+                        "execution_context": execution,
+                    })
+                response["context"] = _assemble_context(
+                    candidates, payload.get("context", {}).get("objective", ""),
+                    payload["max_tokens"],
+                )
+            return response
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "results": result}
 
     @app.post("/api/v1/memory/chunking", tags=["memory"])
     async def memory_chunk(payload: dict[str, Any]):
