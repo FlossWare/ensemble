@@ -372,6 +372,35 @@ def test_knowledge_store_readback_and_provenance(tmp_path):
         assert len(record["content_sha256"]) == 64
 
 
+def test_knowledge_publication_enters_hybrid_search_and_graph(tmp_path):
+    with _client(tmp_path) as client:
+        payload = _knowledge_record(
+            source_id="rfc-entity",
+            content="CPSEARCH-10177 documents the graph-aware retrieval contract.",
+        )
+        response = client.post("/api/v1/knowledge/records", json=payload)
+        assert response.status_code == 200
+        assert response.json()["document"]["source_id"] == "rfc-entity"
+
+        result = client.post("/api/v1/search/hybrid", json={
+            "query": "CPSEARCH-10177", "limit": 10,
+        })
+        assert result.status_code == 200
+        hit = next(item for item in result.json()["results"] if item["source_id"] == "rfc-entity")
+        assert hit["graph_score"] > 0
+        assert result.json()["graph_expansion"]["candidate_sources"] == 1
+
+        tombstone = client.post(
+            "/api/v1/knowledge/records/rfc-entity/tombstone",
+            json={"revision_sequence": 2},
+        )
+        assert tombstone.json()["decision"] == "tombstoned"
+        after_delete = client.post("/api/v1/search/hybrid", json={
+            "query": "CPSEARCH-10177", "limit": 10,
+        }).json()
+        assert all(item["source_id"] != "rfc-entity" for item in after_delete["results"])
+
+
 def test_knowledge_is_index_gated_and_revision_ordered(tmp_path):
     with _client(tmp_path) as client:
         first = client.post("/api/v1/knowledge/records", json=_knowledge_record()).json()
