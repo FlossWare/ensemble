@@ -109,7 +109,7 @@ These are not search operations. Session ingestion belongs under the canonical i
 
 | Area | Current shape | Finding | Next decision |
 |---|---|---|---|
-| Search | `/search`, `/search/lexical`, `/search/hybrid` | Three overlapping entry points; caller-visible semantics need to be explicit | Define whether `/search` is a deliberate default strategy or an obsolete duplicate; place lexical strategy at `/search/lexical` and retain `/search` as the default retrieval contract |
+| Search | `/search`, `/search/lexical`, `/search/hybrid` | Three related contracts with distinct caller intent and response shape | Retain the default, lexical-only, and enriched Hybrid contracts under one Search namespace |
 | Ingestion | `/ingest/*` plus `/hybrid/sessions/ingest` | Mostly consistent; structured session ingestion is the exception | Move session ingestion to `/ingest/sessions` or a clearly nested transcript resource |
 | Vector | Collection routes end in `existing`, `upsert`, `metadata`, `delete-superseded`, `query` | Mixes resource operations and implementation-flavored verbs | Model records as resources; retain explicit query and revision-cleanup actions only where semantics justify them |
 | Graph | `add-node`, `add-edge`, singular `node/{id}`, `query`, `traverse` | Inconsistent singular/plural and verb-led mutation paths | Prefer `/graph/nodes`, `/graph/edges`, `/graph/nodes/{node_id}`; define query/traversal as explicit operations |
@@ -122,7 +122,7 @@ These are not search operations. Session ingestion belongs under the canonical i
 
 ## 5. Search contract semantics\n\n- `POST /api/v1/search`: default retrieval contract; returns the standard result collection.\n- `POST /api/v1/search/lexical`: lexical-only retrieval; returns lexical results and retrieval metadata.\n- `POST /api/v1/search/hybrid`: Hybrid orchestration; includes retrieval diagnostics, intent enrichment, and related-session context when available.\n- `POST /api/v1/search/hybrid/knowledge`: Knowledge-scoped Hybrid retrieval.\n\nThese contracts share implementation components but are not aliases: their response contracts and caller intent differ.\n\n## 6. Recommended cleanup sequence
 
-1. **Search semantics:** clarify the generic `/search` endpoint and align Lexical under the Search capability if the contracts are genuinely one family.
+1. **Search semantics:** complete. Default, lexical-only, and enriched Hybrid retrieval now live under the Search namespace with explicit distinctions.
 2. **Ingestion:** move structured session ingestion into `/ingest`; decide where prompt capture belongs.
 3. **Graph:** make nodes and edges proper plural resources.
 4. **Vector:** define collection and record resource semantics, then replace action-heavy CRUD paths.
