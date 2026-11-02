@@ -132,7 +132,7 @@ Security-sensitive decorators are defense in depth. Enforcement also belongs at 
 
 ## 11. Ingestion API conventions
 
-All source ingestion operations share the `/api/v1/ingest` namespace. Use the source collection (`documents`, `files`, `urls`, `transcripts`) to express the source type; use nested resources such as `/urls/preview` for non-mutating preparation. Format-specific extraction remains an internal adapter concern. Legacy routes remain temporary compatibility aliases and are excluded from the published OpenAPI schema; new clients should use only the canonical ingestion paths.
+All source ingestion operations share the `/api/v1/ingest` namespace. Use the source collection (`documents`, `files`, `urls`, `transcripts`) to express the source type; use nested resources such as `/urls/preview` for non-mutating preparation. Format-specific extraction remains an internal adapter concern. The canonical ingestion namespace is the only supported public route structure. New ingestion capabilities must be added beneath this namespace rather than creating parallel source-specific route families.
 
 ## 12. Multi-format source ingestion
 
