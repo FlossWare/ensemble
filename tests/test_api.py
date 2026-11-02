@@ -702,6 +702,19 @@ def test_hybrid_session_ingestion_populates_vector_collection_and_searches_it():
     with TestClient(app) as client:
         ingested = client.post("/api/v1/hybrid/sessions/ingest", json=payload)
         assert ingested.status_code == 200
+        assert ingested.json()["inserted"] == 1
+
+        # Timestamp changes must not create a second event or vector document:
+        # content identity is based on session, message UUID, kind and text.
+        retry_payload = {
+            **payload,
+            "messages": [{**payload["messages"][0], "ts": "2026-11-02T11:00:00Z"}],
+        }
+        retried = client.post("/api/v1/hybrid/sessions/ingest", json=retry_payload)
+        assert retried.status_code == 200
+        assert retried.json()["inserted"] == 0
+        assert retried.json()["already_present"] == 1
+
         collections = client.get("/api/v1/vector/collections").json()["collections"]
         transcript = next(item for item in collections if item["name"] == "transcript_text")
         assert transcript["count"] == 1
