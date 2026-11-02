@@ -71,7 +71,6 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | GET | /api/v1/search/hybrid/health, /api/v1/search/hybrid/ready | Hybrid retrieval capability status |
 | POST | /api/v1/search/hybrid | Unified hybrid retrieval |
 | POST | /api/v1/search/hybrid/knowledge | Knowledge-scoped hybrid retrieval |
-| POST | /api/v1/ingest/sessions | Ingest a structured transcript session and its messages through Memory, Graph, and retrieval indexing |
 | POST | /api/v1/memory/events | Capture an idempotent prompt event in the Memory event ledger |
 | GET | /api/v1/tokenization/health, /ready, /profiles | Tokenization capability status and analyzer profiles |
 | POST | /api/v1/tokenization/tokenize | Versioned deterministic text analysis |
