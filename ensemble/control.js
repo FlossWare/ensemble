@@ -291,3 +291,129 @@ if(runtimeConfigValues){
   })
   .catch(error=>{runtimeConfigValues.textContent="Could not load runtime configuration: "+error.message;});
 }
+
+
+// Capability, retrieval, Index, Vector, and Memory inspection workbenches.
+async function controlJson(path, method="GET", payload=null){
+ const options={method,headers:{}};
+ if(payload!==null){options.headers["Content-Type"]="application/json";options.body=JSON.stringify(payload);}
+ const response=await fetch(path,options);
+ let data={};
+ try{data=await response.json();}catch(_error){data={detail:"Non-JSON response"};}
+ if(!response.ok)throw new Error(typeof data.detail==="string"?data.detail:JSON.stringify(data.detail||data));
+ return data;
+}
+const capabilities=[
+ ["Embeddings","/api/v1/embeddings/health",null],
+ ["Vector","/api/v1/vector/health",null],
+ ["Lexical","/api/v1/lexical/health","/api/v1/lexical/ready"],
+ ["Hybrid","/api/v1/hybrid/health","/api/v1/hybrid/ready"],
+ ["Reranking","/api/v1/reranking/health","/api/v1/reranking/ready"],
+ ["Chunking","/api/v1/chunking/health","/api/v1/chunking/ready"],
+ ["Tokenization","/api/v1/tokenization/health","/api/v1/tokenization/ready"],
+ ["Index","/api/v1/index/health","/api/v1/index/ready"],
+ ["Extraction","/api/v1/extraction/health","/api/v1/extraction/ready"],
+ ["Intent","/api/v1/intent/health","/api/v1/intent/ready"],
+ ["Ranking","/api/v1/ranking/health","/api/v1/ranking/ready"],
+ ["Knowledge","/api/v1/knowledge/health","/api/v1/knowledge/ready"],
+ ["Memory","/api/v1/memory/health","/api/v1/memory/ready"],
+ ["Graph","/api/v1/graph/health",null],
+ ["Thompson","/api/v1/thompson/health","/api/v1/thompson/ready"],
+ ["Learning","/api/v1/learning/health","/api/v1/learning/ready"],
+ ["GA Tuning","/api/v1/ga/health","/api/v1/ga/ready"]
+];
+const capabilityRows=document.getElementById("capability-rows");
+const capabilitySummary=document.getElementById("capability-summary");
+const refreshCapabilities=document.getElementById("refresh-capabilities");
+async function refreshCapabilityTable(){
+ refreshCapabilities.disabled=true;
+ capabilitySummary.textContent="Checking "+capabilities.length+" capabilities…";
+ capabilityRows.replaceChildren();
+ let readyCount=0,failedCount=0;
+ const checks=await Promise.all(capabilities.map(async([name,healthPath,readyPath])=>{
+  const check=async path=>{
+   if(!path)return {status:"n/a",body:null};
+   try{
+    const response=await fetch(path);
+    let body={};try{body=await response.json();}catch(_error){}
+    return {status:response.ok?"ok":"unavailable",body};
+   }catch(error){return {status:"error",body:{detail:error.message}};}
+  };
+  const [health,ready]=await Promise.all([check(healthPath),check(readyPath)]);
+  return {name,health,ready};
+ }));
+ for(const item of checks){
+  const row=document.createElement("tr");
+  const name=document.createElement("td");name.textContent=item.name;
+  const health=document.createElement("td");health.textContent=item.health.status;
+  health.className=item.health.status==="ok"?"status-ok":"status-error";
+  const ready=document.createElement("td");ready.textContent=item.ready.status;
+  ready.className=item.ready.status==="ok"?"status-ok":item.ready.status==="unavailable"?"status-error":"muted";
+  const detail=document.createElement("td");
+  detail.textContent=JSON.stringify(item.health.body||item.ready.body||{});
+  row.append(name,health,ready,detail);capabilityRows.append(row);
+  if(item.health.status==="ok"&&(item.ready.status==="ok"||item.ready.status==="n/a"))readyCount++;
+  if(item.health.status!=="ok")failedCount++;
+ }
+ capabilitySummary.textContent=readyCount+" healthy, "+failedCount+" unavailable or disabled.";
+ refreshCapabilities.disabled=false;
+}
+refreshCapabilities.addEventListener("click",refreshCapabilityTable);
+refreshCapabilityTable();
+
+const retrievalForm=document.getElementById("retrieval-form");
+const retrievalQuery=document.getElementById("retrieval-query");
+const retrievalLimit=document.getElementById("retrieval-limit");
+const retrievalResults=document.getElementById("retrieval-results");
+retrievalForm.addEventListener("submit",async event=>{
+ event.preventDefault();retrievalResults.textContent="Searching…";
+ try{
+  const result=await controlJson("/api/v1/hybrid/search","POST",{
+   query:retrievalQuery.value.trim(),limit:Number(retrievalLimit.value)
+  });
+  retrievalResults.textContent=JSON.stringify(result,null,2);
+ }catch(error){retrievalResults.textContent="Search failed: "+error.message;}
+});
+
+const indexResults=document.getElementById("index-results");
+const vectorResults=document.getElementById("vector-results");
+document.getElementById("refresh-index").addEventListener("click",async()=>{
+ indexResults.textContent="Loading source manifest…";
+ try{indexResults.textContent=JSON.stringify(await controlJson("/api/v1/index/manifest?limit=100"),null,2);}
+ catch(error){indexResults.textContent="Index inspection failed: "+error.message;}
+});
+document.getElementById("refresh-vectors").addEventListener("click",async()=>{
+ vectorResults.textContent="Loading vector collections…";
+ try{vectorResults.textContent=JSON.stringify(await controlJson("/api/v1/vector/collections"),null,2);}
+ catch(error){vectorResults.textContent="Vector inspection failed: "+error.message;}
+});
+document.getElementById("source-lookup-form").addEventListener("submit",async event=>{
+ event.preventDefault();
+ const id=document.getElementById("source-id").value.trim();
+ const output=document.getElementById("source-result");
+ output.textContent="Loading source…";
+ try{output.textContent=JSON.stringify(await controlJson("/api/v1/index/sources/"+encodeURIComponent(id)),null,2);}
+ catch(error){output.textContent="Source lookup failed: "+error.message;}
+});
+
+const memoryNames=document.getElementById("memory-names");
+const memoryKnowledge=document.getElementById("memory-knowledge");
+const memoryResults=document.getElementById("memory-results");
+document.getElementById("refresh-memories").addEventListener("click",async()=>{
+ memoryNames.textContent="Loading memory names…";
+ try{memoryNames.textContent=JSON.stringify(await controlJson("/api/v1/memory/list"),null,2);}
+ catch(error){memoryNames.textContent="Memory inspection failed: "+error.message;}
+});
+document.getElementById("refresh-memory-knowledge").addEventListener("click",async()=>{
+ memoryKnowledge.textContent="Loading Knowledge status…";
+ try{memoryKnowledge.textContent=JSON.stringify(await controlJson("/api/v1/memory/knowledge/status"),null,2);}
+ catch(error){memoryKnowledge.textContent="Knowledge status failed: "+error.message;}
+});
+document.getElementById("memory-search-form").addEventListener("submit",async event=>{
+ event.preventDefault();memoryResults.textContent="Searching Memory…";
+ try{
+  memoryResults.textContent=JSON.stringify(await controlJson("/api/v1/memory/search-hybrid","POST",{
+   query:document.getElementById("memory-query").value.trim(),top_k:10
+  }),null,2);
+ }catch(error){memoryResults.textContent="Memory search failed: "+error.message;}
+});
