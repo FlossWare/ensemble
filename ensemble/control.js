@@ -434,3 +434,18 @@ document.getElementById("source-tombstone-form").addEventListener("submit",async
   document.getElementById("refresh-index").click();
  }catch(error){output.textContent="Tombstone failed: "+error.message;}
 });
+
+document.getElementById("session-ingest-button").addEventListener("click",async()=>{
+ const button=document.getElementById("session-ingest-button");
+ const status=document.getElementById("session-ingest-status");
+ const output=document.getElementById("session-ingest-result");
+ button.disabled=true;status.textContent="Validating and ingesting session…";
+ try{
+  const payload=JSON.parse(document.getElementById("session-payload").value);
+  const result=await controlJson("/api/v1/hybrid/sessions/ingest","POST",payload);
+  status.textContent=result.inserted+" new, "+result.already_present+" already present.";
+  output.textContent=JSON.stringify(result,null,2);
+  document.getElementById("refresh-index").click();
+ }catch(error){status.textContent="Session ingestion failed: "+error.message;}
+ finally{button.disabled=false;}
+});
