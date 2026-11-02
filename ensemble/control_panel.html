@@ -54,6 +54,21 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <form id="memory-search-form"><input id="memory-query" type="text" required maxlength="2000" placeholder="Search episodic Memory"><button type="submit">Search Memory</button></form>
 <pre id="memory-results">No query run.</pre>
 </section>
+<section id="entity-workbench">
+<h2>Entity Workbench</h2>
+<p>Extract candidates without persistence, explicitly resolve them to canonical Graph identities, and create typed relationships between resolved entities.</p>
+<textarea id="entity-text" rows="5" style="width:100%" maxlength="200000" placeholder="Text containing names, identifiers, paths, URLs, or other entity candidates"></textarea>
+<div class="toolbar"><button id="entity-extract" type="button">Extract candidates</button><button id="entity-resolve" type="button" disabled>Resolve candidates to Graph</button></div>
+<pre id="entity-results">No entity extraction run.</pre>
+<h3>Link canonical entities</h3>
+<form id="entity-link-form">
+<label>Source entity ID <input id="entity-source-id" type="text" required maxlength="256"></label>
+<label>Target entity ID <input id="entity-target-id" type="text" required maxlength="256"></label>
+<label>Relationship <input id="entity-relationship" type="text" required maxlength="128" value="related_to"></label>
+<button type="submit">Create Graph relationship</button>
+</form>
+<pre id="entity-link-result">No relationship submitted.</pre>
+</section>
 <section id="graph-workbench">
 <h2>Graph Workbench</h2>
 <p>Read-only node lookup, property-filtered queries, and bounded traversal. This view does not create or modify graph data.</p>
