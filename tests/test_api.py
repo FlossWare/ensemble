@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from ensemble.api import create_app
 from ensemble.store import InMemoryDocumentStore
+from ensemble.graph_memory import InMemoryGraphStore
 
 
 def _client(tmp_path):
@@ -585,3 +586,27 @@ def test_hybrid_search_can_apply_opt_in_cross_encoder_reranking():
         assert body["reranked"] is True
         assert body["results"][0]["source_id"] == "preferred"
         assert body["results"][0]["rerank_score"] == 0.95
+
+
+def test_hybrid_search_enriches_intent_and_related_graph_sessions():
+    graph = InMemoryGraphStore()
+    async def seed_graph():
+        session = await graph.add_node("session", {
+            "session_id": "session-42", "project": "ensemble",
+        })
+        file_node = await graph.add_node("file", {
+            "path": "/work/ensemble/ensemble/api.py",
+        })
+        await graph.add_edge(session["id"], file_node["id"], "touched", {})
+    import asyncio
+    asyncio.run(seed_graph())
+    app = create_app(store=InMemoryDocumentStore(), graph_store=graph)
+    with TestClient(app) as client:
+        result = client.post("/api/v1/hybrid/search", json={
+            "query": "why does /work/ensemble/ensemble/api.py fail",
+        })
+        assert result.status_code == 200
+        body = result.json()
+        assert body["intent"]["label"] == "debug"
+        assert body["related_sessions"][0]["session_id"] == "session-42"
+        assert body["related_sessions"][0]["project"] == "ensemble"
