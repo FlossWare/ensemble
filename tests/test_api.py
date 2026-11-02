@@ -95,15 +95,19 @@ def test_reingest_replaces_chunk_content_for_same_revision(tmp_path):
         first = client.post("/api/v1/ingest/documents", json=original).json()
         replacement = {
             **original,
+            "revision": 2,
             "content": "The replacement content contains current terminology.",
         }
-        second = client.post("/api/v1/ingest/documents", json=replacement).json()
-        assert second["id"] == first["id"]
+        second_response = client.post("/api/v1/ingest/documents", json=replacement)
+        assert second_response.status_code == 201
+        second = second_response.json()
+        assert second["id"] != first["id"]
 
         old_hits = client.post("/api/v1/search", json={"query": "obsolete"}).json()
         new_hits = client.post("/api/v1/search", json={"query": "current terminology"}).json()
         assert old_hits == []
         assert len(new_hits) == 1
+        assert new_hits[0]["revision"] == 2
         assert new_hits[0]["text"] == replacement["content"]
 
 
