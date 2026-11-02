@@ -19,12 +19,7 @@
 - Keep related operations under a consistent resource root. For example, retrieval is `/search/hybrid`, with a narrower Knowledge scope at `/search/hybrid/knowledge`.
 - Do not create alternate aliases for canonical routes. When a route is replaced, update every consumer and remove the old route.
 - Health and readiness endpoints belong beneath the capability they describe, using `/health` and `/ready` suffixes.
-
-- Use nouns for resources and HTTP methods for operations.
-- Use stable resource identifiers in paths.
-- Use explicit operation endpoints for domain actions that do not map cleanly to CRUD (for example, POST /api/v1/search and POST /api/v1/rerank).
-- Use plural resource names.
-- Do not expose database table names, vector-store collection names, filesystem paths, or provider implementation details as public contract requirements.
+- Computational capabilities may expose explicit operations when they are naturally requests for a transformation or decision (for example, tokenization, extraction, classification, ranking, and embedding). Prefer resource paths for durable state and CRUD operations.
 
 ## 3. Versioning and compatibility
 
@@ -70,7 +65,10 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/chunking/chunk | Generate deterministic chunks with offsets and provenance |
 | POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |
 | GET/POST | /api/v1/lexical/health, /ready, /documents, /search | Independent Lexical ingestion and BM25 search capability |
-| GET/POST | /api/v1/search/hybrid/health, /ready, /search, /knowledge/search, /prompts, /sessions/ingest | Hybrid retrieval, knowledge-only search, idempotent prompt capture, and bounded transcript-session ingestion |
+| GET | /api/v1/search/hybrid/health, /api/v1/search/hybrid/ready | Hybrid retrieval capability status |
+| POST | /api/v1/search/hybrid | Unified hybrid retrieval |
+| POST | /api/v1/search/hybrid/knowledge | Knowledge-scoped hybrid retrieval |
+| POST | /api/v1/hybrid/prompts, /api/v1/hybrid/sessions/ingest | Existing prompt capture and structured session ingestion routes; pending broader route audit |
 | GET | /api/v1/tokenization/health, /ready, /profiles | Tokenization capability status and analyzer profiles |
 | POST | /api/v1/tokenization/tokenize | Versioned deterministic text analysis |
 | GET | /api/v1/extraction/health, /ready | Extraction capability status |
