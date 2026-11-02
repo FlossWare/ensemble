@@ -43,7 +43,7 @@ The previous Hybrid search routes were removed rather than aliased. Control Cent
 ### Search and retrieval
 
 - `POST /api/v1/search`
-- `POST /api/v1/lexical/search`
+- `POST /api/v1/search/lexical`
 - `POST /api/v1/search/hybrid`
 - `POST /api/v1/search/hybrid/knowledge`
 - `GET /api/v1/search/hybrid/health`
@@ -109,7 +109,7 @@ These are not search operations. Session ingestion belongs under the canonical i
 
 | Area | Current shape | Finding | Next decision |
 |---|---|---|---|
-| Search | `/search`, `/lexical/search`, `/search/hybrid` | Three overlapping entry points; caller-visible semantics need to be explicit | Define whether `/search` is a deliberate default strategy or an obsolete duplicate; consider `/search/lexical` for consistency |
+| Search | `/search`, `/search/lexical`, `/search/hybrid` | Three overlapping entry points; caller-visible semantics need to be explicit | Define whether `/search` is a deliberate default strategy or an obsolete duplicate; place lexical strategy at `/search/lexical` and retain `/search` as the default retrieval contract |
 | Ingestion | `/ingest/*` plus `/hybrid/sessions/ingest` | Mostly consistent; structured session ingestion is the exception | Move session ingestion to `/ingest/sessions` or a clearly nested transcript resource |
 | Vector | Collection routes end in `existing`, `upsert`, `metadata`, `delete-superseded`, `query` | Mixes resource operations and implementation-flavored verbs | Model records as resources; retain explicit query and revision-cleanup actions only where semantics justify them |
 | Graph | `add-node`, `add-edge`, singular `node/{id}`, `query`, `traverse` | Inconsistent singular/plural and verb-led mutation paths | Prefer `/graph/nodes`, `/graph/edges`, `/graph/nodes/{node_id}`; define query/traversal as explicit operations |
@@ -120,7 +120,7 @@ These are not search operations. Session ingestion belongs under the canonical i
 | Processing capabilities | `chunk`, `tokenize`, `extract`, `classify`, `rank`, `rerank`, `embed` | These are computational operations, not durable CRUD resources | Explicit operation names are acceptable; keep capability roots and status suffixes consistent |
 | Configuration | `GET /api/v1/system/config` | Current implementation returns persistence root and database URL, exposing implementation details contrary to the contract principles | Reduce to caller-relevant, non-sensitive runtime configuration; keep storage internals private |
 
-## 5. Recommended cleanup sequence
+## 5. Search contract semantics\n\n- `POST /api/v1/search`: default retrieval contract; returns the standard result collection.\n- `POST /api/v1/search/lexical`: lexical-only retrieval; returns lexical results and retrieval metadata.\n- `POST /api/v1/search/hybrid`: Hybrid orchestration; includes retrieval diagnostics, intent enrichment, and related-session context when available.\n- `POST /api/v1/search/hybrid/knowledge`: Knowledge-scoped Hybrid retrieval.\n\nThese contracts share implementation components but are not aliases: their response contracts and caller intent differ.\n\n## 6. Recommended cleanup sequence
 
 1. **Search semantics:** clarify the generic `/search` endpoint and align Lexical under the Search capability if the contracts are genuinely one family.
 2. **Ingestion:** move structured session ingestion into `/ingest`; decide where prompt capture belongs.
@@ -131,7 +131,7 @@ These are not search operations. Session ingestion belongs under the canonical i
 7. **Learning and Thompson:** normalize state, outcomes, reports, and domain actions.
 8. **Configuration and operational status:** remove storage leakage and make capability health/readiness coverage consistent.
 
-## 6. Change discipline
+## 7. Change discipline
 
 For each route family:
 - inspect the request/response contract and actual consumer intent;
