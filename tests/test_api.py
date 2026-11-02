@@ -650,6 +650,19 @@ def test_hybrid_raw_jsonl_transcript_ingestion_returns_byte_checkpoint_and_is_id
         assert retry.json()["already_present"] == 1
 
 
+def test_pdf_ingestion_rejects_non_extractable_pdf_with_clear_error():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/ingestion/pdf",
+            params={"source_id": "upload:test.pdf", "title": "Test PDF"},
+            content=b"%PDF-not-a-valid-document",
+            headers={"content-type": "application/pdf"},
+        )
+        assert response.status_code == 422
+        assert "could not be parsed" in response.json()["detail"]
+
+
 def test_hybrid_session_ingestion_is_idempotent_and_populates_retrieval_graph():
     graph = InMemoryGraphStore()
     app = create_app(store=InMemoryDocumentStore(), graph_store=graph)
