@@ -1,13 +1,13 @@
-# POC Capability Parity
+# POC Capability and Reference Inventory
 
 Reference: FlossWare/poc-claude-ensemble
 Target: FlossWare/ensemble
 Target deployment: one application, one REST listener, independently addressable capability endpoint groups, plus a browser-based Control Center.
 Persistence boundary: SQLite is Ensemble's own persistence implementation. PostgreSQL and alternative/shared persistence implementations belong to FlossWare proper and are not Ensemble deliverables.
 
-## Parity policy
+## Reference policy
 
-The POC service catalog is the functional baseline. Every listed capability must be represented in Ensemble. We are migrating behavior and contracts, not copying the POC's multi-process topology, standard-library server framework, physical storage, or deployment assumptions.
+This document records the POC's capability surface and useful behavioral evidence. It is not Ensemble's acceptance specification, and POC route names, implementation details, or test counts are not requirements. Ensemble's current contracts and functionality-first completion plan are authoritative. The POC helps identify omissions and edge cases, but every behavior must be assessed against Ensemble's architecture and intended use.
 
 Disposition meanings:
 - Reuse: source implementation is sound and can be incorporated with minimal adaptation.
@@ -16,11 +16,11 @@ Disposition meanings:
 - Reference: use as behavioral evidence only; do not carry code forward.
 - Not assessed: full source, tests, edge cases, and dependencies have not yet been inspected.
 
-No capability is at parity until its REST contract, positive and negative behavior, error semantics, readiness behavior, persistence expectations, and regression tests are covered. Any intentional behavior change must be recorded with its compatibility impact.
+The table below is a reference inventory, not a parity certification. Intentional differences should be documented when they affect caller-visible behavior, data integrity, or operational expectations.
 
 ## Complete POC service inventory
 
-The POC README declares 13 services. All 13 are in scope.
+The POC README declares 13 services. All 13 are recorded here as reference material. Their inclusion does not make every POC behavior an Ensemble requirement.
 
 | POC capability | POC location / contract | Required Ensemble capability | Current Ensemble state | Initial disposition |
 |---|---|---|---|---|
@@ -36,7 +36,7 @@ The POC README declares 13 services. All 13 are in scope.
 | Intent | services/intent, port 8779, classify | Explainable intent labels, confidence, matched evidence and per-label scores | POC rule set and REST routes added; parity branch CI tests pass; full POC regression parity remains outstanding | Adapt |
 | Ranking | services/ranking, port 8780, rank | Deterministic reciprocal-rank fusion with per-list score contributions and stable tie-breaking | POC-compatible fusion logic and REST routes added; parity branch CI tests pass; full POC regression parity remains outstanding | Adapt |
 | Knowledge | services/knowledge, port 8781, records/tombstone | Sourced records, origin/locator provenance, revision checks through Index, idempotency and deletion | SQLite sourced-record storage, SHA-256 content digest, Index-gated revision decisions, provenance, tombstones and REST routes implemented; branch CI tests pass; full POC regression parity remains outstanding | Adapt |
-| Memory | services/memory, port 8767, memory operations and session-events ledger | Durable episodic memory, session event ledger, concurrent access, path/scope validation, recall and memory lifecycle | SQLite implementation: read/write, append/append-once, entries, list, lexical and deterministic local semantic/hybrid search, execution-context recall, Markdown section chunking, SHA-256-verified Markdown source import, stale-source reconciliation and knowledge status are exposed through the single REST listener. Direct scoped filesystem scanning, symlink-safe traversal, embedding-backed index and full event-ledger compatibility remain outstanding | Replace |
+| Memory | services/memory, port 8767, memory operations and session-events ledger | Durable episodic memory, session event ledger, concurrent access, path/scope validation, recall and memory lifecycle | SQLite implementation: read/write, append/append-once, entries, list, lexical and deterministic local semantic/hybrid search, execution-context recall, Markdown section chunking, SHA-256-verified Markdown source import, stale-source reconciliation and knowledge status are exposed through the single REST listener. Direct scoped filesystem scanning and symlink-safe server-side traversal are intentionally replaced by caller-supplied content plus declared-scope validation; embedding-backed Memory search and deeper event-ledger compatibility remain open | Replace |
 | Graph | services/graph-service, port 8766, add-node/add-edge/node/query/traverse | Stable node/edge identities, typed properties, durable mutations, node/edge query and bounded directional traversal | SQLite graph adapter and REST endpoints implemented; API and restart-persistence tests pass in CI | Replace |\n| URI scraping | POC ingestion workflows and source discovery | Safe public-URI fetch, readable extraction, preview, explicit ingest, bounded link discovery and observable job lifecycle | Initial single-page preview and explicit ingest endpoints plus browser UI implemented; bounded multi-page crawl, robots policy, scheduling, and durable job history pending | Adapt |
 
 ## Knowledge implementation
@@ -170,7 +170,7 @@ The POC README also identifies worker/arbiter quality monitoring as not yet buil
 
 ## Work status
 
-The catalog, all 13 primary service source files, and all 13 corresponding test files have been located. The test declarations and major behaviors have been inventoried above. A deeper line-by-line audit of helper modules, cross-service runtime interactions, exact request/response schemas, persistence edge cases, and security behavior remains in progress.
+The catalog and primary service/test files have been inventoried. This document remains a discovery aid. Current implementation state, integrated workflows, and known limitations are maintained in implementation-status.md and capability-completion-plan.md.
 
 Before implementing each capability, complete a source audit recording:
 1. POC source files and tests.
