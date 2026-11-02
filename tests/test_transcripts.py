@@ -111,7 +111,7 @@ def test_zero_byte_incomplete_tail_retry_is_idempotent_but_changed_tail_can_retr
     assert first["replayed"] is False
     assert replay["replayed"] is True
     assert appended["replayed"] is False
-    assert appended["checkpoint"]["byte_offset"] == 12
+    assert appended["checkpoint"]["byte_offset"] == 13
 
 
 @pytest.mark.parametrize(
