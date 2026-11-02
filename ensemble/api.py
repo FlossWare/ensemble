@@ -158,7 +158,7 @@ def create_app(
             node_id="source_" + identity,
         )
         linked = 0
-        for candidate in extract(content[:1_000_000], source="ingestion"):
+        for candidate in extract(content[:1_000_000], source="ingestion")[:500]:
             if not candidate.get("exact"):
                 continue
             kind, normalized = candidate["type"], candidate["normalized"]
