@@ -125,6 +125,38 @@ def test_context_assembly_combines_memory_and_retrieval_with_token_budget():
         assert "retrieval" in body["context"].casefold()
 
 
+def test_context_assembly_includes_execution_memory_recall():
+    with client() as http:
+        http.post("/api/v1/memory/memories/execution/entries", json={
+            "entry": {
+                "decision": "Use Graph-linked source expansion.",
+                "execution_context": {
+                    "request_id": "context-request",
+                    "execution_id": "parent-execution",
+                    "objective": "finish retrieval",
+                    "lineage": ["parent-execution"],
+                },
+            },
+        })
+        response = http.post("/api/v1/context/assemble", json={
+            "query": "finish retrieval",
+            "memory_name": "execution",
+            "execution_context": {
+                "request_id": "context-request",
+                "execution_id": "child-execution",
+                "parent_execution_id": "parent-execution",
+                "objective": "continue retrieval",
+                "lineage": ["parent-execution", "child-execution"],
+            },
+            "max_tokens": 200,
+        })
+        assert response.status_code == 200
+        recall = next(item for item in response.json()["sources"]
+                      if item["source"] == "memory-recall")
+        assert recall["relation"] == "parent"
+        assert "Graph-linked source expansion" in response.json()["context"]
+
+
 def test_context_assembly_extractively_compresses_to_budget():
     from ensemble.api import _assemble_context
 
