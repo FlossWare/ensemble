@@ -86,8 +86,8 @@ The previous Hybrid search routes were removed rather than aliased. Control Cent
 ### Graph
 
 - `GET /api/v1/graph/health`
-- `POST /api/v1/graph/add-node`, `/add-edge`, `/query`, `/traverse`
-- `GET /api/v1/graph/node/{node_id}`
+- `POST /api/v1/graph/nodes`, `/add-edge`, `/query`, `/traverse`
+- `GET /api/v1/graph/nodes/{node_id}`
 
 ### Learning, Thompson, and optimization
 
@@ -112,7 +112,7 @@ Prompt capture is not a search operation and remains under review against the Me
 | Search | `/search`, `/search/lexical`, `/search/hybrid` | Three related contracts with distinct caller intent and response shape | Retain the default, lexical-only, and enriched Hybrid contracts under one Search namespace |
 | Ingestion | `/ingest/*` | Source ingestion now shares one namespace, including structured sessions | Complete ingestion route consistency and decide whether lexical document ingestion is still needed as a separate route |
 | Vector | Collection routes end in `existing`, `upsert`, `metadata`, `delete-superseded`, `query` | Mixes resource operations and implementation-flavored verbs | Model records as resources; retain explicit query and revision-cleanup actions only where semantics justify them |
-| Graph | `add-node`, `add-edge`, singular `node/{id}`, `query`, `traverse` | Inconsistent singular/plural and verb-led mutation paths | Prefer `/graph/nodes`, `/graph/edges`, `/graph/nodes/{node_id}`; define query/traversal as explicit operations |
+| Graph | `nodes`, `edges`, `nodes/{id}`, `query`, `traverse` | Inconsistent singular/plural and verb-led mutation paths | Node and edge mutations now use `/graph/nodes` and `/graph/edges`, with reads at `/graph/nodes/{node_id}`; query/traversal remain explicit operations |
 | Memory | Mixed `read`, `write`, `append`, `entries`, `retrieve`, `list`, and three search paths | No single resource model; semantic strategy appears in some paths but not others | Define Memory resources and operation semantics before renaming; avoid mechanical string replacement |
 | Knowledge / Index | Records, sources, revisions, tombstones | Mostly resource-oriented; tombstone is represented differently in the two groups | Decide one consistent tombstone lifecycle and preserve its revision semantics |
 | Learning / Thompson | Outcomes and runs are resources; reset/select/report/ping/root POST are mixed | Some operations are resources, others are action verbs or duplicate status calls | Keep meaningful domain actions; remove redundant ping if health/readiness fully covers it; clarify root POST operations |
@@ -124,7 +124,7 @@ Prompt capture is not a search operation and remains under review against the Me
 
 1. **Search semantics:** complete. Default, lexical-only, and enriched Hybrid retrieval now live under the Search namespace with explicit distinctions.
 2. **Ingestion:** structured session ingestion moved to `/ingest/sessions`; finish evaluating the lexical document convenience route and prompt-event placement.
-3. **Graph:** make nodes and edges proper plural resources.
+3. **Graph:** node and edge resources moved to plural resource paths; query and traversal remain explicit graph operations.
 4. **Vector:** define collection and record resource semantics, then replace action-heavy CRUD paths.
 5. **Memory:** define the resource model and distinguish memory entries, events, source imports, reconciliation, and retrieval strategies.
 6. **Knowledge and Index:** align tombstone lifecycle semantics.
