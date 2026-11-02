@@ -154,7 +154,7 @@ def test_vector_collection_upsert_query_and_existing_ids(tmp_path):
                 {"url": "https://example.test/b", "content_sha256": "b" * 64},
             ],
         }
-        upsert = client.post("/api/v1/vector/collections/knowledge/records", json=payload)
+        upsert = client.put("/api/v1/vector/collections/knowledge/records", json=payload)
         assert upsert.status_code == 200
         assert upsert.json()["upserted"] == 2
 
@@ -180,9 +180,9 @@ def test_vector_upsert_is_idempotent_and_model_mismatch_fails(tmp_path):
             "ids": ["same-id"], "embeddings": [[1.0, 0.0]],
             "documents": ["original"], "metadatas": [{"version": 1}],
         }
-        assert client.post("/api/v1/vector/collections/c/records", json=base).status_code == 200
+        assert client.put("/api/v1/vector/collections/c/records", json=base).status_code == 200
         replacement = {**base, "documents": ["replacement"], "metadatas": [{"version": 2}]}
-        assert client.post("/api/v1/vector/collections/c/records", json=replacement).json()["upserted"] == 1
+        assert client.put("/api/v1/vector/collections/c/records", json=replacement).json()["upserted"] == 1
         result = client.post(
             "/api/v1/vector/collections/c/query",
             json={"embedding": [1.0, 0.0]},
@@ -191,7 +191,7 @@ def test_vector_upsert_is_idempotent_and_model_mismatch_fails(tmp_path):
         assert result[0]["document"] == "replacement"
 
         mismatch = {**base, "model": "model-b"}
-        assert client.post("/api/v1/vector/collections/c/records", json=mismatch).status_code == 409
+        assert client.put("/api/v1/vector/collections/c/records", json=mismatch).status_code == 409
 
 
 def test_vector_metadata_and_delete_superseded(tmp_path):
@@ -205,8 +205,8 @@ def test_vector_metadata_and_delete_superseded(tmp_path):
                 {"url": "https://example.test/source", "content_sha256": "b" * 64},
             ],
         }
-        client.post("/api/v1/vector/collections/c/records", json=payload)
-        updated = client.post(
+        client.put("/api/v1/vector/collections/c/records", json=payload)
+        updated = client.patch(
             "/api/v1/vector/collections/c/records/metadata",
             json={"ids": ["current", "missing"], "metadatas": [{"tag": "new"}, {"tag": "none"}]},
         )
@@ -230,7 +230,7 @@ def test_vector_collection_persists_across_restart(tmp_path):
         "documents": ["persisted vector"], "metadatas": [{"source": "test"}],
     }
     with _client(tmp_path) as client:
-        assert client.post("/api/v1/vector/collections/c/records", json=payload).status_code == 200
+        assert client.put("/api/v1/vector/collections/c/records", json=payload).status_code == 200
 
     with _client(tmp_path) as client:
         result = client.post(
