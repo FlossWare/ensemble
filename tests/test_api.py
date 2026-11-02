@@ -820,7 +820,7 @@ def test_transcript_message_content_change_replaces_active_revision():
         old = client.post("/api/v1/search", json={"query": "original transcript wording"})
         current = client.post("/api/v1/search", json={"query": "revised transcript wording"})
         assert old.status_code == 200
-        assert all(hit["source_id"] != next(iter([]), "impossible") for hit in old.json())
+        assert old.json() == []
         assert len(current.json()) == 1
         assert current.json()[0]["revision"] == 2
         assert "revised transcript wording" in current.json()[0]["text"]
