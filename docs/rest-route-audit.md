@@ -81,7 +81,7 @@ The previous Hybrid search routes were removed rather than aliased. Control Cent
 ### Memory
 
 - `GET /api/v1/memory/health`, `/ready`, `/list`, `/knowledge/status`
-- `POST /api/v1/memory/read`, `/write`, `/append`, `/append-once`, `/entries`, `/retrieve`, `/search`, `/search-semantic`, `/search-hybrid`, `/chunk`, `/ingest`, `/reconcile`
+- `POST /api/v1/memory/memories/{name}`, `/write`, `/append`, `/append-once`, `/entries`, `/retrieve`, `/search`, `/search-semantic`, `/search-hybrid`, `/chunk`, `/ingest`, `/reconcile`
 
 ### Graph
 
@@ -101,7 +101,7 @@ The previous Hybrid search routes were removed rather than aliased. Control Cent
 ### Remaining Hybrid orchestration routes
 
 - `POST /api/v1/ingest/sessions`
-- `POST /api/v1/hybrid/prompts`
+- `POST /api/v1/memory/events`
 
 Prompt capture is not a search operation and remains under review against the Memory event/resource model. Structured session ingestion is now `POST /api/v1/ingest/sessions`, alongside the other source ingestion operations. Do not place ingestion routes under a generic Hybrid prefix.
 
