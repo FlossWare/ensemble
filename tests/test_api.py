@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from ensemble.api import create_app
 from ensemble.store import InMemoryDocumentStore
 from ensemble.graph_memory import InMemoryGraphStore
+from ensemble.vector_memory import InMemoryVectorStore
 
 
 def _client(tmp_path):
@@ -663,3 +664,46 @@ def test_hybrid_session_ingestion_rejects_invalid_messages_before_writing():
             "messages": [{"uuid": "bad", "role": "system", "text": "not accepted"}],
         })
         assert response.status_code == 400
+
+
+class _FixedEmbeddingProvider:
+    available = True
+
+    def status(self):
+        return {"ok": True, "ready": True, "model": "test-embedding", "dimensions": 3}
+
+    async def embed(self, texts, mode="document"):
+        return [[1.0, 0.0, 0.0] for _ in texts]
+
+
+def test_hybrid_session_ingestion_populates_vector_collection_and_searches_it():
+    vectors = InMemoryVectorStore()
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        embedding_provider=_FixedEmbeddingProvider(),
+        vector_store=vectors,
+    )
+    payload = {
+        "session": {
+            "session_id": "vector-session",
+            "project": "ensemble",
+            "file": "/work/ensemble/vector-session.jsonl",
+        },
+        "messages": [{
+            "uuid": "vector-message", "role": "user", "kind": "text",
+            "text": "vectorized transcript message for hybrid search",
+        }],
+    }
+    with TestClient(app) as client:
+        ingested = client.post("/api/v1/hybrid/sessions/ingest", json=payload)
+        assert ingested.status_code == 200
+        collections = client.get("/api/v1/vector/collections").json()["collections"]
+        transcript = next(item for item in collections if item["name"] == "transcript_text")
+        assert transcript["count"] == 1
+
+        result = client.post("/api/v1/hybrid/search", json={
+            "query": "hybrid search", "limit": 10,
+        })
+        assert result.status_code == 200
+        assert result.json()["retrieval"] == "hybrid"
+        assert result.json()["results"][0]["source_id"].startswith("transcript:vector-session:")
