@@ -90,7 +90,11 @@ def _validate_ingest(source_path: Any, content: Any, sha256: Any, metadata: Any)
     scope = metadata.get("scope")
     if not isinstance(scope, str) or not Path(scope).is_absolute() or len(scope) > 4096:
         raise ValueError("metadata.scope must be an absolute path")
-    if not Path(source_path).is_relative_to(Path(scope)):
+    resolved_scope = Path(scope).resolve(strict=False)
+    resolved_source = Path(source_path).resolve(strict=False)
+    if str(resolved_scope) != scope or str(resolved_source) != source_path:
+        raise ValueError("scope and source_path must use canonical paths without traversal or symlink aliases")
+    if not resolved_source.is_relative_to(resolved_scope):
         raise ValueError("source_path must be within metadata.scope")
     _canonical_payload(metadata)
     return scope, dict(metadata)
@@ -101,12 +105,18 @@ def _validate_reconciliation(source: Any, scope: Any, paths: Any) -> set[str]:
         raise ValueError("unsupported reconciliation source")
     if not isinstance(scope, str) or not Path(scope).is_absolute() or len(scope) > 4096:
         raise ValueError("scope must be an absolute path")
+    resolved_scope = Path(scope).resolve(strict=False)
+    if str(resolved_scope) != scope:
+        raise ValueError("scope must use a canonical path")
     if not isinstance(paths, list) or len(paths) > 10000:
         raise ValueError("paths must be a list with at most 10000 entries")
     current = set()
     for path in paths:
-        if not isinstance(path, str) or not Path(path).is_absolute() or not Path(path).is_relative_to(Path(scope)):
+        if not isinstance(path, str) or not Path(path).is_absolute():
             raise ValueError("every path must be absolute and within scope")
+        resolved_path = Path(path).resolve(strict=False)
+        if str(resolved_path) != path or not resolved_path.is_relative_to(resolved_scope):
+            raise ValueError("every path must be canonical and within scope")
         current.add(path)
     return current
 
