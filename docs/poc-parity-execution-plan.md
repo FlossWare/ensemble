@@ -8,7 +8,8 @@ This plan converts the source inventory in [POC capability parity](poc-parity.md
 - [x] Correct the Pipeline Inspector's invalid `default` profile fallback. The actual defaults are `window-v1` and `lexical-v1`.
 - [ ] Run the complete Ensemble test suite and record the exact commit and result. Existing PR #3 records a passing earlier CI run, but it does not cover the current parity branch commits.
 - [ ] Run static checks and inspect the GitHub Actions result for the branch.
-- [ ] Verify all new Control Center panels against a running local Ensemble instance. A successful GitHub file update is not a browser test.\n- [x] Add a regression test proving a transcript retry with a changed timestamp does not duplicate the event or vector document.
+- [ ] Verify all new Control Center panels against a running local Ensemble instance. A successful GitHub file update is not a browser test.
+- [x] Add a regression test proving a transcript retry with a changed timestamp does not duplicate the event or vector document.
 
 ## Review slice 1: Memory parity
 
