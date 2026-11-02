@@ -1287,11 +1287,11 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail="scrape ingestion failed") from exc
 
-    @app.get("/api/v1/lexical/health", tags=["lexical"])
+    @app.get("/api/v1/search/lexical/health", tags=["lexical"])
     async def lexical_health():
         return {"ok": True, "service": "lexical", "backend": "document-store"}
 
-    @app.get("/api/v1/lexical/ready", tags=["lexical"])
+    @app.get("/api/v1/search/lexical/ready", tags=["lexical"])
     async def lexical_ready():
         try:
             await document_store.check_ready()
@@ -1316,7 +1316,7 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail="lexical document ingestion failed") from exc
 
-    @app.post("/api/v1/lexical/search", tags=["lexical"])
+    @app.post("/api/v1/search/lexical", tags=["lexical"])
     async def lexical_search(request: SearchIn):
         try:
             results = await search.lexical_search(request.query, request.limit)
