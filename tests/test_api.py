@@ -547,3 +547,41 @@ def test_sqlite_lexical_index_replaces_reingested_revision(tmp_path):
         current = client.post("/api/v1/lexical/search", json={"query": "current"}).json()
         assert old["results"] == []
         assert current["results"][0]["source_id"] == "fts-replace"
+
+
+class _DeterministicReranker:
+    available = True
+
+    def status(self):
+        return {"ok": True, "ready": True, "model": "test-cross-encoder"}
+
+    def score(self, query, documents):
+        return [0.95 if "preferred" in text else 0.05 for text in documents]
+
+
+def test_hybrid_search_can_apply_opt_in_cross_encoder_reranking():
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        reranker=_DeterministicReranker(),
+    )
+    with TestClient(app) as client:
+        for source_id, content in [
+            ("first", "topic ordinary candidate"),
+            ("preferred", "topic preferred candidate"),
+        ]:
+            response = client.post("/api/v1/documents", json={
+                "source_id": source_id,
+                "revision": 1,
+                "title": source_id,
+                "content": content,
+            })
+            assert response.status_code == 201
+
+        result = client.post("/api/v1/hybrid/search", json={
+            "query": "topic", "limit": 10, "rerank": True,
+        })
+        assert result.status_code == 200
+        body = result.json()
+        assert body["reranked"] is True
+        assert body["results"][0]["source_id"] == "preferred"
+        assert body["results"][0]["rerank_score"] == 0.95
