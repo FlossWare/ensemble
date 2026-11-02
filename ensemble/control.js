@@ -509,7 +509,7 @@ document.getElementById("graph-query-form").addEventListener("submit",async even
 });
 document.getElementById("graph-node-form").addEventListener("submit",async event=>{
  event.preventDefault();const output=document.getElementById("graph-results");
- try{output.textContent=JSON.stringify(await controlJson("/api/v1/graph/node/"+encodeURIComponent(document.getElementById("graph-node-id").value.trim())),null,2);}
+ try{output.textContent=JSON.stringify(await controlJson("/api/v1/graph/nodes/"+encodeURIComponent(document.getElementById("graph-node-id").value.trim())),null,2);}
  catch(error){output.textContent="Node lookup failed: "+error.message;}
 });
 document.getElementById("graph-traverse-form").addEventListener("submit",async event=>{
