@@ -56,7 +56,7 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/documents | Register or replace a document revision, chunk it, optionally embed it, and durably store it |
 | GET | /api/v1/chunking/health, /ready, /profiles | Chunking capability status and versioned profiles |
 | POST | /api/v1/chunking/chunk | Generate deterministic chunks with offsets and provenance |
-| POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |
+| POST | /api/v1/search | Lexical retrieval and reciprocal-rank fusion, with vector similarity when configured |\n| GET/POST | /api/v1/lexical/health, /ready, /documents, /search | Independent Lexical ingestion and BM25 search capability |\n| GET/POST | /api/v1/hybrid/health, /ready, /search, /knowledge/search, /prompts, /sessions/ingest | Hybrid retrieval, knowledge-only search, idempotent prompt capture, and bounded transcript-session ingestion |
 | GET | /api/v1/tokenization/health, /ready, /profiles | Tokenization capability status and analyzer profiles |
 | POST | /api/v1/tokenization/tokenize | Versioned deterministic text analysis |
 | GET | /api/v1/extraction/health, /ready | Extraction capability status |
