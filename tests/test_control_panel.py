@@ -37,10 +37,10 @@ def test_control_panel_is_served_by_the_api():
         assert 'textContent="Reset"' in script.text
         assert "/api/v1/search/hybrid" in script.text
         assert "/api/v1/index/manifest" in script.text
-        assert "/api/v1/memory/search-hybrid" in script.text
+        assert "/api/v1/memory/search/hybrid" in script.text
         assert "refreshCapabilityTable" in script.text
         assert "/api/v1/index/tombstones" in script.text
-        assert "/api/v1/hybrid/sessions/ingest" in script.text
+        assert "/api/v1/ingest/sessions" in script.text
 
 
 def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch):
@@ -65,7 +65,7 @@ def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch
         vector_store=vector_store,
     )
     with TestClient(app) as client:
-        response = client.post("/api/v1/scrape/ingest", json={"uri": "https://example.org/guide"})
+        response = client.post("/api/v1/ingest/urls", json={"uri": "https://example.org/guide"})
         assert response.status_code == 201
         result = response.json()
         assert result["document"]["source_id"] == "https://example.org/guide"
