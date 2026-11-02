@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import re
 import math
+import asyncio
+import os
 from collections.abc import Sequence
 from uuid import uuid5, NAMESPACE_URL
 from .chunking import Chunker, chunk as chunk_text
 from .embeddings import EmbeddingProvider
 from .models import Chunk, Document, DocumentIn, DocumentOut, SearchHit
 from .store import DocumentStore
+from .reranking import Reranker
 
 
 class DocumentService:
@@ -49,9 +52,10 @@ class DocumentService:
 
 
 class SearchService:
-    def __init__(self, store: DocumentStore, embeddings: EmbeddingProvider):
+    def __init__(self, store: DocumentStore, embeddings: EmbeddingProvider, reranker: Reranker | None = None):
         self.store = store
         self.embeddings = embeddings
+        self.reranker = reranker
 
     async def lexical_search(self, query: str, limit: int = 10) -> list[SearchHit]:
         return (await self.search_with_status(query, limit, include_vector=False))["results"]
@@ -60,7 +64,7 @@ class SearchService:
         return (await self.search_with_status(query, limit))["results"]
 
     async def search_with_status(
-        self, query: str, limit: int = 10, *, include_vector: bool = True
+        self, query: str, limit: int = 10, *, include_vector: bool = True, rerank: bool | None = None
     ) -> dict:
         if not query.strip():
             raise ValueError("query is required")
@@ -119,12 +123,41 @@ class SearchService:
             hits, key=lambda hit: (hit.fusion_score, hit.lexical_score, str(hit.chunk_id)),
             reverse=True,
         )[:limit]
+        reranked = False
+        rerank_enabled = (
+            os.getenv("ENSEMBLE_RERANK_ENABLED", "0").strip() == "1"
+            if rerank is None else rerank
+        )
+        if rerank_enabled and results:
+            if self.reranker is None or not self.reranker.available:
+                degraded.append("reranking")
+            else:
+                candidates = results[:min(30, len(results))]
+                try:
+                    scores = await asyncio.to_thread(
+                        self.reranker.score, query,
+                        [candidate.text[:4000] for candidate in candidates],
+                    )
+                    if len(scores) != len(candidates) or any(not math.isfinite(float(score)) for score in scores):
+                        raise RuntimeError("reranker returned invalid or misaligned scores")
+                    scored = [
+                        candidate.model_copy(update={"rerank_score": float(score)})
+                        for candidate, score in zip(candidates, scores)
+                    ]
+                    results = [
+                        item for _, item in sorted(
+                            enumerate(scored), key=lambda pair: (-pair[1].rerank_score, pair[0])
+                        )
+                    ] + results[len(candidates):]
+                    reranked = True
+                except Exception:
+                    degraded.append("reranking")
         return {
             "ok": True,
             "results": results,
             "degraded": degraded,
             "retrieval": "hybrid" if vector_scores else "lexical",
-            "reranked": False,
+            "reranked": reranked,
         }
 
 
