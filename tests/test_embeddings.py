@@ -143,3 +143,30 @@ def test_nomic_provider_rejects_wrong_dimensions_and_non_finite_values():
     provider = NomicEmbeddingProvider(BadEmbedder())
     with pytest.raises(RuntimeError, match="non-finite"):
         asyncio.run(provider.embed(["text"]))
+
+
+def test_installed_nomic_model_emits_normalized_document_and_query_vectors():
+    import os
+    from pathlib import Path
+    import pytest
+
+    model_dir = Path(os.environ.get(
+        "ENSEMBLE_EMBEDDING_MODEL_DIR",
+        "~/.FlossWare/models/embeddings/nomic-ai/nomic-embed-text-v1.5/"
+        "e9b6763023c676ca8431644204f50c2b100d9aab",
+    )).expanduser()
+    if not (model_dir / "onnx" / "model.onnx").is_file():
+        pytest.skip("pinned Nomic model graph is not installed")
+    try:
+        from ensemble.nomic_embed_lib import Embedder
+    except ImportError as exc:
+        pytest.skip(f"local embedding dependencies are not installed: {exc}")
+
+    embedder = Embedder(backend="onnxruntime-cpu", threads=2)
+    documents = embedder.embed_documents(["rotate the signing key"])
+    queries = embedder.embed_queries(["rotate the signing key"])
+    assert documents.shape == (1, 768)
+    assert queries.shape == (1, 768)
+    assert abs(float(__import__("numpy").linalg.norm(documents[0])) - 1.0) < 1e-4
+    assert abs(float(__import__("numpy").linalg.norm(queries[0])) - 1.0) < 1e-4
+    assert float(documents[0] @ queries[0]) < 0.9999
