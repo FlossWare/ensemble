@@ -513,3 +513,37 @@ def test_hybrid_prompt_capture_is_idempotent(tmp_path):
         assert first.json()["event_id"] == second.json()["event_id"]
         assert first.json()["vector_indexed"] is False
         assert first.json()["lexical_indexed"] is False
+
+
+def test_sqlite_lexical_index_uses_shared_analyzer_and_porter_stemming(tmp_path):
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/documents", json={
+            "source_id": "stemmed-source",
+            "revision": 1,
+            "title": "Runtime behavior",
+            "content": "The service keeps running overnight and memory-service remains available.",
+        })
+        assert ingested.status_code == 201
+        stemmed = client.post("/api/v1/lexical/search", json={"query": "run", "limit": 10})
+        assert stemmed.status_code == 200
+        assert stemmed.json()["results"][0]["source_id"] == "stemmed-source"
+        compound = client.post("/api/v1/lexical/search", json={"query": "memory-service", "limit": 10})
+        assert compound.status_code == 200
+        assert compound.json()["results"][0]["source_id"] == "stemmed-source"
+
+
+def test_sqlite_lexical_index_replaces_reingested_revision(tmp_path):
+    with _client(tmp_path) as client:
+        payload = {
+            "source_id": "fts-replace",
+            "revision": 1,
+            "title": "FTS replacement",
+            "content": "obsolete terminology lives here",
+        }
+        assert client.post("/api/v1/documents", json=payload).status_code == 201
+        replacement = {**payload, "content": "current terminology lives here"}
+        assert client.post("/api/v1/documents", json=replacement).status_code == 201
+        old = client.post("/api/v1/lexical/search", json={"query": "obsolete"}).json()
+        current = client.post("/api/v1/lexical/search", json={"query": "current"}).json()
+        assert old["results"] == []
+        assert current["results"][0]["source_id"] == "fts-replace"
