@@ -8,7 +8,7 @@ import random
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, HTMLResponse
 from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chunk as chunk_text, describe_profiles as describe_chunk_profiles
@@ -1255,10 +1255,16 @@ def create_app(
             raise HTTPException(status_code=503, detail="lexical document store unavailable") from exc
         return {"ok": True, "ready": True}
 
-    @app.post("/api/v1/lexical/documents", response_model=DocumentOut, status_code=201, tags=["lexical"])
-    async def lexical_ingest_document(request: DocumentIn):
+    @app.post("/api/v1/lexical/documents", status_code=201, tags=["lexical"])
+    async def lexical_ingest_document(payload: dict[str, Any], request: Request, response: Response):
+        # The POC contract accepts a session plus messages. The document form is
+        # retained as a convenience for callers that already have a document.
+        if "session" in payload or "messages" in payload:
+            response.status_code = 200
+            return await hybrid_ingest_session(payload, request)
         try:
-            return await documents.ingest(request, embed=False)
+            document_request = DocumentIn.model_validate(payload)
+            return await documents.ingest(document_request, embed=False)
         except ChunkingError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
         except ValueError as exc:
