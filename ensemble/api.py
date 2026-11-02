@@ -5,6 +5,7 @@ import hashlib
 import re
 import secrets
 import random
+import os
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
@@ -208,6 +209,92 @@ def create_app(
         except Exception:
             result.metadata = {**result.metadata, "graph_entities_indexed": 0, "graph_degraded": True}
         return result, decision["decision"]
+
+    async def expand_graph_results(query: str, entities: list[dict[str, Any]], results: list[SearchHit], limit: int):
+        graph_sources: dict[str, int] = {}
+        graph_matches = []
+        try:
+            for candidate in entities:
+                if not candidate.get("exact"):
+                    continue
+                matches = await active_graph_store.query_nodes(
+                    "entity",
+                    {"entity_type": candidate["type"], "normalized": candidate["normalized"]},
+                )
+                if len(matches) != 1:
+                    continue
+                entity_node = matches[0]
+                graph_matches.append({
+                    "entity_id": entity_node["id"],
+                    "type": candidate["type"],
+                    "normalized": candidate["normalized"],
+                })
+                related = await active_graph_store.traverse(
+                    entity_node["id"], direction="in", max_depth=1, edge_type="mentions"
+                )
+                for item in related:
+                    source_node = item["node"]
+                    if source_node.get("type") != "source":
+                        continue
+                    properties = source_node.get("properties") or {}
+                    source_id, revision = properties.get("source_id"), properties.get("revision")
+                    if isinstance(source_id, str) and isinstance(revision, int):
+                        graph_sources[source_id] = max(graph_sources.get(source_id, 0), revision)
+
+            if not graph_sources:
+                return results, {"matched_entities": graph_matches, "candidate_sources": 0}
+
+            indexed_chunks = await document_store.all_chunks()
+            by_source: dict[str, list[Any]] = {}
+            for item in indexed_chunks:
+                by_source.setdefault(item.document.source_id, []).append(item)
+            existing = {
+                (hit.source_id, str(hit.chunk_id)): index
+                for index, hit in enumerate(results)
+            }
+            expanded = list(results)
+            for source_rank, source_id in enumerate(sorted(graph_sources), start=1):
+                state = await active_index_store.get_source(source_id)
+                if state is None or state.get("tombstoned") or state.get("high_sequence") != graph_sources[source_id]:
+                    continue
+                contribution = 1.0 / (60 + source_rank)
+                for item in by_source.get(source_id, []):
+                    document, chunk = item.document, item.chunk
+                    key = (source_id, str(chunk.id))
+                    if key in existing:
+                        position = existing[key]
+                        hit = expanded[position]
+                        expanded[position] = hit.model_copy(update={
+                            "graph_score": hit.graph_score + contribution,
+                            "fusion_score": hit.fusion_score + contribution,
+                        })
+                        continue
+                    expanded.append(SearchHit(
+                        document_id=document.id, source_id=source_id,
+                        revision=document.revision, title=document.title,
+                        chunk_id=chunk.id, chunk_ordinal=chunk.ordinal,
+                        text=chunk.content, lexical_score=0.0, vector_score=0.0,
+                        graph_score=contribution, fusion_score=contribution,
+                        chunk_profile=chunk.profile, chunk_start=chunk.start,
+                        chunk_end=chunk.end, chunk_header=chunk.header,
+                        session_id=document.metadata.get("session_id"),
+                        project=document.metadata.get("project"),
+                        role=document.metadata.get("role"),
+                        kind=document.metadata.get("kind"),
+                        is_subagent=document.metadata.get("is_subagent"),
+                        text_sha=hashlib.sha256(chunk.content.encode("utf-8")).hexdigest(),
+                    ))
+            expanded.sort(
+                key=lambda hit: (hit.fusion_score, hit.lexical_score, hit.graph_score, str(hit.chunk_id)),
+                reverse=True,
+            )
+            return expanded[:limit], {
+                "matched_entities": graph_matches, "candidate_sources": len(graph_sources),
+            }
+        except Exception:
+            return results, {
+                "matched_entities": graph_matches, "candidate_sources": 0, "degraded": True,
+            }
 
     app.state.store = document_store
     app.state.embedding_provider = embeddings
