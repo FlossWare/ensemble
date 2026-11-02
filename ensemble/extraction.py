@@ -20,7 +20,8 @@ PATTERNS = [
     ("file", re.compile(r"\b[\w\-]+\.(?:py|js|ts|sh|md|json|yaml|yml|toml|txt|java|go|rs|c|h|sql|service)\b", re.IGNORECASE), True),
     ("version", re.compile(r"\bv?\d+\.\d+(?:\.\d+)+\b"), True),
     ("technical_name", re.compile(r"\b[a-z][a-z0-9]*(?:[-_][a-z0-9]+)+\b"), True),
-    ("capitalised_name", re.compile(r"\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)*\b"), False),
+    ("camel_case_name", re.compile(r"\b[A-Z][a-z]+[A-Z][A-Za-z0-9]*\b"), False),
+    ("capitalised_name", re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b"), False),
 ]
 
 
