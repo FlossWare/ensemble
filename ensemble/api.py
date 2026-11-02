@@ -1293,7 +1293,43 @@ def create_app(
     @app.post("/api/v1/hybrid/search", tags=["hybrid"])
     async def hybrid_search(request: SearchIn):
         try:
-            return await search.search_with_status(request.query, request.limit, rerank=request.rerank)
+            result = await search.search_with_status(request.query, request.limit, rerank=request.rerank)
+            intent = classify(request.query)
+            result["intent"] = {"label": intent["label"], "confidence": intent["confidence"]}
+            related = []
+            try:
+                exact_paths = {
+                    item["text"] for item in extract(request.query)
+                    if item.get("exact") and item.get("type") in {"path", "file"}
+                }
+                if exact_paths:
+                    file_nodes = await active_graph_store.query_nodes("file", {})
+                    sessions = {}
+                    for file_node in file_nodes:
+                        path = (file_node.get("properties") or {}).get("path", "")
+                        if not isinstance(path, str) or not any(
+                            path == candidate or path.endswith("/" + candidate)
+                            for candidate in exact_paths
+                        ):
+                            continue
+                        for hit in await active_graph_store.traverse(
+                            file_node["id"], direction="in", max_depth=1, edge_type="touched"
+                        ):
+                            node = hit["node"]
+                            props = node.get("properties") or {}
+                            session_id = props.get("session_id")
+                            if session_id:
+                                entry = sessions.setdefault(session_id, {
+                                    "session_id": session_id,
+                                    "project": props.get("project"),
+                                    "touched": [],
+                                })
+                                entry["touched"].append(path)
+                    related = list(sessions.values())[:10]
+            except Exception:
+                result["degraded"].append("graph")
+            result["related_sessions"] = related
+            return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
