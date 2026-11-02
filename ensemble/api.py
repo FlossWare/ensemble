@@ -2056,8 +2056,9 @@ def create_app(
             degraded = []
             for message in messages:
                 kind = message.get("kind", "text")
+                content_revision = hashlib.sha256(message["text"].encode("utf-8")).hexdigest()
                 event_id = hashlib.sha256(
-                    f"{session_id}|{message['uuid']}|{kind}|{message['text']}".encode("utf-8")
+                    f"{session_id}|{message['uuid']}|{kind}|{content_revision}".encode("utf-8")
                 ).hexdigest()
                 event = {
                     "session_id": session_id, "project": project, "file": file_path,
@@ -2066,12 +2067,20 @@ def create_app(
                     "timestamp": message.get("ts", ""),
                 }
                 stored = await active_memory_store.append("session-events", event, event_id=event_id)
-                source_digest = hashlib.sha256(
-                    f"{message['uuid']}|{kind}|{message['text']}".encode("utf-8")
+                source_identity = hashlib.sha256(
+                    f"{session_id}|{message['uuid']}|{kind}".encode("utf-8")
                 ).hexdigest()
+                source_id = "transcript:" + source_identity
+                source_state = await active_index_store.get_source(source_id)
+                if source_state is None:
+                    revision = 1
+                elif source_state.get("revision_id") == content_revision:
+                    revision = source_state["high_sequence"]
+                else:
+                    revision = source_state["high_sequence"] + 1
                 document = DocumentIn(
-                    source_id=f"transcript:{session_id}:{source_digest}",
-                    revision=1,
+                    source_id=source_id,
+                    revision=revision,
                     title=f"{project}/{session_id} · {message['role']} · {kind}",
                     content=message["text"],
                     chunk_profile="window-v1",
