@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON, MetaData,
-    String, Table, Text, UniqueConstraint, func, insert, select, update,
+    String, Table, Text, UniqueConstraint, delete, func, insert, select, update,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -70,6 +70,36 @@ def _canonical_payload(payload: dict[str, Any]) -> tuple[str, int]:
     if size > MAX_ENTRY_BYTES:
         raise OverflowError(f"entry exceeds {MAX_ENTRY_BYTES} bytes")
     return encoded, size
+
+
+def _validate_expiry(record: dict[str, Any]) -> None:
+    if "expires_at" not in record:
+        return
+    value = record["expires_at"]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("expires_at must be an ISO-8601 timestamp with a timezone")
+    try:
+        expires_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("expires_at must be an ISO-8601 timestamp with a timezone") from exc
+    if expires_at.tzinfo is None or expires_at.utcoffset() is None:
+        raise ValueError("expires_at must include a timezone")
+    record["expires_at"] = expires_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _entry_is_expired(record: dict[str, Any], now: datetime | None = None) -> bool:
+    value = record.get("expires_at")
+    if value is None:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if expires_at.tzinfo is None or expires_at.utcoffset() is None:
+            return True
+        return expires_at <= (now or datetime.now(timezone.utc))
+    except (TypeError, ValueError):
+        # Invalid historical expiry metadata is excluded from recall, not treated
+        # as indefinitely valid.
+        return True
 
 
 def _validate_ingest(source_path: Any, content: Any, sha256: Any, metadata: Any) -> tuple[str, dict[str, Any]]:
@@ -254,6 +284,7 @@ class MemoryStore(Protocol):
     async def check_ready(self) -> None: ...
     async def read(self, name: str) -> str | None: ...
     async def write(self, name: str, content: str) -> None: ...
+    async def delete(self, name: str) -> dict[str, Any]: ...
     async def append(self, name: str, payload: dict[str, Any], event_id: str | None = None) -> dict[str, str]: ...
     async def list_names(self) -> list[str]: ...
     async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]: ...
@@ -297,6 +328,29 @@ class SqliteMemoryStore:
         async with self.engine.connect() as connection:
             return await connection.scalar(select(memories.c.content).where(memories.c.name == name))
 
+    async def delete(self, name: str) -> dict[str, Any]:
+        validate_memory_name(name)
+        async with self.engine.begin() as connection:
+            source_result = await connection.execute(
+                delete(memory_sources).where(memory_sources.c.document_name == name)
+            )
+            entry_result = await connection.execute(
+                delete(entries).where(entries.c.name == name)
+            )
+            memory_result = await connection.execute(
+                delete(memories).where(memories.c.name == name)
+            )
+        sources_deleted = int(source_result.rowcount or 0)
+        entries_deleted = int(entry_result.rowcount or 0)
+        memory_deleted = int(memory_result.rowcount or 0)
+        deleted = bool(sources_deleted or entries_deleted or memory_deleted)
+        return {
+            "status": "deleted" if deleted else "not_found",
+            "memory_deleted": bool(memory_deleted),
+            "entries_deleted": entries_deleted,
+            "sources_deleted": sources_deleted,
+        }
+
     async def write(self, name: str, content: str) -> None:
         validate_memory_name(name)
         if not isinstance(content, str):
@@ -316,6 +370,7 @@ class SqliteMemoryStore:
         if not isinstance(payload, dict) or not payload:
             raise ValueError("entry must be a non-empty JSON object")
         record = dict(payload)
+        _validate_expiry(record)
         digest = None
         if event_id is not None:
             if not isinstance(event_id, str) or not event_id.strip() or len(event_id) > 256:
@@ -481,6 +536,8 @@ class SqliteMemoryStore:
         records = await self.read_entries(name)
         matches = []
         for index, record in enumerate(records):
+            if _entry_is_expired(record):
+                continue
             prior = record.get("execution_context")
             if not isinstance(prior, dict):
                 continue
@@ -550,6 +607,27 @@ class InMemoryMemoryStore:
         if len(content) > MAX_CONTENT_CHARS:
             raise OverflowError(f"content exceeds {MAX_CONTENT_CHARS} characters")
         self._memories[name] = content
+
+    async def delete(self, name: str) -> dict[str, Any]:
+        validate_memory_name(name)
+        memory_deleted = name in self._memories
+        entries_deleted = len(self._entries.pop(name, []))
+        self._memories.pop(name, None)
+        for key in [key for key in self._events if key[0] == name]:
+            self._events.pop(key, None)
+        source_paths = [
+            path for path, source in self.sources.items()
+            if source.get("document_name") == name
+        ]
+        for path in source_paths:
+            self.sources.pop(path, None)
+        deleted = memory_deleted or entries_deleted > 0 or bool(source_paths)
+        return {
+            "status": "deleted" if deleted else "not_found",
+            "memory_deleted": memory_deleted,
+            "entries_deleted": entries_deleted,
+            "sources_deleted": len(source_paths),
+        }
 
     async def append(self, name: str, payload: dict[str, Any], event_id: str | None = None) -> dict[str, str]:
         validate_memory_name(name)
@@ -665,6 +743,8 @@ class InMemoryMemoryStore:
             raise ValueError("context.lineage must be a list of strings")
         matches = []
         for index, record in enumerate(self._entries.get(name, [])):
+            if _entry_is_expired(record):
+                continue
             prior = record.get("execution_context")
             if not isinstance(prior, dict) or prior.get("request_id") != context["request_id"]:
                 continue
