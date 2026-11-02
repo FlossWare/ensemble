@@ -413,7 +413,7 @@ document.getElementById("refresh-memory-knowledge").addEventListener("click",asy
 document.getElementById("memory-search-form").addEventListener("submit",async event=>{
  event.preventDefault();memoryResults.textContent="Searching Memory…";
  try{
-  memoryResults.textContent=JSON.stringify(await controlJson("/api/v1/memory/search/keywords/hybrid","POST",{
+  memoryResults.textContent=JSON.stringify(await controlJson("/api/v1/memory/search/hybrid","POST",{
    query:document.getElementById("memory-query").value.trim(),top_k:10
   }),null,2);
  }catch(error){memoryResults.textContent="Memory search failed: "+error.message;}
