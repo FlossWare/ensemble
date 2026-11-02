@@ -1,3 +1,4 @@
+import asyncio
 import json
 import pytest
 from alembic import command
@@ -317,6 +318,41 @@ def test_index_tombstones_are_permanent_and_manifest_is_bounded(tmp_path):
 
         assert client.get("/api/v1/index/manifest?limit=500").status_code == 200
         assert client.get("/api/v1/index/manifest?limit=501").status_code == 400
+
+
+def test_index_tombstone_prunes_vectors_from_every_collection():
+    vector_store = InMemoryVectorStore()
+    for collection in ("knowledge_chunks", "transcript_text"):
+        asyncio.run(vector_store.upsert(collection, "test-model", 2, [{
+            "id": f"{collection}-record",
+            "embedding": [1.0, 0.0],
+            "document": "source content",
+            "metadata": {
+                "url": "source-to-tombstone",
+                "source_id": "source-to-tombstone",
+                "content_sha256": "a" * 64,
+            },
+        }]))
+    app = create_app(store=InMemoryDocumentStore(), vector_store=vector_store)
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/index/tombstones", json={
+            "source_id": "source-to-tombstone",
+            "revision_sequence": 1,
+        })
+        assert response.status_code == 200
+        assert response.json()["decision"] == "tombstoned"
+        collections = {item["name"]: item["count"] for item in asyncio.run(vector_store.list_collections())}
+        assert collections == {"knowledge_chunks": 0, "transcript_text": 0}
+
+        retry = client.post("/api/v1/index/tombstones", json={
+            "source_id": "source-to-tombstone",
+            "revision_sequence": 1,
+        })
+        assert retry.status_code == 200
+        assert retry.json()["decision"] == "tombstoned"
+        collections = {item["name"]: item["count"] for item in asyncio.run(vector_store.list_collections())}
+        assert collections == {"knowledge_chunks": 0, "transcript_text": 0}
 
 
 def test_index_manifest_persists_across_restart(tmp_path):
