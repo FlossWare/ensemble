@@ -98,7 +98,9 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | GET | /api/v1/reranking/health, /ready | Local cross-encoder model readiness and provenance |
 | POST | /api/v1/reranking/rerank | Score a bounded candidate list with the configured cross-encoder |
 | POST | /api/v1/ranking/rank | Explainable reciprocal-rank fusion |
-| GET | /api/v1/memory/health, /ready | Memory capability status |\n| GET | /api/v1/context/health, /ready | Context assembly capability status |\n| POST | /api/v1/context/assemble | Assemble bounded, provenance-preserving Memory and retrieval context with extractive compression |
+| GET | /api/v1/memory/health, /ready | Memory capability status |
+| GET | /api/v1/context/health, /ready | Context assembly capability status |
+| POST | /api/v1/context/assemble | Assemble bounded, provenance-preserving Memory and retrieval context with extractive compression |
 | GET | /api/v1/memory/memories, /memories/{name}, /memories/{name}/entries | List and read memory resources and entries |
 | PUT | /api/v1/memory/memories/{name}, /memories/{name}/entries/{event_id} | Replace memory content or append an idempotent event |
 | POST | /api/v1/memory/memories/{name}/entries | Append a memory entry |
@@ -131,7 +133,8 @@ The POC parity inventory in docs/poc-parity.md defines the complete capability b
 | Intent | Explainable intent classification with confidence and evidence |
 | Ranking | Reciprocal-rank fusion with per-channel contributions |
 | Knowledge | Sourced record create/read/tombstone with revision and provenance |
-| Memory | Durable memory/event operations, retrieval and operational status |\n| Context | Bounded context assembly across Memory and Ensemble retrieval with explicit source provenance and extractive compression |
+| Memory | Durable memory/event operations, retrieval and operational status |
+| Context | Bounded context assembly across Memory and Ensemble retrieval with explicit source provenance and extractive compression |
 
 A Control Center is also a required product surface. It is served by the same application and consumes these REST contracts; it does not create a second backend or duplicate capability logic.
 
