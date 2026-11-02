@@ -1243,6 +1243,106 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail="scrape ingestion failed") from exc
 
+    @app.get("/api/v1/lexical/health", tags=["lexical"])
+    async def lexical_health():
+        return {"ok": True, "service": "lexical", "backend": "document-store"}
+
+    @app.get("/api/v1/lexical/ready", tags=["lexical"])
+    async def lexical_ready():
+        try:
+            await document_store.check_ready()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="lexical document store unavailable") from exc
+        return {"ok": True, "ready": True}
+
+    @app.post("/api/v1/lexical/documents", response_model=DocumentOut, status_code=201, tags=["lexical"])
+    async def lexical_ingest_document(request: DocumentIn):
+        try:
+            return await documents.ingest(request)
+        except ChunkingError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="lexical document ingestion failed") from exc
+
+    @app.post("/api/v1/lexical/search", tags=["lexical"])
+    async def lexical_search(request: SearchIn):
+        try:
+            results = await search.lexical_search(request.query, request.limit)
+            return {"ok": True, "results": results, "retrieval": "lexical"}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/hybrid/health", tags=["hybrid"])
+    async def hybrid_health():
+        return {"ok": True, "service": "hybrid"}
+
+    @app.get("/api/v1/hybrid/ready", tags=["hybrid"])
+    async def hybrid_ready():
+        try:
+            await document_store.check_ready()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="hybrid retrieval persistence unavailable") from exc
+        return {
+            "ok": True, "ready": True,
+            "embedding_available": embeddings.available,
+            "degraded_mode": "lexical fallback",
+        }
+
+    @app.post("/api/v1/hybrid/search", tags=["hybrid"])
+    async def hybrid_search(request: SearchIn):
+        try:
+            return await search.search_with_status(request.query, request.limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="hybrid search failed") from exc
+
+    @app.post("/api/v1/hybrid/knowledge/search", tags=["hybrid"])
+    async def hybrid_knowledge_search(request: SearchIn):
+        if not embeddings.available:
+            raise HTTPException(status_code=503, detail="knowledge search requires an available embedding provider")
+        try:
+            vector = (await embeddings.embed([request.query], mode="query"))[0]
+            results = await active_vector_store.query("knowledge_chunks", vector, request.limit)
+            return {
+                "ok": True, "results": results, "degraded": [],
+                "retrieval": "knowledge-only",
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="knowledge retrieval dependency unavailable") from exc
+
+    @app.post("/api/v1/hybrid/prompts", tags=["hybrid"])
+    async def hybrid_capture_prompt(payload: dict[str, Any], request: Request):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > 262_144:
+            raise HTTPException(status_code=413, detail="request body exceeds 256 KiB")
+        session_id, prompt = payload.get("session_id"), payload.get("prompt")
+        timestamp, cwd = payload.get("timestamp"), payload.get("cwd")
+        if not isinstance(session_id, str) or not session_id or len(session_id) > 256:
+            raise HTTPException(status_code=400, detail="session_id must be a non-empty string of at most 256 characters")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 65_536:
+            raise HTTPException(status_code=400, detail="prompt must be a non-empty string of at most 65536 characters")
+        if not isinstance(timestamp, str) or not timestamp or len(timestamp) > 128:
+            raise HTTPException(status_code=400, detail="timestamp must be a non-empty string of at most 128 characters")
+        if not isinstance(cwd, str) or len(cwd) > 4096:
+            raise HTTPException(status_code=400, detail="cwd must be a string of at most 4096 characters")
+        event_id = hashlib.sha256(f"{session_id}|{timestamp}|{prompt}".encode("utf-8")).hexdigest()
+        try:
+            stored = await active_memory_store.append(
+                "prompt-ledger",
+                {"session_id": session_id, "timestamp": timestamp, "cwd": cwd, "prompt": prompt},
+                event_id=event_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "ok": True, "event_id": event_id, "status": stored["status"],
+            "vector_indexed": False, "lexical_indexed": False,
+            "index_error": None,
+        }
+
     @app.post("/api/v1/documents", response_model=DocumentOut, status_code=201, tags=["documents"])
     async def ingest_document(request: DocumentIn):
         try:
