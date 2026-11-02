@@ -27,7 +27,8 @@ The following endpoint groups were found in `ensemble/api.py` at the time of thi
 
 | Capability | Existing REST surface | Current Control Center depth |
 |---|---|---|
-| System/operations | `/health`, `/ready`, `/api/v1/system/config` | Basic |\n| Context | `/api/v1/context/health`, `/ready`, `POST /api/v1/context/assemble` | REST capability; bounded extractive assembly |
+| System/operations | `/health`, `/ready`, `/api/v1/system/config` | Basic |
+| Context | `/api/v1/context/health`, `/ready`, `POST /api/v1/context/assemble` | REST capability; bounded extractive assembly |
 | Embeddings | `/api/v1/embeddings/health`, `/model`, `POST /embed` | Health only |
 | Chunking | `/api/v1/chunking/health`, `/ready`, `/profiles`, `POST /chunk` | Health only |
 | Tokenization | `/api/v1/tokenization/health`, `/ready`, `/profiles`, `POST /tokenize` | Health only |
