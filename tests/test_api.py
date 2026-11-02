@@ -154,12 +154,12 @@ def test_vector_collection_upsert_query_and_existing_ids(tmp_path):
                 {"url": "https://example.test/b", "content_sha256": "b" * 64},
             ],
         }
-        upsert = client.post("/api/v1/vector/collections/knowledge/upsert", json=payload)
+        upsert = client.post("/api/v1/vector/collections/knowledge/records", json=payload)
         assert upsert.status_code == 200
         assert upsert.json()["upserted"] == 2
 
         existing = client.post(
-            "/api/v1/vector/collections/knowledge/existing",
+            "/api/v1/vector/collections/knowledge/records/lookup",
             json={"ids": ["doc-b", "missing", "doc-a"]},
         )
         assert existing.json()["found"] == ["doc-b", "doc-a"]
@@ -180,9 +180,9 @@ def test_vector_upsert_is_idempotent_and_model_mismatch_fails(tmp_path):
             "ids": ["same-id"], "embeddings": [[1.0, 0.0]],
             "documents": ["original"], "metadatas": [{"version": 1}],
         }
-        assert client.post("/api/v1/vector/collections/c/upsert", json=base).status_code == 200
+        assert client.post("/api/v1/vector/collections/c/records", json=base).status_code == 200
         replacement = {**base, "documents": ["replacement"], "metadatas": [{"version": 2}]}
-        assert client.post("/api/v1/vector/collections/c/upsert", json=replacement).json()["upserted"] == 1
+        assert client.post("/api/v1/vector/collections/c/records", json=replacement).json()["upserted"] == 1
         result = client.post(
             "/api/v1/vector/collections/c/query",
             json={"embedding": [1.0, 0.0]},
@@ -191,7 +191,7 @@ def test_vector_upsert_is_idempotent_and_model_mismatch_fails(tmp_path):
         assert result[0]["document"] == "replacement"
 
         mismatch = {**base, "model": "model-b"}
-        assert client.post("/api/v1/vector/collections/c/upsert", json=mismatch).status_code == 409
+        assert client.post("/api/v1/vector/collections/c/records", json=mismatch).status_code == 409
 
 
 def test_vector_metadata_and_delete_superseded(tmp_path):
@@ -205,19 +205,19 @@ def test_vector_metadata_and_delete_superseded(tmp_path):
                 {"url": "https://example.test/source", "content_sha256": "b" * 64},
             ],
         }
-        client.post("/api/v1/vector/collections/c/upsert", json=payload)
+        client.post("/api/v1/vector/collections/c/records", json=payload)
         updated = client.post(
-            "/api/v1/vector/collections/c/metadata",
+            "/api/v1/vector/collections/c/records/metadata",
             json={"ids": ["current", "missing"], "metadatas": [{"tag": "new"}, {"tag": "none"}]},
         )
         assert updated.json()["updated"] == 1
         deleted = client.post(
-            "/api/v1/vector/collections/c/delete-superseded",
+            "/api/v1/vector/collections/c/records/prune",
             json={"url": "https://example.test/source", "keep_sha256": "b" * 64},
         )
         assert deleted.json()["deleted"] == 1
         found = client.post(
-            "/api/v1/vector/collections/c/existing",
+            "/api/v1/vector/collections/c/records/lookup",
             json={"ids": ["old", "current"]},
         ).json()["found"]
         assert found == ["current"]
@@ -230,7 +230,7 @@ def test_vector_collection_persists_across_restart(tmp_path):
         "documents": ["persisted vector"], "metadatas": [{"source": "test"}],
     }
     with _client(tmp_path) as client:
-        assert client.post("/api/v1/vector/collections/c/upsert", json=payload).status_code == 200
+        assert client.post("/api/v1/vector/collections/c/records", json=payload).status_code == 200
 
     with _client(tmp_path) as client:
         result = client.post(
@@ -244,7 +244,7 @@ def test_vector_contract_rejects_invalid_vectors(tmp_path):
     with _client(tmp_path) as client:
         invalid = '{"model":"model-a","dimensions":2,"ids":["bad"],"embeddings":[[NaN,0.0]],"documents":["bad"],"metadatas":[{"source":"test"}]}'
         response = client.post(
-            "/api/v1/vector/collections/c/upsert",
+            "/api/v1/vector/collections/c/records",
             content=invalid,
             headers={"content-type": "application/json"},
         )
