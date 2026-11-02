@@ -544,24 +544,6 @@ def create_app(
             "tokens": tokens,
         }
 
-    @app.get("/api/v1/extraction/health", tags=["extraction"])
-    async def extraction_health():
-        return {"ok": True, "service": "extraction"}
-
-    @app.get("/api/v1/extraction/ready", tags=["extraction"])
-    async def extraction_ready():
-        return {"ok": True, "ready": True}
-
-    @app.post("/api/v1/extraction/extract", tags=["extraction"])
-    async def extract_entities(payload: dict[str, Any]):
-        try:
-            entities = extract(payload.get("text"))
-        except OverflowError as exc:
-            raise HTTPException(status_code=413, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "entities": entities}
-
     @app.get("/api/v1/intent/health", tags=["intent"])
     async def intent_health():
         return {"ok": True, "service": "intent"}
@@ -626,9 +608,7 @@ def create_app(
                 properties = {
                     "entity_type": kind,
                     "normalized": normalized,
-                    "canonical_name": str(candidate.get("text", value))[:2048],
-                    "confidence": candidate.get("confidence", 1.0),
-                    "provenance": candidate.get("provenance", {}),
+                    "canonical_name": normalized,
                 }
                 try:
                     node = await active_graph_store.add_node("entity", properties, node_id="entity_" + identity)
