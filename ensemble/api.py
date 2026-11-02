@@ -647,9 +647,10 @@ def create_app(
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         result = await active_index_store.record_tombstone(source_id, sequence)
         if result["decision"] == "tombstoned":
-            await document_store.tombstone_source(source_id)
-            await active_knowledge_store.tombstone(source_id)
-            await active_vector_store.delete_superseded("knowledge_chunks", source_id, "")
+            # Keep every ingestion path on the same cleanup routine. Sources may
+            # have vectors in transcript_text, knowledge_chunks, or future
+            # collections, not only the Knowledge collection.
+            await tombstone_indexed_source(source_id)
         return {"ok": True, **result}
 
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
