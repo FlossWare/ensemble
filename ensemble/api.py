@@ -1305,7 +1305,7 @@ def create_app(
         # retained as a convenience for callers that already have a document.
         if "session" in payload or "messages" in payload:
             response.status_code = 200
-            return await hybrid_ingest_session(payload, request)
+            return await ingest_session(payload, request)
         try:
             document_request = DocumentIn.model_validate(payload)
             return await documents.ingest(document_request, embed=False)
@@ -1459,7 +1459,7 @@ def create_app(
             },
             "messages": parsed["messages"],
         }
-        result = await hybrid_ingest_session(session_payload, request)
+        result = await ingest_session(session_payload, request)
         result.update({
             "bytes_consumed": parsed["bytes_consumed"],
             "next_offset": parsed["end_offset"],
@@ -1468,8 +1468,8 @@ def create_app(
         })
         return result
 
-    @app.post("/api/v1/hybrid/sessions/ingest", tags=["hybrid"])
-    async def hybrid_ingest_session(payload: dict[str, Any], request: Request):
+    @app.post("/api/v1/ingest/sessions", tags=["ingestion"])
+    async def ingest_session(payload: dict[str, Any], request: Request):
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > 8 * 1_048_576:
             raise HTTPException(status_code=413, detail="request body exceeds 8 MiB")
