@@ -43,9 +43,9 @@ Implemented:
 - Vector similarity over stored chunk embeddings when embeddings are enabled.
 - Document and chunk provenance in search responses.
 - Tests for API behavior, migration setup, restart durability, and revision replacement.
-- Python 3.12 GitHub Actions workflow validates installer shell syntax, Control Center JavaScript syntax, and the full Python test suite. The latest verified review-branch run passed 150 tests with 1 skipped.
+- Python 3.12 GitHub Actions workflow validates installer shell syntax, Control Center JavaScript syntax, and the full Python test suite. The latest verified review-branch run passed 153 tests with 1 skipped.
 
-Implemented on the review branch (latest verified CI: 150 passed, 1 skipped):
+Implemented on the review branch (latest verified CI: 153 passed, 1 skipped):
 - POC-compatible lexical-v1 tokenization capability and REST endpoints.
 - POC-compatible identifier extraction capability and REST endpoints.
 - POC-compatible rule-based intent classification capability and REST endpoints.
