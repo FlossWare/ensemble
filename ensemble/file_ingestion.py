@@ -22,7 +22,7 @@ def extract_pdf(raw: bytes) -> dict:
     if not raw.startswith(b"%PDF-"):
         raise PDFExtractionError("uploaded content is not a PDF")
     try:
-        reader = PdfReader(BytesIO(raw), strict=True)
+        reader = PdfReader(BytesIO(raw), strict=False)
         if reader.is_encrypted:
             raise PDFExtractionError("encrypted PDFs are not supported")
         if len(reader.pages) > MAX_PDF_PAGES:
