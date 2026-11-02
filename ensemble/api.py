@@ -569,7 +569,7 @@ def create_app(
     @app.get("/api/v1/entities/ready", tags=["entities"])
     async def entities_ready():
         try:
-            await active_graph_store.query_nodes("entity", {})
+            await active_graph_store.get_node("__ensemble_entities_readiness_probe__")
         except Exception as exc:
             raise HTTPException(status_code=503, detail="entity identity store unavailable") from exc
         return {"ok": True, "ready": True, "identity_store": "graph"}
