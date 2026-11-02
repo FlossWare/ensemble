@@ -100,17 +100,17 @@ The previous Hybrid search routes were removed rather than aliased. Control Cent
 
 ### Remaining Hybrid orchestration routes
 
-- `POST /api/v1/hybrid/sessions/ingest`
+- `POST /api/v1/ingest/sessions`
 - `POST /api/v1/hybrid/prompts`
 
-These are not search operations. Session ingestion belongs under the canonical ingestion namespace. Prompt capture should be reviewed against the Memory event/resource model. Do not leave them under a generic Hybrid prefix merely because the first implementation used that grouping.
+Prompt capture is not a search operation and remains under review against the Memory event/resource model. Structured session ingestion is now `POST /api/v1/ingest/sessions`, alongside the other source ingestion operations. Do not place ingestion routes under a generic Hybrid prefix.
 
 ## 4. Audit findings and proposed direction
 
 | Area | Current shape | Finding | Next decision |
 |---|---|---|---|
 | Search | `/search`, `/search/lexical`, `/search/hybrid` | Three related contracts with distinct caller intent and response shape | Retain the default, lexical-only, and enriched Hybrid contracts under one Search namespace |
-| Ingestion | `/ingest/*` plus `/hybrid/sessions/ingest` | Mostly consistent; structured session ingestion is the exception | Move session ingestion to `/ingest/sessions` or a clearly nested transcript resource |
+| Ingestion | `/ingest/*` | Source ingestion now shares one namespace, including structured sessions | Complete ingestion route consistency and decide whether lexical document ingestion is still needed as a separate route |
 | Vector | Collection routes end in `existing`, `upsert`, `metadata`, `delete-superseded`, `query` | Mixes resource operations and implementation-flavored verbs | Model records as resources; retain explicit query and revision-cleanup actions only where semantics justify them |
 | Graph | `add-node`, `add-edge`, singular `node/{id}`, `query`, `traverse` | Inconsistent singular/plural and verb-led mutation paths | Prefer `/graph/nodes`, `/graph/edges`, `/graph/nodes/{node_id}`; define query/traversal as explicit operations |
 | Memory | Mixed `read`, `write`, `append`, `entries`, `retrieve`, `list`, and three search paths | No single resource model; semantic strategy appears in some paths but not others | Define Memory resources and operation semantics before renaming; avoid mechanical string replacement |
@@ -123,7 +123,7 @@ These are not search operations. Session ingestion belongs under the canonical i
 ## 5. Search contract semantics\n\n- `POST /api/v1/search`: default retrieval contract; returns the standard result collection.\n- `POST /api/v1/search/lexical`: lexical-only retrieval; returns lexical results and retrieval metadata.\n- `POST /api/v1/search/hybrid`: Hybrid orchestration; includes retrieval diagnostics, intent enrichment, and related-session context when available.\n- `POST /api/v1/search/hybrid/knowledge`: Knowledge-scoped Hybrid retrieval.\n\nThese contracts share implementation components but are not aliases: their response contracts and caller intent differ.\n\n## 6. Recommended cleanup sequence
 
 1. **Search semantics:** complete. Default, lexical-only, and enriched Hybrid retrieval now live under the Search namespace with explicit distinctions.
-2. **Ingestion:** move structured session ingestion into `/ingest`; decide where prompt capture belongs.
+2. **Ingestion:** structured session ingestion moved to `/ingest/sessions`; finish evaluating the lexical document convenience route and prompt-event placement.
 3. **Graph:** make nodes and edges proper plural resources.
 4. **Vector:** define collection and record resource semantics, then replace action-heavy CRUD paths.
 5. **Memory:** define the resource model and distinguish memory entries, events, source imports, reconciliation, and retrieval strategies.
