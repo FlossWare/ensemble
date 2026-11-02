@@ -1335,6 +1335,27 @@ def create_app(
             except Exception:
                 result["degraded"].append("graph")
             result["related_sessions"] = related
+            # Successful searches are recorded for audit/learning. Ledger failure
+            # must never turn a successful retrieval into a failed request.
+            try:
+                await active_memory_store.append(
+                    "search-ledger",
+                    {
+                        "query": request.query,
+                        "intent": result["intent"],
+                        "degraded": result["degraded"],
+                        "result_count": len(result["results"]),
+                        "results": [{
+                            "source_id": hit.source_id,
+                            "revision": hit.revision,
+                            "chunk_id": str(hit.chunk_id),
+                            "score": hit.fusion_score,
+                        } for hit in result["results"]],
+                    },
+                    event_id=f"search-{uuid4()}",
+                )
+            except Exception:
+                pass
             return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
