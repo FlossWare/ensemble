@@ -24,6 +24,7 @@ class DocumentService:
 
     async def ingest(self, request: DocumentIn, *, embed: bool = True, vector_collection: str | None = None) -> DocumentOut:
         document = Document(request.source_id, request.revision, request.title, request.content, request.metadata)
+        document.id = uuid5(NAMESPACE_URL, f"ensemble:document:{request.source_id}:{request.revision}")
         records = chunk_text(request.chunk_profile, request.source_id, request.content, request.media_type)
         if not records:
             raise ValueError("document content contains no usable text")
@@ -53,7 +54,13 @@ class DocumentService:
         ]
         for chunk in chunks:
             chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
+        requested_document_id = document.id
         document = await self.store.save(document, chunks)
+        if document.id != requested_document_id:
+            for chunk in chunks:
+                chunk.document_id = document.id
+                chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
+            document = await self.store.save(document, chunks)
         vector_indexed = False
         if (
             vector_collection and embed and self.vector_store is not None
