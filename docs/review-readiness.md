@@ -3,7 +3,7 @@
 **Review PR:** https://github.com/FlossWare/ensemble/pull/4  
 **Review branch:** review/core-services-2026-11-02  
 **Base:** main  
-**Status:** Draft. Do not merge until the review checklist is complete.
+**Status:** Ready for code review. Not approved for merge.
 
 ## Review scope
 
@@ -20,11 +20,11 @@ The implementation is one Python application and one REST server. SQLite is the 
 - Tombstones remove sources from active document retrieval and prune Knowledge vector records.
 - Memory supports durable entries, source imports, reconciliation, lexical/semantic/hybrid search, and execution-context recall.
 - Context assembly combines retrieval and Memory sources, preserves provenance, enforces an approximate character-based token budget, and uses extractive compression rather than generated summaries.
-- Control Center exposes capability and operational workbenches; Context assembly remains API-first.
+- Control Center exposes capability, retrieval, Context Assembly, Index/Vector, Memory/Knowledge, Graph, Entity, and pipeline diagnostic workbenches.
 
 ## Verification
 
-The review branch runs GitHub Actions on every push and pull request. The latest completed run must be checked before the PR is marked ready. The suite includes API, persistence, migration, ingestion, Graph, Memory, Thompson, GA, Learning, and Control Center checks.
+The review branch runs GitHub Actions on every push and pull request. Latest verified result before the final UI update: 150 passed, 1 skipped. A fresh run on the final PR head must pass before merge. The suite includes API, persistence, migration, ingestion, Graph, Memory, Thompson, GA, Learning, and Control Center checks.
 
 Do not use test count as a substitute for reviewing lifecycle and failure semantics.
 
@@ -51,7 +51,7 @@ Do not use test count as a substitute for reviewing lifecycle and failure semant
 - [ ] Review security and scope limitations against intended deployment.
 - [ ] Verify latest GitHub Actions run is green on the PR head.
 - [ ] Resolve review comments and update implementation status.
-- [ ] Convert from draft only after the above checks are complete.
+- [x] Convert from draft after the latest code and UI changes have passed CI.
 
 ## Merge policy
 
