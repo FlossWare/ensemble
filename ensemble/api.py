@@ -1962,7 +1962,29 @@ def create_app(
             raise HTTPException(status_code=503, detail="knowledge search requires an available embedding provider")
         try:
             vector = (await embeddings.embed([request.query], mode="query"))[0]
-            results = await active_vector_store.query("knowledge_chunks", vector, request.limit)
+            candidates = await active_vector_store.query(
+                "knowledge_chunks", vector, min(200, max(request.limit, request.limit * 4))
+            )
+            results = []
+            for candidate in candidates:
+                metadata = candidate.get("metadata")
+                if not isinstance(metadata, dict):
+                    continue
+                source_id, revision = metadata.get("source_id"), metadata.get("revision")
+                if (
+                    not isinstance(source_id, str) or not source_id
+                    or isinstance(revision, bool) or not isinstance(revision, int)
+                ):
+                    continue
+                source = await active_index_store.get_source(source_id)
+                if (
+                    source is None or source.get("tombstoned")
+                    or source.get("high_sequence") != revision
+                ):
+                    continue
+                results.append(candidate)
+                if len(results) >= request.limit:
+                    break
             return {
                 "ok": True, "results": results, "degraded": [],
                 "retrieval": "knowledge-only",
