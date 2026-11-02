@@ -77,7 +77,7 @@ class DocumentService:
                         "chunk_end": chunk.end,
                         "chunk_header": chunk.header,
                         "content_sha256": digest,
-                        **document.metadata,
+                        "source_metadata": document.metadata,
                     },
                     } for chunk in chunks],
                 )
