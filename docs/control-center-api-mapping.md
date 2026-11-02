@@ -9,6 +9,7 @@
 |---|---|---|---|
 | Platform status | Overall readiness and capability health/readiness | `GET /ready`, capability `/health` and `/ready` | No historical metrics or durable operation dashboard |
 | Retrieval Explorer | Hybrid search, result provenance, intent/entity diagnostics, optional reranking | `POST /api/v1/search/hybrid` | Does not yet compare each retrieval channel independently or show a correlated server-side trace |
+| Context Assembly | Compose Memory and Hybrid retrieval context with a bounded extractive budget | `POST /api/v1/context/assemble` | Character-based token estimate; no model-backed summarizer |
 | Transcript ingestion | Submit structured session payload | `POST /api/v1/ingest/sessions` | Synchronous ingestion; no durable job/checkpoint UI |
 | Index and Vector | Manifest, collection list, source lookup, confirmed tombstone | `GET /api/v1/index/manifest`, `GET /api/v1/vector/collections`, `GET /api/v1/index/sources/{source_id}`, `POST /api/v1/index/tombstones` | No index-generation rebuild or cleanup-retry workbench |
 | Memory and Knowledge | Memory names, Knowledge status, Memory search, Knowledge record lookup | `/api/v1/memory/*`, `/api/v1/knowledge/records/{source_id}` | No complete event/session lifecycle workbench or scoped filesystem scanner |
@@ -54,12 +55,11 @@ A future correlated trace must be emitted by the actual ingestion/retrieval exec
 ## 4. Remaining Control Center work
 
 1. Compare lexical, vector and hybrid candidates independently, including fusion contributions and provenance.
-2. Add a usable Context Assembly workbench.
-3. Add Embeddings and Ranking/Reranking diagnostic workbenches.
-4. Add durable ingestion-job/checkpoint history only after those server-side job semantics exist.
-5. Add bounded operational metrics from backend measurements, with units and time windows.
-6. Add safe migration, backup/restore, and source/index recovery diagnostics.
-7. Preserve explicit confirmation for destructive maintenance operations.
+2. Add Embeddings and Ranking/Reranking diagnostic workbenches.
+3. Add durable ingestion-job/checkpoint history only after those server-side job semantics exist.
+4. Add bounded operational metrics from backend measurements, with units and time windows.
+5. Add safe migration, backup/restore, and source/index recovery diagnostics.
+6. Preserve explicit confirmation for destructive maintenance operations.
 
 ## 5. Implementation caveats
 
