@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi.testclient import TestClient
 
 from ensemble.api import create_app
@@ -308,3 +310,66 @@ def test_memory_knowledge_ingest_rejects_symlink_escape(tmp_path):
         pass
     else:
         raise AssertionError("symlink escape must be rejected")
+
+
+
+def test_memory_expiry_excludes_events_from_recall_but_keeps_audit_entries():
+    now = datetime.now(timezone.utc)
+    expired_at = (now - timedelta(minutes=1)).isoformat()
+    expires_later = (now + timedelta(hours=1)).isoformat()
+    context = {
+        "request_id": "request-expiry",
+        "execution_id": "current-execution",
+        "objective": "retrieve active execution memory",
+        "lineage": [],
+    }
+    with client() as http:
+        for execution_id, result, expires_at in (
+            ("expired-execution", "expired result", expired_at),
+            ("active-execution", "active result", expires_later),
+        ):
+            response = http.post("/api/v1/memory/memories/execution/entries", json={
+                "entry": {
+                    "result": result,
+                    "expires_at": expires_at,
+                    "execution_context": {
+                        "request_id": "request-expiry",
+                        "execution_id": execution_id,
+                        "objective": "prior work",
+                        "lineage": [],
+                    },
+                },
+            })
+            assert response.status_code == 200
+
+        recall = http.post("/api/v1/memory/recall", json={
+            "name": "execution", "context": context, "limit": 10,
+        })
+        assert recall.status_code == 200
+        assert [item["record"]["result"] for item in recall.json()["results"]] == ["active result"]
+
+        # The event ledger remains available for audit even after an entry expires.
+        entries = http.get("/api/v1/memory/memories/execution/entries").json()["entries"]
+        assert len(entries) == 2
+
+        invalid = http.post("/api/v1/memory/memories/execution/entries", json={
+            "entry": {"result": "invalid expiry", "expires_at": "2026-11-02T12:00:00"},
+        })
+        assert invalid.status_code == 400
+
+
+def test_memory_delete_removes_content_and_event_ledger():
+    with client() as http:
+        assert http.put("/api/v1/memory/memories/notes", json={"content": "private notes"}).status_code == 200
+        assert http.put(
+            "/api/v1/memory/memories/notes/entries/event-1",
+            json={"entry": {"result": "private event"}},
+        ).status_code == 200
+
+        deleted = http.delete("/api/v1/memory/memories/notes")
+        assert deleted.status_code == 200
+        assert deleted.json()["memory_deleted"] is True
+        assert deleted.json()["entries_deleted"] == 1
+        assert http.get("/api/v1/memory/memories/notes").status_code == 404
+        assert "notes" not in http.get("/api/v1/memory/memories").json()["memories"]
+        assert http.delete("/api/v1/memory/memories/notes").status_code == 404
