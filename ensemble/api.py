@@ -24,7 +24,7 @@ from .knowledge_store import KnowledgeStore, SqliteKnowledgeStore, InMemoryKnowl
 from .graph_store import GraphStore, SqliteGraphStore
 from .graph_memory import InMemoryGraphStore
 from .tokenization import PROFILES as TOKENIZATION_PROFILES, TokenizationError, describe_profiles, tokenize
-from .extraction import extract
+from .extraction import extract, normalize_entity
 from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
 from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_reranker, validate_rerank_request
@@ -200,7 +200,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "memory", "ga", "thompson", "learning"],
+            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "entities", "memory", "ga", "thompson", "learning"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
@@ -579,6 +579,87 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, **result}
+
+    @app.get("/api/v1/entities/health", tags=["entities"])
+    async def entities_health():
+        return {"ok": True, "service": "entities", "resolution": "graph-backed"}
+
+    @app.get("/api/v1/entities/ready", tags=["entities"])
+    async def entities_ready():
+        try:
+            await active_graph_store.query_nodes("entity", {})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="entity identity store unavailable") from exc
+        return {"ok": True, "ready": True, "identity_store": "graph"}
+
+    @app.post("/api/v1/entities/extract", tags=["entities"])
+    async def extract_entity_candidates(payload: dict[str, Any]):
+        try:
+            entities = extract(payload.get("text"), source=payload.get("source"))
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "entities": entities, "count": len(entities)}
+
+    @app.post("/api/v1/entities/resolve", tags=["entities"])
+    async def resolve_entity_candidates(payload: dict[str, Any]):
+        candidates = payload.get("entities")
+        if not isinstance(candidates, list) or not candidates or len(candidates) > 500:
+            raise HTTPException(status_code=400, detail="entities must be a non-empty array of at most 500 candidates")
+        resolved = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise HTTPException(status_code=400, detail="each entity candidate must be an object")
+            kind, value = candidate.get("type"), candidate.get("normalized", candidate.get("text"))
+            if not isinstance(kind, str) or not kind or len(kind) > 128 or not isinstance(value, str) or not value or len(value) > 2048:
+                raise HTTPException(status_code=400, detail="each candidate requires a type and non-empty text or normalized value")
+            normalized = normalize_entity(kind, value)
+            matches = await active_graph_store.query_nodes("entity", {"entity_type": kind, "normalized": normalized})
+            if len(matches) > 1:
+                resolved.append({"status": "ambiguous", "candidate": candidate, "matches": matches})
+                continue
+            if matches:
+                node, status = matches[0], "matched"
+            else:
+                identity = hashlib.sha256(f"{kind}:{normalized}".encode("utf-8")).hexdigest()
+                properties = {
+                    "entity_type": kind,
+                    "normalized": normalized,
+                    "canonical_name": str(candidate.get("text", value))[:2048],
+                    "confidence": candidate.get("confidence", 1.0),
+                    "provenance": candidate.get("provenance", {}),
+                }
+                try:
+                    node = await active_graph_store.add_node("entity", properties, node_id="entity_" + identity)
+                except ValueError as exc:
+                    raise HTTPException(status_code=409, detail="canonical entity identity conflicts with existing graph data") from exc
+                status = "created"
+            resolved.append({"status": status, "entity": node, "candidate_id": candidate.get("candidate_id")})
+        return {"ok": True, "results": resolved, "count": len(resolved)}
+
+    @app.post("/api/v1/entities/link", tags=["entities"])
+    async def link_entities(payload: dict[str, Any]):
+        source_id, target_id = payload.get("source_id"), payload.get("target_id")
+        relationship = payload.get("relationship")
+        properties = payload.get("properties", {})
+        if not all(isinstance(value, str) and value for value in (source_id, target_id, relationship)):
+            raise HTTPException(status_code=400, detail="source_id, target_id and relationship are required")
+        if len(relationship) > 128 or not re.fullmatch(r"[a-z][a-z0-9_.-]*", relationship):
+            raise HTTPException(status_code=400, detail="relationship must be a lowercase identifier")
+        if not isinstance(properties, dict) or len(properties) > 64:
+            raise HTTPException(status_code=400, detail="properties must be an object with at most 64 fields")
+        source_node = await active_graph_store.get_node(source_id)
+        target_node = await active_graph_store.get_node(target_id)
+        if source_node is None or target_node is None:
+            raise HTTPException(status_code=404, detail="one or both entity identities were not found")
+        if source_node.get("type") != "entity" or target_node.get("type") != "entity":
+            raise HTTPException(status_code=400, detail="entity links require two canonical entity nodes")
+        try:
+            edge = await active_graph_store.add_edge(source_id, target_id, relationship, properties)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "edge": edge}
 
     @app.get("/api/v1/reranking/health", tags=["reranking"])
     async def reranking_health():
@@ -1375,7 +1456,8 @@ def create_app(
         try:
             result = await search.search_with_status(request.query, request.limit, rerank=request.rerank)
             intent = classify(request.query)
-            result["intent"] = {"label": intent["label"], "confidence": intent["confidence"]}
+            result["intent"] = intent
+            result["entities"] = extract(request.query, source="search.query")
             related = []
             try:
                 exact_paths = {
