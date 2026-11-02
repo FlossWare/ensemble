@@ -6,9 +6,9 @@ This plan converts the source inventory in [POC capability parity](poc-parity.md
 
 - [x] Compare Control Center requests with the live FastAPI route signatures for Chunking, Tokenization, Extraction, Intent, Graph, and Knowledge.
 - [x] Correct the Pipeline Inspector's invalid `default` profile fallback. The actual defaults are `window-v1` and `lexical-v1`.
-- [ ] Run the complete Ensemble test suite and record the exact commit and result.
+- [ ] Run the complete Ensemble test suite and record the exact commit and result. Existing PR #3 records a passing earlier CI run, but it does not cover the current parity branch commits.
 - [ ] Run static checks and inspect the GitHub Actions result for the branch.
-- [ ] Verify all new Control Center panels against a running local Ensemble instance. A successful GitHub file update is not a browser test.
+- [ ] Verify all new Control Center panels against a running local Ensemble instance. A successful GitHub file update is not a browser test.\n- [x] Add a regression test proving a transcript retry with a changed timestamp does not duplicate the event or vector document.
 
 ## Review slice 1: Memory parity
 
@@ -25,7 +25,7 @@ Required behavior to prove or explicitly disposition:
 - Source reconciliation: define an explicit REST contract for caller-authorized roots and file metadata. Never let a remote caller supply an arbitrary path that Ensemble opens without an allowlisted scope and symlink-safe validation.
 - Readiness must represent usable persistence/index state, not merely process liveness.
 
-The current Ensemble implementation already has SQLite-backed records/events, append-once semantics, context recall, and REST endpoints. Its deterministic term-vector semantic search and caller-supplied-content import are documented deviations, not parity. Do not replace those with claims of semantic or filesystem parity until regression tests prove it.
+The current Ensemble implementation already has SQLite-backed records/events, append-once semantics, context recall, exact-identifier-aware deterministic term-vector search, and REST endpoints. Its deterministic term-vector search is not neural semantic search. Caller-supplied-content import is a deliberate trust-boundary adaptation, not direct filesystem parity. Path validation now rejects traversal and symlink aliases outside the declared scope; regression tests cover both. Do not replace these distinctions with claims of full filesystem or neural semantic parity.
 
 **Exit criteria:** source-to-test traceability, explicit accepted deviations, and tests for idempotency/conflict/concurrency/restart, execution-context ranking, exact-identifier search, and secure source reconciliation.
 
@@ -41,7 +41,7 @@ Required behavior to prove:
 - Knowledge and transcript candidates retain source-specific provenance through fusion and reranking.
 - RRF ordering, score contributions, duplicate suppression, and stable tie-breaking.
 - Transcript parsing for text, thinking, tool use, tool results, touches, timestamps, subagents, clipping, malformed lines, and partial final lines.
-- Incremental offset resume, prompt/event deduplication, ingestion checkpoints, and no false acknowledgement of unindexed data.
+- Incremental offset resume, prompt/event deduplication, ingestion checkpoints, and no false acknowledgement of unindexed data. Ensemble currently accepts already-parsed session/message payloads; the POC raw JSONL parser, byte-offset checkpoint, complete-line handling, and filesystem root/symlink validation are not yet ported.
 - Transcript root containment and symlink rejection.
 - Bounded cache behavior; never cache partial or failed retrieval results.
 - Related-session lookup from exact file/path identifiers.
