@@ -101,7 +101,7 @@ def _compress_context_text(value: str, query: str, max_chars: int) -> tuple[str,
 def _assemble_context(candidates: list[dict[str, Any]], query: str, max_tokens: int) -> dict[str, Any]:
     if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1 <= max_tokens <= 32_000:
         raise ValueError("max_tokens must be an integer between 1 and 32000")
-    included, blocks, seen = [], [], set()
+    included, blocks, seen = [], [], {}
     remaining, omitted, truncated, compressed = max_tokens, 0, 0, 0
     for candidate in candidates:
         value = candidate.get("content")
@@ -110,9 +110,11 @@ def _assemble_context(candidates: list[dict[str, Any]], query: str, max_tokens: 
             continue
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
         if digest in seen:
+            previous = included[seen[digest]]
+            alternate = {key: val for key, val in candidate.items() if key not in {"content", "score"}}
+            previous.setdefault("also_from", []).append(alternate)
             omitted += 1
             continue
-        seen.add(digest)
         source = candidate.get("source", "unknown")
         title = candidate.get("title") or candidate.get("section") or source
         header = f"[{source}] {title}"
@@ -140,6 +142,7 @@ def _assemble_context(candidates: list[dict[str, Any]], query: str, max_tokens: 
             "truncated": was_truncated, "compressed": was_compressed,
             "content_sha256": digest,
         })
+        seen[digest] = len(included)
         included.append(item)
         blocks.append(block)
         remaining -= needed
@@ -1418,36 +1421,44 @@ def create_app(
         limit = payload.get("limit", 10)
         max_tokens = payload.get("max_tokens", 4000)
         include_memory = payload.get("include_memory", True)
+        include_search = payload.get("include_search", True)
         memory_name = payload.get("memory_name")
         execution_context = payload.get("execution_context")
-        if not isinstance(include_memory, bool):
-            raise HTTPException(status_code=400, detail="include_memory must be a boolean")
+        if not isinstance(include_memory, bool) or not isinstance(include_search, bool):
+            raise HTTPException(status_code=400, detail="include_memory and include_search must be booleans")
         if memory_name is not None and (
             not isinstance(memory_name, str) or not isinstance(execution_context, dict)
         ):
             raise HTTPException(status_code=400, detail="memory_name requires an execution_context object")
+        if execution_context is not None and memory_name is None:
+            raise HTTPException(status_code=400, detail="execution_context requires memory_name")
+        if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1 <= max_tokens <= 32_000:
+            raise HTTPException(status_code=400, detail="max_tokens must be an integer between 1 and 32000")
         if not isinstance(query, str) or not query.strip() or len(query) > 20_000:
             raise HTTPException(status_code=400, detail="query must be a non-empty string of at most 20000 characters")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise HTTPException(status_code=400, detail="limit must be an integer between 1 and 100")
+
         candidates = []
         degraded = []
-        try:
-            found = await search.search_with_status(query, limit=limit, rerank=False)
-            entities = extract(query, source="context.query")
-            hits, graph = await expand_graph_results(query, entities, found["results"], limit)
-            degraded.extend(found.get("degraded", []))
-            if graph.get("degraded"):
-                degraded.append("graph")
-            for hit in hits:
-                candidates.append({
-                    "source": "ensemble-retrieval", "title": hit.title,
-                    "content": hit.text, "score": hit.fusion_score,
-                    "source_id": hit.source_id, "revision": hit.revision,
-                    "chunk_id": str(hit.chunk_id), "graph_score": hit.graph_score,
-                })
-        except Exception:
-            degraded.append("search")
+        if include_search:
+            try:
+                found = await search.search_with_status(query, limit=limit, rerank=False)
+                entities = extract(query, source="context.query")
+                hits, graph = await expand_graph_results(query, entities, found["results"], limit)
+                degraded.extend(found.get("degraded", []))
+                if graph.get("degraded"):
+                    degraded.append("graph")
+                for hit in hits:
+                    candidates.append({
+                        "source": "ensemble-retrieval", "title": hit.title,
+                        "content": hit.text, "score": hit.fusion_score,
+                        "source_id": hit.source_id, "revision": hit.revision,
+                        "chunk_id": str(hit.chunk_id), "graph_score": hit.graph_score,
+                    })
+            except Exception:
+                degraded.append("search")
+
         if include_memory:
             try:
                 if memory_name is not None:
@@ -1477,8 +1488,11 @@ def create_app(
                         "content": content, "score": float(item.get("score", 0.0)),
                         "file": file_name, "section": section,
                     })
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             except Exception:
                 degraded.append("memory")
+
         candidates.sort(key=lambda item: -float(item.get("score", 0.0)))
         try:
             assembled = _assemble_context(candidates, query, max_tokens)
