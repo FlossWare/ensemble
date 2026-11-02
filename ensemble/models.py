@@ -23,6 +23,7 @@ class DocumentOut(BaseModel):
     embedded: bool
     created_at: datetime
     chunk_profile: str = "window-v1"
+    vector_indexed: bool = False
 
 
 class SearchIn(BaseModel):
