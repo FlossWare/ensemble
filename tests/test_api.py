@@ -707,3 +707,25 @@ def test_hybrid_session_ingestion_populates_vector_collection_and_searches_it():
         assert result.status_code == 200
         assert result.json()["retrieval"] == "hybrid"
         assert result.json()["results"][0]["source_id"].startswith("transcript:vector-session:")
+
+
+def test_lexical_documents_accepts_poc_session_message_contract():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        response = client.post("/api/v1/lexical/documents", json={
+            "session": {
+                "session_id": "lexical-session",
+                "project": "ensemble",
+                "file": "/work/ensemble/lexical-session.jsonl",
+            },
+            "messages": [{
+                "uuid": "lexical-message", "role": "assistant", "kind": "text",
+                "text": "Porter stemming keeps lexical session ingestion searchable.",
+            }],
+        })
+        assert response.status_code == 200
+        assert response.json()["inserted"] == 1
+        results = client.post("/api/v1/lexical/search", json={
+            "query": "searchable",
+        }).json()["results"]
+        assert results[0]["source_id"].startswith("transcript:lexical-session:")
