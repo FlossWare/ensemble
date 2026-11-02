@@ -591,3 +591,21 @@ document.getElementById("entity-link-form").addEventListener("submit",async even
   output.textContent=JSON.stringify(result,null,2);
  }catch(error){output.textContent="Entity linking failed: "+error.message;}
 });
+
+document.getElementById("context-form").addEventListener("submit",async event=>{
+ event.preventDefault();
+ const button=event.submitter,output=document.getElementById("context-results");
+ const budget=Number(document.getElementById("context-budget").value);
+ button.disabled=true;
+ try{
+  const result=await controlJson("/api/v1/context/assemble","POST",{
+   query:document.getElementById("context-query").value,
+   max_tokens:budget,
+   limit:10,
+   include_memory:document.getElementById("context-memory").checked,
+   include_search:document.getElementById("context-search").checked
+  });
+  output.textContent=JSON.stringify(result,null,2);
+ }catch(error){output.textContent="Context assembly failed: "+error.message;}
+ finally{button.disabled=false;}
+});
