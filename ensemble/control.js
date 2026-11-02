@@ -19,7 +19,7 @@ form.addEventListener("submit",async event=>{
  event.preventDefault();ready=false;ingest.disabled=true;status.textContent="Fetching preview…";
  try{
   const requestedUri=uri.value.trim();
-  const result=await request("/api/v1/scrape/preview",{uri:requestedUri});
+  const result=await request("/api/v1/ingest/urls/preview",{uri:requestedUri});
   if(uri.value.trim()!==requestedUri){status.textContent="URI changed. Fetch a fresh preview.";return;}
   title.textContent=result.title;
   metadata.textContent=result.final_uri+" | "+result.characters+" characters | "+result.media_type;
@@ -34,7 +34,7 @@ ingest.addEventListener("click",async()=>{
  if(!ready)return;
  ingest.disabled=true;status.textContent="Ingesting page…";
  try{
-  const result=await request("/api/v1/scrape/ingest",{uri:uri.value.trim()});
+  const result=await request("/api/v1/ingest/urls",{uri:uri.value.trim()});
   status.textContent="Ingested: "+JSON.stringify(result.document);
  }catch(error){status.textContent="Ingestion failed: "+error.message;ingest.disabled=false;}
 });
