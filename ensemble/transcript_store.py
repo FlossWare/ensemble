@@ -124,8 +124,6 @@ class SqliteTranscriptCheckpointStore:
                 checkpoints.c.revision_id == revision_id,
             ))).mappings().first()
             if row is None:
-                if start_offset != 0:
-                    raise _checkpoint_mismatch(0)
                 await connection.execute(checkpoints.insert().values(
                     source_id=source_id, revision_id=revision_id, project=project, file=file,
                     byte_offset=end_offset, last_start_offset=start_offset,
@@ -191,10 +189,7 @@ class InMemoryTranscriptCheckpointStore:
         )
         key = (source_id, revision_id)
         row = self._items.get(key)
-        if row is None:
-            if start_offset != 0:
-                raise _checkpoint_mismatch(0)
-        else:
+        if row is not None:
             if _replay(row, start_offset, payload_sha256):
                 return {
                     "replayed": True, "checkpoint": dict(row),
