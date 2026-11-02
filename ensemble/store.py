@@ -261,7 +261,9 @@ class SqlDocumentStore:
             document.id = UUID(row["document_id"])
             document.created_at = row["created_at"]
             chunk = Chunk(
-                document.id, row["ordinal"], row["chunk_content"], row["embedding"]
+                document.id, row["ordinal"], row["chunk_content"], row["embedding"],
+                profile=row["profile"], start=row["start_offset"],
+                end=row["end_offset"], header=row["header"],
             )
             chunk.id = UUID(row["chunk_id"])
             result.append(IndexedChunk(document, chunk))
