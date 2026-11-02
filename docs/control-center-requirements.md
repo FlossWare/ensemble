@@ -239,3 +239,8 @@ The Control Center is acceptable when:
 - The Pipeline Inspector can show the actual stages executed for both ingestion and retrieval, distinguish skipped/unavailable stages, and correlate intermediate outputs to final results.
 - No UI presents synthetic, placeholder, or inferred values as live operational measurements.
 - Existing POC services and data remain untouched.
+
+
+## Intent and entity workbench
+
+The Control Center exposes a non-persistent entity extraction preview, an explicit action to resolve candidates into canonical Graph identities, and an explicit action to create a typed relationship between two canonical entity IDs. Resolution and linking are mutating operations and must never be triggered by the diagnostic pipeline automatically. The pipeline inspector may call intent classification and entity extraction only.
