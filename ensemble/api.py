@@ -1422,6 +1422,12 @@ def create_app(
                     content=message["text"],
                     chunk_profile="message-v1",
                     media_type="text/plain",
+                    metadata={
+                        "session_id": session_id, "project": project,
+                        "role": message["role"], "kind": kind,
+                        "is_subagent": bool(session.get("is_subagent", False)),
+                        "session_file": file_path,
+                    },
                 )
                 ingested = await documents.ingest(
                     document, vector_collection="transcript_text"
