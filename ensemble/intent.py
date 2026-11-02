@@ -22,10 +22,10 @@ RULES = {
 }
 COMPILED = {label: [re.compile(p, re.IGNORECASE) for p in patterns] for label, patterns in RULES.items()}
 CAPABILITIES = {
-    "history": ["memory"], "debug": ["search", "knowledge"], "howto": ["knowledge"],
-    "lookup": ["search", "knowledge"], "change": ["planning"], "create": ["generation"],
+    "history": ["memory"], "debug": ["search", "knowledge"], "howto": ["search", "knowledge"],
+    "lookup": ["search", "knowledge"], "change": ["search", "knowledge"], "create": [],
     "compare": ["search", "ranking"], "summarize": ["memory", "knowledge"],
-    "explain": ["knowledge"], "plan": ["planning", "memory"], "analyze": ["search", "ranking"],
+    "explain": ["knowledge"], "plan": ["memory", "knowledge"], "analyze": ["search", "ranking"],
 }
 CONSTRAINT_PATTERNS = {
     "limit": re.compile(r"\b(?:top|first|last|limit)\s+(\d{1,4})\b", re.IGNORECASE),
