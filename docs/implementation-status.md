@@ -38,14 +38,14 @@ Implemented:
 - Deterministic reciprocal-rank fusion with per-list contributions and tie-breaking.
 - Optional local cross-encoder reranking provider with pinned model identity, bounded inputs, serialized scoring, fail-closed readiness, and opt-in integration into Hybrid retrieval with stable score alignment and graceful degraded fallback.
 - SQLite FTS5 lexical indexing uses the shared lexical-v1 tokenizer, Porter stemming, compound identifier analysis, OR query matching, BM25 ranking, and transactional replacement with document revisions.
-- Hybrid retrieval exposes independent Lexical and Hybrid REST groups, combines FTS5 BM25 with the Vector capability collection for ingested transcript messages, preserves lexical results with explicit degraded dependency reporting when embeddings or Vector writes fail, optionally applies cross-encoder reranking, returns the richer intent classification and stateless entity candidates, and finds related sessions through exact file-path matches in Graph.
+- Hybrid retrieval exposes independent Lexical and Hybrid REST groups, combines FTS5 BM25 and embedding candidates across the shared document/chunk index (including Knowledge and transcript ingestion), preserves lexical results with explicit degraded dependency reporting when embeddings or Vector writes fail, expands candidates through exact query-entity to source relationships in Graph, and applies optional cross-encoder reranking after candidate fusion. It returns intent, entity, Graph-expansion, and related-session diagnostics.
 - Hybrid prompt capture is stored in the SQLite Memory event ledger with deterministic event IDs and append-once idempotency. Bounded transcript-session ingestion stores message documents, FTS5 lexical entries, transcript_text Vector collection records when embeddings are available, append-once Memory event-ledger entries and Graph session/file relationships; repeated message events are idempotent.
 - Vector similarity over stored chunk embeddings when embeddings are enabled.
 - Document and chunk provenance in search responses.
 - Tests for API behavior, migration setup, restart durability, and revision replacement.
-- Python 3.12 GitHub Actions workflow validates installer shell syntax, Control Center JavaScript syntax, and the full Python test suite. The latest completed run passed 145 tests with 1 skipped.
+- Python 3.12 GitHub Actions workflow validates installer shell syntax, Control Center JavaScript syntax, and the full Python test suite. The latest review-branch run passed 147 tests with 1 skipped.
 
-Implemented on the parity branch (GitHub Actions has verified the latest completed test run):
+Implemented on the review branch (GitHub Actions has verified the latest completed test run):
 - POC-compatible lexical-v1 tokenization capability and REST endpoints.
 - POC-compatible identifier extraction capability and REST endpoints.
 - POC-compatible rule-based intent classification capability and REST endpoints.
@@ -59,21 +59,19 @@ Implemented on the parity branch (GitHub Actions has verified the latest complet
 - POC-compatible reranking REST endpoint and optional local cross-encoder provider (local model installation/runtime verification pending).
 - Browser Control Center served by the same REST application at /control, with live capability health/readiness checks, hybrid retrieval and optional reranking, structured transcript-session ingestion, Index/Vector and Memory/Knowledge inspection, source lookup and confirmed tombstones, Entity extraction/resolution/linking, multi-intent classification, plus URI preview and explicit ingest.
 - Bounded public-URI fetching, HTML/plain-text extraction, local/private destination rejection, redirect limits, response-size limits, and preview-only operation.
-- Scraped-page ingestion through Index revision decisions, document/chunk persistence, Knowledge provenance, and SQLite vector collections when embeddings are available.
+- Shared source lifecycle across supported document, transcript, PDF, URL, lexical, and Knowledge ingestion: Index revision decisions gate writes; accepted content enters the durable document/chunk index; Knowledge publication also writes provenance records and the `knowledge_chunks` vector collection when embeddings are available; exact extracted entities are associated with source revisions in Graph.
 
 Not yet implemented:
 - The remaining POC capability surface listed in [POC capability parity](poc-parity.md).
-- Integration of the new versioned chunk profiles into document ingestion and persisted chunk provenance.
 - Additional tokenization/analyzer profiles beyond lexical-v1.
 - Dedicated approximate-nearest-neighbor vector index; exact dot-product search currently scans SQLite collection records.
-- Integration of reranking into the hybrid retrieval pipeline.
-- Full POC hybrid-search orchestration: independent knowledge/transcript candidate fusion and external ranking-service fallback remain incomplete. Current Hybrid endpoint has lexical/vector retrieval, embedding-degradation fallback, optional cross-encoder reranking, intent classification, exact-path related-session lookup, knowledge-only search, idempotent prompt capture and bounded session ingestion.
-- Generalize the Index-to-Knowledge publication pipeline to all document ingestion paths; the URI scraper currently uses it.
+- Remaining retrieval work: external ranking-service fallback, calibrated channel weighting, bounded request deadlines/cancellation, and more complete retrieval tracing. Knowledge records now share the durable document/chunk index and participate in the same lexical/vector candidate fusion; Graph-linked exact entities can expand the candidate set. ANN indexing remains intentionally absent.
+- Durable ingestion jobs and restart-safe transcript checkpoints remain incomplete. Current transcript JSONL parsing accepts caller-supplied slices and returns byte offsets, while structured session ingestion is idempotent but synchronous.
 - Broader learned/model-backed entity extraction and fuzzy entity resolution; current extraction and resolution are deterministic and rule-based.
 - Model-backed intent providers and calibrated confidence; current intent classification is deterministic and heuristic.
 - Remaining POC Memory parity: direct scoped filesystem scanning and symlink-safe path traversal, full session-event compatibility and deeper matching against the POC's 48 memory tests. Current semantic search is deterministic local term-vector cosine, not an embedding-backed ANN index; the source-import endpoint accepts content and verified path metadata rather than opening arbitrary paths. Initial Learning capability is implemented on the same REST listener: task outcome validation, payload-digest idempotency, SQLite checkpoint/status, Memory event publication, idempotent Thompson outcome updates, Thompson state snapshots, report/recent-outcome APIs, portable artifact persistence and explicit reset. Migrations `0010_learning` and `0011_thompson_events` support the workflow. Remaining Learning parity includes a deeper POC test/edge-case audit and any future client/circuit-breaker behavior outside the co-located service boundary. Scrape-ledger remains unimplemented. GA Tuning has an initial optimizer/API/persistence slice, but full POC evaluator parity, scheduled execution/recovery, portable learning artifacts, and Control Center configuration/progress/candidate comparison are not complete. The GA's Thompson evaluator is not the standalone Thompson service.
 - Remaining Control Center work: model/provider configuration, general background-job history, operational metrics, diagnostics, and richer maintenance controls. The current UI already includes capability, retrieval, Index/Vector, Memory/Knowledge, Graph, Entity, Chunking, Tokenization, pipeline diagnostics, transcript ingestion, URI ingestion, GA, Thompson and Learning workbenches.
-- Multi-page bounded crawling, robots.txt policy, DNS-to-connection pinning, durable ingestion jobs, retries, and scheduled source refresh.
-- Authentication, partition enforcement, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging.
+- Multi-page bounded crawling, robots.txt policy, DNS-to-connection pinning, retry/recovery orchestration, and scheduled source refresh.
+- Authentication, partition enforcement, durable ingestion/background jobs, production observability, rate limits, backup/restore automation, and deployment/upgrade hardening.
 
 SQLite is the only persistence implementation in this repository. FTS5 provides the lexical index. Embeddings are stored as JSON and scored by exact scan in the application; this is not a scalable approximate-nearest-neighbor vector index.
