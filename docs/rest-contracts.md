@@ -61,12 +61,13 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/ingest/files | Upload a bounded supported file (currently PDF), extract text and ingest it through the shared document pipeline |
 | POST | /api/v1/ingest/urls/preview, /api/v1/ingest/urls | Preview or ingest a public HTTP(S) HTML/plain-text page |
 | POST | /api/v1/ingest/transcripts | Parse caller-supplied JSONL transcript slices and return a UTF-8 byte checkpoint |
+| POST | /api/v1/ingest/sessions | Ingest structured transcript sessions into memory, graph, and retrieval |
 | GET | /api/v1/chunking/health, /ready, /profiles | Chunking capability status and versioned profiles |
 | POST | /api/v1/chunking/chunk | Generate deterministic chunks with offsets and provenance |
 | POST | /api/v1/search | Default retrieval using lexical and configured vector channels |
 | GET | /api/v1/search/lexical/health, /api/v1/search/lexical/ready | Lexical retrieval capability status |
 | POST | /api/v1/search/lexical | Explicit lexical-only retrieval strategy |
-| POST | /api/v1/lexical/documents | Existing lexical ingestion convenience; placement remains under audit |
+| POST | /api/v1/lexical/documents | Lexical document/session ingestion convenience; placement remains under audit |
 | GET | /api/v1/search/hybrid/health, /api/v1/search/hybrid/ready | Hybrid retrieval capability status |
 | POST | /api/v1/search/hybrid | Unified hybrid retrieval |
 | POST | /api/v1/search/hybrid/knowledge | Knowledge-scoped hybrid retrieval |
