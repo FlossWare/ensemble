@@ -158,14 +158,41 @@ def test_stateless_capabilities_are_exposed_through_rest():
             json={"text": "issue CPSEARCH-10177"},
         )
         assert extracted.status_code == 200
-        assert extracted.json()["entities"][0]["text"] == "CPSEARCH-10177"
+        candidates = extracted.json()["entities"]
+        assert candidates[0]["text"] == "CPSEARCH-10177"
+        assert candidates[0]["normalized"] == "cpsearch-10177"
+        assert candidates[0]["provenance"]["source"] == "control-center.entity-workbench"
+
+        resolved = client.post("/api/v1/entities/resolve", json={"entities": candidates})
+        assert resolved.status_code == 200
+        canonical = resolved.json()["results"][0]["entity"]
+        assert canonical["type"] == "entity"
+        assert resolved.json()["results"][0]["status"] == "created"
+
+        repeated = client.post("/api/v1/entities/resolve", json={"entities": candidates})
+        assert repeated.json()["results"][0]["status"] == "matched"
+
+        second_candidate = client.post(
+            "/api/v1/entities/extract", json={"text": "OPS-7"}
+        ).json()["entities"][0]
+        second = client.post(
+            "/api/v1/entities/resolve", json={"entities": [second_candidate]}
+        ).json()["results"][0]["entity"]
+        linked = client.post("/api/v1/entities/link", json={
+            "source_id": canonical["id"], "target_id": second["id"],
+            "relationship": "references",
+        })
+        assert linked.status_code == 200
+        assert linked.json()["edge"]["type"] == "references"
 
         intent = client.post(
             "/api/v1/intent/classify",
-            json={"text": "why does search fail"},
+            json={"text": "why does search fail and compare it with the previous approach"},
         )
         assert intent.status_code == 200
         assert intent.json()["label"] == "debug"
+        assert {item["label"] for item in intent.json()["intents"]} >= {"debug", "compare"}
+        assert "search" in intent.json()["required_capabilities"]
 
         ranked = client.post(
             "/api/v1/ranking/rank",
