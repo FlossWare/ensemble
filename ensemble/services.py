@@ -71,11 +71,9 @@ class SearchService:
                 "retrieval": "lexical", "reranked": False,
             }
 
-        query_terms = _tokens(query)
+        lexical_matches = await self.store.lexical_search(query, limit=200)
         lexical_scores = {
-            item.chunk.id: len(query_terms & _tokens(item.chunk.content)) / len(query_terms)
-            for item in indexed
-            if query_terms and query_terms & _tokens(item.chunk.content)
+            item.chunk.id: score for item, score in lexical_matches
         }
         vector_scores: dict = {}
         degraded: list[str] = []
