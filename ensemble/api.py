@@ -6,6 +6,7 @@ import re
 import secrets
 import random
 import os
+import math
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
@@ -1613,14 +1614,52 @@ def create_app(
     @app.post("/api/v1/search/hybrid", tags=["search"])
     async def hybrid_search(request: SearchIn):
         try:
-            result = await search.search_with_status(request.query, request.limit, rerank=request.rerank)
+            result = await search.search_with_status(request.query, request.limit, rerank=False)
             intent = classify(request.query)
+            entities = extract(request.query, source="search.query")
             result["intent"] = intent
-            result["entities"] = extract(request.query, source="search.query")
+            result["entities"] = entities
+            result["results"], graph_expansion = await expand_graph_results(
+                request.query, entities, result["results"], request.limit
+            )
+            result["graph_expansion"] = graph_expansion
+            if graph_expansion.get("degraded"):
+                result["degraded"].append("graph")
+            elif graph_expansion.get("candidate_sources"):
+                result["retrieval"] = "hybrid"
+
+            rerank_enabled = (
+                request.rerank if request.rerank is not None
+                else os.getenv("ENSEMBLE_RERANK_ENABLED", "0").strip() == "1"
+            )
+            if rerank_enabled and result["results"]:
+                if not active_reranker.available:
+                    result["degraded"].append("reranking")
+                else:
+                    candidates = result["results"][:min(30, len(result["results"]))]
+                    try:
+                        scores = await asyncio.to_thread(
+                            active_reranker.score, request.query,
+                            [candidate.text[:4000] for candidate in candidates],
+                        )
+                        if len(scores) != len(candidates) or any(
+                            not math.isfinite(float(score)) for score in scores
+                        ):
+                            raise RuntimeError("reranker returned invalid or misaligned scores")
+                        reranked = [
+                            hit.model_copy(update={"rerank_score": float(score)})
+                            for hit, score in zip(candidates, scores)
+                        ]
+                        result["results"] = sorted(
+                            reranked, key=lambda hit: hit.rerank_score, reverse=True
+                        ) + result["results"][len(candidates):]
+                        result["reranked"] = True
+                    except Exception:
+                        result["degraded"].append("reranking")
             related = []
             try:
                 exact_paths = {
-                    item["text"] for item in extract(request.query)
+                    item["text"] for item in entities
                     if item.get("exact") and item.get("type") in {"path", "file"}
                 }
                 if exact_paths:
