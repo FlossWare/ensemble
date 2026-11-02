@@ -1605,36 +1605,6 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=503, detail="session ingestion dependency unavailable") from exc
 
-    @app.post("/api/v1/hybrid/prompts", tags=["hybrid"])
-    async def hybrid_capture_prompt(payload: dict[str, Any], request: Request):
-        content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > 262_144:
-            raise HTTPException(status_code=413, detail="request body exceeds 256 KiB")
-        session_id, prompt = payload.get("session_id"), payload.get("prompt")
-        timestamp, cwd = payload.get("timestamp"), payload.get("cwd")
-        if not isinstance(session_id, str) or not session_id or len(session_id) > 256:
-            raise HTTPException(status_code=400, detail="session_id must be a non-empty string of at most 256 characters")
-        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 65_536:
-            raise HTTPException(status_code=400, detail="prompt must be a non-empty string of at most 65536 characters")
-        if not isinstance(timestamp, str) or not timestamp or len(timestamp) > 128:
-            raise HTTPException(status_code=400, detail="timestamp must be a non-empty string of at most 128 characters")
-        if not isinstance(cwd, str) or len(cwd) > 4096:
-            raise HTTPException(status_code=400, detail="cwd must be a string of at most 4096 characters")
-        event_id = hashlib.sha256(f"{session_id}|{timestamp}|{prompt}".encode("utf-8")).hexdigest()
-        try:
-            stored = await active_memory_store.append(
-                "prompt-ledger",
-                {"session_id": session_id, "timestamp": timestamp, "cwd": cwd, "prompt": prompt},
-                event_id=event_id,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {
-            "ok": True, "event_id": event_id, "status": stored["status"],
-            "vector_indexed": False, "lexical_indexed": False,
-            "index_error": None,
-        }
-
     @app.post("/api/v1/ingest/documents", response_model=DocumentOut, status_code=201, tags=["ingestion"])
     async def ingest_document(request: DocumentIn):
         try:
