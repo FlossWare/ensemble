@@ -1,3 +1,4 @@
+import json
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -612,6 +613,41 @@ def test_hybrid_search_enriches_intent_and_related_graph_sessions():
         assert body["intent"]["label"] == "debug"
         assert body["related_sessions"][0]["session_id"] == "session-42"
         assert body["related_sessions"][0]["project"] == "ensemble"
+
+
+def test_hybrid_raw_jsonl_transcript_ingestion_returns_byte_checkpoint_and_is_idempotent():
+    app = create_app(store=InMemoryDocumentStore())
+    complete = json.dumps({
+        "sessionId": "raw-jsonl-session",
+        "timestamp": "2026-11-02T10:00:00Z",
+        "uuid": "raw-message-1",
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": "Please ingest this résumé with Unicode safely."}],
+        },
+    }, ensure_ascii=False) + "\n"
+    partial = '{"uuid":"unfinished","message":'
+    payload = {
+        "session_id": "fallback-session",
+        "project": "ensemble",
+        "file": "caller-supplied/session.jsonl",
+        "offset": 4096,
+        "content": complete + partial,
+    }
+    with TestClient(app) as client:
+        first = client.post("/api/v1/hybrid/transcripts/ingest", json=payload)
+        assert first.status_code == 200
+        body = first.json()
+        assert body["session_id"] == "raw-jsonl-session"
+        assert body["inserted"] == 1
+        assert body["bytes_consumed"] == len(complete.encode("utf-8"))
+        assert body["next_offset"] == 4096 + len(complete.encode("utf-8"))
+        assert body["incomplete_tail"] is True
+
+        retry = client.post("/api/v1/hybrid/transcripts/ingest", json=payload)
+        assert retry.status_code == 200
+        assert retry.json()["inserted"] == 0
+        assert retry.json()["already_present"] == 1
 
 
 def test_hybrid_session_ingestion_is_idempotent_and_populates_retrieval_graph():
