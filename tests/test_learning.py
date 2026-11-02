@@ -30,11 +30,9 @@ def test_learning_outcome_is_idempotent_and_updates_memory_and_thompson_once():
         assert outcome["status"] == "completed"
         assert outcome["memory_recorded"] is True
         assert outcome["thompson_recorded"] is True
-        memory_entries = http.post(
-            "/api/v1/memory/entries", json={"name": "learning-outcomes"}
-        ).json()["entries"]
+        memory_entries = http.get("/api/v1/memory/memories/learning-outcomes/entries").json()["entries"]
         assert len(memory_entries) == 1
-        snapshots = http.post("/api/v1/memory/entries", json={"name": "thompson-state"}).json()["entries"]
+        snapshots = http.get("/api/v1/memory/memories/thompson-state/entries").json()["entries"]
         assert len(snapshots) == 1
         thompson = http.get("/api/v1/thompson/state").json()["state"]["models"]["sonnet"]
         assert thompson["calls"] == 1
@@ -68,7 +66,7 @@ def test_learning_portable_artifacts_are_idempotent_and_conflicts_are_rejected()
         assert duplicate.json()["artifact_status"] == "duplicate"
         assert conflict.status_code == 409
         assert len(http.get("/api/v1/learning/artifacts").json()["artifacts"]) == 1
-        assert len(http.post("/api/v1/memory/entries", json={"name": "learning-artifacts"}).json()["entries"]) == 1
+        assert len(http.get("/api/v1/memory/memories/learning-artifacts/entries").json()["entries"]) == 1
 
 
 def test_learning_reset_requires_confirmation_and_preserves_thompson_state():
