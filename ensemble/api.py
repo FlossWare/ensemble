@@ -1417,6 +1417,15 @@ def create_app(
         query = payload.get("query")
         limit = payload.get("limit", 10)
         max_tokens = payload.get("max_tokens", 4000)
+        include_memory = payload.get("include_memory", True)
+        memory_name = payload.get("memory_name")
+        execution_context = payload.get("execution_context")
+        if not isinstance(include_memory, bool):
+            raise HTTPException(status_code=400, detail="include_memory must be a boolean")
+        if memory_name is not None and (
+            not isinstance(memory_name, str) or not isinstance(execution_context, dict)
+        ):
+            raise HTTPException(status_code=400, detail="memory_name requires an execution_context object")
         if not isinstance(query, str) or not query.strip() or len(query) > 20_000:
             raise HTTPException(status_code=400, detail="query must be a non-empty string of at most 20000 characters")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
@@ -1439,8 +1448,22 @@ def create_app(
                 })
         except Exception:
             degraded.append("search")
-        if payload.get("include_memory", True):
+        if include_memory:
             try:
+                if memory_name is not None:
+                    recalled = await active_memory_store.retrieve(
+                        memory_name, execution_context, limit
+                    )
+                    priorities = {"parent": 100, "ancestor": 90, "same-request": 70, "related-lineage": 60}
+                    for item in recalled:
+                        candidates.append({
+                            "source": "memory-recall",
+                            "title": item.get("relation", "related execution"),
+                            "content": json.dumps(item.get("record", {}), ensure_ascii=False, sort_keys=True),
+                            "score": priorities.get(item.get("relation"), 0),
+                            "relation": item.get("relation"),
+                            "execution_context": item.get("execution_context"),
+                        })
                 for item in await active_memory_store.search_semantic(query, top_k=limit):
                     file_name, section = item.get("file"), item.get("section", "full")
                     content = item.get("content", "")
