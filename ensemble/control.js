@@ -539,7 +539,7 @@ document.getElementById("pipeline-run").addEventListener("click",async()=>{
  button.disabled=true;output.textContent="Running independent read-only capability probes…";
  const stages=[
   ["Tokenization",()=>controlJson("/api/v1/tokenization/tokenize","POST",{profile:document.getElementById("tokenization-profile").value||"lexical-v1",text:textValue})],
-  ["Entities",()=>(async()=>{const extracted=await controlJson("/api/v1/entities/extract","POST",{text:textValue,source:"control-center.diagnostic"});const resolved=extracted.entities.length?await controlJson("/api/v1/entities/resolve","POST",{entities:extracted.entities}):{ok:true,results:[]};return {extraction:extracted,resolution:resolved};})()],
+  ["Entities",()=>controlJson("/api/v1/entities/extract","POST",{text:textValue,source:"control-center.diagnostic"})],
   ["Intent",()=>controlJson("/api/v1/intent/classify","POST",{text:textValue})],
   ["Chunking",()=>controlJson("/api/v1/chunking/chunk","POST",{profile:document.getElementById("chunking-profile").value||"window-v1",source_id:"control-center-diagnostic",text:textValue,media_type:"text/plain"})]
  ];
