@@ -12,7 +12,7 @@ from .embeddings import EmbeddingProvider
 from .models import Chunk, Document, DocumentOut
 from .store import DocumentStore, IndexedChunk
 from .reranking import Reranker
-from .tokenization import TOKENIZER_ID, tokenize
+from .tokenization import TOKENIZER_ID, tokenize, split_by_tokens
 from .knowledge_store import KnowledgeStore
 
 
@@ -51,6 +51,12 @@ class GraphEdgeRequest(BaseModel):
     target_node_id: str = Field(min_length=36, max_length=36)
     relation: str = Field(min_length=1, max_length=128)
     properties: dict = Field(default_factory=dict)
+
+
+class TokenChunkRequest(BaseModel):
+    text: str = Field(min_length=1)
+    target_tokens: int = Field(default=256, ge=1, le=8192)
+    overlap_tokens: int = Field(default=32, ge=0)
 
 
 class TokenizationRequest(BaseModel):
@@ -142,6 +148,15 @@ def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider
             return await knowledge_store.traverse(http_request.state.partition_id, node_id, depth)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/capabilities/chunking/split-tokens", tags=["capabilities", "chunking", "tokenization"])
+    async def split_token_chunks(request: TokenChunkRequest):
+        if request.overlap_tokens >= request.target_tokens:
+            raise HTTPException(status_code=400, detail="overlap_tokens must be less than target_tokens")
+        return {
+            "tokenizer": TOKENIZER_ID,
+            "chunks": split_by_tokens(request.text, request.target_tokens, request.overlap_tokens),
+        }
 
     @router.post("/capabilities/tokenization/tokenize", tags=["capabilities", "tokenization"])
     async def tokenize_text(request: TokenizationRequest):

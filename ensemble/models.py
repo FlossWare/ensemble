@@ -39,6 +39,7 @@ class SearchHit(BaseModel):
     lexical_score: float
     vector_score: float
     fusion_score: float
+    rerank_score: float | None = None
 
 
 class Document:

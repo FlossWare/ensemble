@@ -16,7 +16,7 @@
 |---|---|---|---|
 | Document ingestion | Knowledge/index/revision APIs | `POST /api/v1/documents` | Implemented |
 | Tokenization | Tokenizer service | `POST /api/v1/capabilities/tokenization/tokenize` | Implemented deterministic Unicode tokenizer; not model-BPE compatible |
-| Chunking | `POST /chunk` | `POST /api/v1/capabilities/chunking/split` | Implemented character-window profile |
+| Chunking | `POST /chunk` | `POST /api/v1/capabilities/chunking/split` and `/split-tokens` | Implemented character and Unicode-token window profiles |
 | Embeddings | `POST /embeddings` | `POST /api/v1/capabilities/embeddings` | Implemented provider adapter |
 | Reranking | `POST /rerank` | `POST /api/v1/capabilities/reranking/rerank` | Implemented Cohere-compatible adapter; provider required |
 | Index persistence | Index/revision APIs | `POST /api/v1/capabilities/index/documents` | Implemented relational persistence |

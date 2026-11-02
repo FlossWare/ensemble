@@ -159,9 +159,19 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
             )
             candidates = {item.chunk.id: item for item in lexical}
             candidates.update({item.chunk.id: item for item in vector})
-            return search_indexed(
+            hits = search_indexed(
                 list(candidates.values()), search_request.query, search_request.limit, query_vector
             )
+            if reranker.available and hits:
+                ranked = await reranker.rerank(
+                    search_request.query, [hit.text for hit in hits], search_request.limit
+                )
+                reordered = []
+                for item in ranked:
+                    hit = hits[item["index"]]
+                    reordered.append(hit.model_copy(update={"rerank_score": item["score"]}))
+                return reordered or hits
+            return hits
         except httpx.HTTPStatusError as exc:
             raise HTTPException(status_code=502, detail="search capability request failed") from exc
         except ValueError as exc:

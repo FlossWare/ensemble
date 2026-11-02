@@ -102,6 +102,13 @@ def test_tokenization_contract_and_disabled_reranker(tmp_path):
         create_app(database_url=database_url),
         headers={"Authorization": "Bearer test-key", "X-Ensemble-Partition": "default"},
     ) as client:
+        chunks = client.post(
+            "/api/v1/capabilities/chunking/split-tokens",
+            json={"text": "one two three four five", "target_tokens": 3, "overlap_tokens": 1},
+        )
+        assert chunks.status_code == 200
+        assert chunks.json()["chunks"] == ["one two three", "three four five"]
+
         tokenized = client.post(
             "/api/v1/capabilities/tokenization/tokenize",
             json={"text": "Hello, world!"},

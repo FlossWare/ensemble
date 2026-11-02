@@ -28,7 +28,7 @@ Partition scope is enforced in persistence queries and document identity, not me
 
 The public search path retrieves bounded lexical and vector candidate sets independently, then applies reciprocal-rank fusion. PostgreSQL stores embeddings in pgvector and uses an HNSW cosine index. Set `ENSEMBLE_EMBEDDING_DIMENSIONS` to match the embedding model before applying migrations. SQLite uses an exhaustive vector-search fallback for local development.
 
-The current lexical retriever uses database-side text matching. Search candidate channels are bounded to at most 1,000 candidates each. The public search pipeline does not yet invoke the optional reranking capability. The tokenizer is deterministic Unicode word/punctuation tokenization, not a model-specific BPE tokenizer. Chunking remains character-window based.
+The current lexical retriever uses database-side text matching. Search candidate channels are bounded to at most 1,000 candidates each. The public search pipeline does not yet invoke the optional reranking capability. The tokenizer is deterministic Unicode word/punctuation tokenization, not a model-specific BPE tokenizer. Both character-window and token-window chunking profiles are available. When a Cohere-compatible reranker is configured, public search reranks the fused candidate list.
 
 ## Memory and graph
 

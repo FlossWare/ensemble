@@ -27,7 +27,7 @@ Internal capability calls propagate the authenticated caller's bearer key and re
 | POST | `/api/v1/documents` | Ingest or revise a document through chunking, embeddings, and indexing |
 | POST | `/api/v1/search` | Retrieve lexical and vector candidates and fuse rankings |
 | POST | `/api/v1/capabilities/tokenization/tokenize` | Deterministic Unicode tokenization (`ensemble-unicode-v1`) |
-| POST | `/api/v1/capabilities/chunking/split` | Deterministic character-window chunking |
+| POST | `/api/v1/capabilities/chunking/split` | Deterministic character-window chunking |\n| POST | `/api/v1/capabilities/chunking/split-tokens` | Deterministic token-window chunking using `ensemble-unicode-v1` |
 | POST | `/api/v1/capabilities/embeddings` | Provider-neutral embedding capability |
 | POST | `/api/v1/capabilities/reranking/rerank` | Cohere-compatible reranking; 503 if no provider is configured |
 | POST | `/api/v1/capabilities/index/documents` | Persist a document and its chunks |
