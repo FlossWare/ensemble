@@ -52,18 +52,21 @@ def test_explicit_database_url_override_is_used(tmp_path, monkeypatch):
     assert db.parent.is_dir()
     assert settings.persistence_root == root.resolve()
 
-def test_system_config_endpoint_reports_effective_listener_and_root(tmp_path, monkeypatch):
+def test_system_config_endpoint_exposes_listener_without_private_storage_details(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     from ensemble.api import create_app
     from ensemble.store import InMemoryDocumentStore
 
-    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path / "persist"))
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path / "private-persist"))
     monkeypatch.setenv("ENSEMBLE_HOST", "127.0.0.1")
     monkeypatch.setenv("ENSEMBLE_PORT", "9123")
     with TestClient(create_app(store=InMemoryDocumentStore())) as http:
         result = http.get("/api/v1/system/config")
     assert result.status_code == 200
-    assert result.json()["host"] == "127.0.0.1"
-    assert result.json()["port"] == 9123
-    assert result.json()["persistence_root"] == str((tmp_path / "persist").resolve())
+    body = result.json()
+    assert body["listener"] == {"host": "127.0.0.1", "port": 9123}
+    assert body["persistence"] == {"mode": "durable", "configured": True}
+    assert "database_url" not in body
+    assert "persistence_root" not in body
+    assert str(tmp_path) not in result.text
