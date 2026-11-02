@@ -60,6 +60,7 @@ Implemented on the review branch (latest verified CI: 150 passed, 1 skipped):
 - Browser Control Center served by the same REST application at /control, with live capability health/readiness checks, hybrid retrieval and optional reranking, structured transcript-session ingestion, Index/Vector and Memory/Knowledge inspection, source lookup and confirmed tombstones, Entity extraction/resolution/linking, multi-intent classification, plus URI preview and explicit ingest.
 - Bounded public-URI fetching, HTML/plain-text extraction, local/private destination rejection, redirect limits, response-size limits, and preview-only operation.
 - Shared source lifecycle across supported document, transcript, PDF, URL, lexical, and Knowledge ingestion: Index revision decisions gate writes; accepted content enters the durable document/chunk index; Knowledge publication also writes provenance records and the `knowledge_chunks` vector collection when embeddings are available; exact extracted entities are associated with source revisions in Graph.
+- Index tombstones use one cleanup path across every vector collection, and Knowledge-only vector retrieval revalidates source revision and tombstone state against Index before returning candidates.
 
 Not yet implemented:
 - The remaining POC capability surface listed in [POC capability parity](poc-parity.md).
