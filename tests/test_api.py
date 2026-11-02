@@ -734,6 +734,7 @@ def test_lexical_documents_accepts_poc_session_message_contract():
             "query": "searchable",
         }).json()["results"]
         assert results[0]["source_id"].startswith("transcript:lexical-session:")
+        assert len(results[0]["text_sha"]) == 64
 
 
 def test_transcript_metadata_survives_sqlite_restart(tmp_path):
