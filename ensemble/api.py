@@ -200,7 +200,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "extraction", "intent", "ranking", "reranking", "graph", "entities", "memory", "ga", "thompson", "learning"],
+            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "ga", "thompson", "learning"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
@@ -576,8 +576,11 @@ def create_app(
 
     @app.post("/api/v1/entities/extract", tags=["entities"])
     async def extract_entity_candidates(payload: dict[str, Any]):
+        source = payload.get("source")
+        if source is not None and (not isinstance(source, str) or len(source) > 512):
+            raise HTTPException(status_code=400, detail="source must be a string of at most 512 characters")
         try:
-            entities = extract(payload.get("text"), source=payload.get("source"))
+            entities = extract(payload.get("text"), source=source)
         except OverflowError as exc:
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except ValueError as exc:
