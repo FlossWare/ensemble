@@ -77,6 +77,7 @@ class DocumentService:
                     "document": chunk.content,
                     "metadata": {
                         "source_id": document.source_id,
+                        "url": document.source_id,
                         "revision": document.revision,
                         "title": document.title,
                         "chunk_id": str(chunk.id),
@@ -94,6 +95,14 @@ class DocumentService:
                         vector_collection, model, dimensions, items[offset:offset + 256]
                     )
                 vector_indexed = True
+            except Exception:
+                vector_indexed = False
+            # Remove obsolete revision vectors only after the new document
+            # revision is durably stored. This also handles embedding outages.
+            try:
+                await self.vector_store.delete_superseded(
+                    vector_collection, document.source_id, digest
+                )
             except Exception:
                 vector_indexed = False
         return DocumentOut(
