@@ -37,6 +37,10 @@ chunks = Table(
     Column("ordinal", Integer, nullable=False),
     Column("content", Text, nullable=False),
     Column("embedding", JSON, nullable=False),
+    Column("profile", String(64), nullable=False, default="window-v1"),
+    Column("start_offset", Integer, nullable=False, default=0),
+    Column("end_offset", Integer, nullable=False, default=0),
+    Column("header", Text, nullable=False, default=""),
     UniqueConstraint("document_id", "ordinal", name="uq_ensemble_chunk_document_ordinal"),
 )
 Index("ix_ensemble_documents_current_source", documents.c.source_id, documents.c.is_current)
@@ -137,7 +141,7 @@ class SqlDocumentStore:
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0011_thompson_events":
+        if revision != "0012_chunk_provenance":
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )
@@ -215,6 +219,10 @@ class SqlDocumentStore:
                         "ordinal": chunk.ordinal,
                         "content": chunk.content,
                         "embedding": chunk.embedding,
+                        "profile": chunk.profile,
+                        "start_offset": chunk.start,
+                        "end_offset": chunk.end,
+                        "header": chunk.header,
                     }
                     for chunk in chunks
                 ])
@@ -233,6 +241,10 @@ class SqlDocumentStore:
                 self.chunks.c.ordinal,
                 self.chunks.c.content.label("chunk_content"),
                 self.chunks.c.embedding,
+                self.chunks.c.profile,
+                self.chunks.c.start_offset,
+                self.chunks.c.end_offset,
+                self.chunks.c.header,
             )
             .join(self.chunks, self.documents.c.id == self.chunks.c.document_id)
             .where(self.documents.c.is_current.is_(True))
