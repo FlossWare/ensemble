@@ -2005,9 +2005,14 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if job_state["status"] == "completed":
             job = await active_transcript_store.get_job(job_id)
+            replay_result = dict((job or {}).get("result") or {})
+            replayed_count = int(replay_result.get("inserted", 0)) + int(
+                replay_result.get("already_present", 0)
+            )
+            replay_result["inserted"] = 0
+            replay_result["already_present"] = replayed_count
             return {
-                **(job or {}).get("result", {}),
-                "replayed": True, "job_id": job_id, "job": job,
+                **replay_result, "replayed": True, "job_id": job_id, "job": job,
             }
         if job_state["status"] == "running" and not job_state["created"]:
             raise HTTPException(
