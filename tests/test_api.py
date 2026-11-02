@@ -763,3 +763,27 @@ def test_transcript_metadata_survives_sqlite_restart(tmp_path):
         assert results[0]["role"] == "assistant"
         assert results[0]["kind"] == "tool_result"
         assert results[0]["is_subagent"] is True
+
+
+def test_lexical_search_suppresses_identical_message_text_across_sessions():
+    app = create_app(store=InMemoryDocumentStore())
+    message_text = "The same pasted stack trace appears in both sessions."
+    with TestClient(app) as client:
+        for session_id in ("session-a", "session-b"):
+            response = client.post("/api/v1/lexical/documents", json={
+                "session": {
+                    "session_id": session_id,
+                    "project": "ensemble",
+                    "file": f"/work/{session_id}.jsonl",
+                },
+                "messages": [{
+                    "uuid": "same-message", "role": "user", "kind": "text",
+                    "text": message_text,
+                }],
+            })
+            assert response.status_code == 200
+        results = client.post("/api/v1/lexical/search", json={
+            "query": "pasted stack trace", "limit": 10,
+        }).json()["results"]
+        assert len(results) == 1
+        assert results[0]["text"] == message_text
