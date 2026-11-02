@@ -950,12 +950,14 @@ def test_ingestion_routes_use_only_the_canonical_namespace():
         "/api/v1/ingest/urls",
         "/api/v1/ingest/urls/preview",
         "/api/v1/ingest/transcripts",
+        "/api/v1/ingest/sessions",
     }
     obsolete = {
         "/api/v1/documents",
         "/api/v1/ingestion/pdf",
         "/api/v1/scrape/preview",
         "/api/v1/scrape/ingest",
+        "/api/v1/lexical/search",
         "/api/v1/hybrid/transcripts/ingest",
     }
 
