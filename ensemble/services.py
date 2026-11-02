@@ -23,7 +23,7 @@ class DocumentService:
         self.vector_store = vector_store
 
     async def ingest(self, request: DocumentIn, *, embed: bool = True, vector_collection: str | None = None) -> DocumentOut:
-        document = Document(request.source_id, request.revision, request.title, request.content)
+        document = Document(request.source_id, request.revision, request.title, request.content, request.metadata)
         records = chunk_text(request.chunk_profile, request.source_id, request.content, request.media_type)
         if not records:
             raise ValueError("document content contains no usable text")
@@ -77,6 +77,7 @@ class DocumentService:
                         "chunk_end": chunk.end,
                         "chunk_header": chunk.header,
                         "content_sha256": digest,
+                        **document.metadata,
                     },
                     } for chunk in chunks],
                 )
@@ -93,6 +94,7 @@ class DocumentService:
             created_at=document.created_at,
             chunk_profile=request.chunk_profile,
             vector_indexed=vector_indexed,
+            metadata=document.metadata,
         )
 
 
@@ -175,6 +177,11 @@ class SearchService:
                 chunk_start=item.chunk.start,
                 chunk_end=item.chunk.end,
                 chunk_header=item.chunk.header,
+                session_id=item.document.metadata.get("session_id"),
+                project=item.document.metadata.get("project"),
+                role=item.document.metadata.get("role"),
+                kind=item.document.metadata.get("kind"),
+                is_subagent=item.document.metadata.get("is_subagent"),
             ))
         results = sorted(
             hits, key=lambda hit: (hit.fusion_score, hit.lexical_score, str(hit.chunk_id)),
