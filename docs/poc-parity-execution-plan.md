@@ -1,3 +1,5 @@
+> **Historical planning document:** This plan is superseded by [Capability Completion Plan](capability-completion-plan.md). Ensemble is now functionality-first. POC behavior may inform requirements, but POC implementation and test-suite parity are not goals. Do not use the review gates, test-count expectations, or parity sequencing below as the active work plan.
+
 # POC Parity Execution Plan
 
 This plan converts the source inventory in [POC capability parity](poc-parity.md) into reviewable engineering slices. A capability is reviewable only when its source audit, contract behavior, regression tests, and documented deviations are available. Matching route names are not evidence of parity.
