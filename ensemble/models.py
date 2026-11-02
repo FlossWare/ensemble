@@ -55,6 +55,7 @@ class SearchHit(BaseModel):
     role: str | None = None
     kind: str | None = None
     is_subagent: bool | None = None
+    text_sha: str | None = None
 
 
 class Document:
