@@ -80,8 +80,12 @@ The previous Hybrid search routes were removed rather than aliased. Control Cent
 
 ### Memory
 
-- `GET /api/v1/memory/health`, `/ready`, `/list`, `/knowledge/status`
-- `POST /api/v1/memory/memories/{name}`, `/write`, `/append`, `/append-once`, `/entries`, `/retrieve`, `/search`, `/search-semantic`, `/search-hybrid`, `/chunk`, `/ingest`, `/reconcile`
+- `GET /api/v1/memory/health`, `/ready`
+- `GET /api/v1/memory/memories`, `/memories/{name}`, `/memories/{name}/entries`
+- `PUT /api/v1/memory/memories/{name}`, `/memories/{name}/entries/{event_id}`
+- `POST /api/v1/memory/memories/{name}/entries`, `/memory/recall`, `/memory/chunking`, `/memory/events`
+- `POST /api/v1/memory/search/keywords`, `/search/semantic`, `/search/hybrid`
+- `POST /api/v1/memory/sources/import`, `/sources/reconcile`; `GET /sources/status`
 
 ### Graph
 
@@ -113,7 +117,7 @@ Prompt capture is not a search operation and remains under review against the Me
 | Ingestion | `/ingest/*` | Source ingestion now shares one namespace, including structured sessions | Complete ingestion route consistency and decide whether lexical document ingestion is still needed as a separate route |
 | Vector | Collection routes now use record resources for bulk upsert, lookup, metadata updates, and pruning; query remains an explicit vector operation | Mixes resource operations and implementation-flavored verbs | Bulk record replacement uses PUT; record lookup and query remain explicit operations; metadata updates use PATCH; pruning remains a named maintenance action whose lifecycle semantics need review |
 | Graph | `nodes`, `edges`, `nodes/{id}`, `query`, `traverse` | Resource paths now consistent; graph computations remain explicit operations | Node and edge mutations now use `/graph/nodes` and `/graph/edges`, with reads at `/graph/nodes/{node_id}`; query/traversal remain explicit operations |
-| Memory | Mixed `read`, `write`, `append`, `entries`, `retrieve`, `list`, and three search paths | No single resource model; semantic strategy appears in some paths but not others | Define Memory resources and operation semantics before renaming; avoid mechanical string replacement |
+| Memory | Named memories, nested entries, search strategies, source imports/reconciliation, recall, events | Resource model is now explicit; search strategies are nested consistently | Review source identity and event lifecycle semantics; do not reintroduce action-only paths |
 | Knowledge / Index | Records, sources, revisions, tombstones | Mostly resource-oriented; tombstone is represented differently in the two groups | Decide one consistent tombstone lifecycle and preserve its revision semantics |
 | Learning / Thompson | Outcomes and runs are resources; reset/select/report/ping/root POST are mixed | Some operations are resources, others are action verbs or duplicate status calls | Keep meaningful domain actions; remove redundant ping if health/readiness fully covers it; clarify root POST operations |
 | GA | Runs and optimizers are resources; promote is an action | Mostly coherent | Keep promotion as an explicit domain action unless promotion records become first-class resources |
@@ -126,7 +130,7 @@ Prompt capture is not a search operation and remains under review against the Me
 2. **Ingestion:** structured session ingestion moved to `/ingest/sessions`; finish evaluating the lexical document convenience route and prompt-event placement.
 3. **Graph:** node and edge resources moved to plural resource paths; query and traversal remain explicit graph operations.
 4. **Vector:** define collection and record resource semantics, then replace action-heavy CRUD paths.
-5. **Memory:** define the resource model and distinguish memory entries, events, source imports, reconciliation, and retrieval strategies.
+5. **Memory:** named-memory and entry resources, search strategies, source import/reconciliation, recall, and event capture now have canonical paths; next review source identity and event lifecycle semantics.
 6. **Knowledge and Index:** align tombstone lifecycle semantics.
 7. **Learning and Thompson:** normalize state, outcomes, reports, and domain actions.
 8. **Configuration and operational status:** remove storage leakage and make capability health/readiness coverage consistent.
