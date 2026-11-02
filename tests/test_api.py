@@ -489,7 +489,7 @@ def test_lexical_and_hybrid_capability_routes(tmp_path):
             "content": "Lexical retrieval must continue when embedding inference is unavailable.",
         })
         assert ingested.status_code == 201
-        lexical = client.post("/api/v1/lexical/search", json={"query": "embedding inference"})
+        lexical = client.post("/api/v1/search/lexical", json={"query": "embedding inference"})
         assert lexical.status_code == 200
         assert lexical.json()["results"][0]["source_id"] == "lexical-doc"
 
@@ -528,10 +528,10 @@ def test_sqlite_lexical_index_uses_shared_analyzer_and_porter_stemming(tmp_path)
             "content": "The service keeps running overnight and memory-service remains available.",
         })
         assert ingested.status_code == 201
-        stemmed = client.post("/api/v1/lexical/search", json={"query": "run", "limit": 10})
+        stemmed = client.post("/api/v1/search/lexical", json={"query": "run", "limit": 10})
         assert stemmed.status_code == 200
         assert stemmed.json()["results"][0]["source_id"] == "stemmed-source"
-        compound = client.post("/api/v1/lexical/search", json={"query": "memory-service", "limit": 10})
+        compound = client.post("/api/v1/search/lexical", json={"query": "memory-service", "limit": 10})
         assert compound.status_code == 200
         assert compound.json()["results"][0]["source_id"] == "stemmed-source"
 
@@ -547,8 +547,8 @@ def test_sqlite_lexical_index_replaces_reingested_revision(tmp_path):
         assert client.post("/api/v1/ingest/documents", json=payload).status_code == 201
         replacement = {**payload, "content": "current terminology lives here"}
         assert client.post("/api/v1/ingest/documents", json=replacement).status_code == 201
-        old = client.post("/api/v1/lexical/search", json={"query": "obsolete"}).json()
-        current = client.post("/api/v1/lexical/search", json={"query": "current"}).json()
+        old = client.post("/api/v1/search/lexical", json={"query": "obsolete"}).json()
+        current = client.post("/api/v1/search/lexical", json={"query": "current"}).json()
         assert old["results"] == []
         assert current["results"][0]["source_id"] == "fts-replace"
 
@@ -792,7 +792,7 @@ def test_lexical_documents_accepts_poc_session_message_contract():
         })
         assert response.status_code == 200
         assert response.json()["inserted"] == 1
-        results = client.post("/api/v1/lexical/search", json={
+        results = client.post("/api/v1/search/lexical", json={
             "query": "searchable",
         }).json()["results"]
         assert results[0]["source_id"].startswith("transcript:lexical-session:")
@@ -818,7 +818,7 @@ def test_transcript_metadata_survives_sqlite_restart(tmp_path):
         assert response.json()["inserted"] == 1
 
     with _client(tmp_path) as client:
-        results = client.post("/api/v1/lexical/search", json={
+        results = client.post("/api/v1/search/lexical", json={
             "query": "durable transcript metadata",
         }).json()["results"]
         assert results
@@ -846,7 +846,7 @@ def test_lexical_search_suppresses_identical_message_text_across_sessions():
                 }],
             })
             assert response.status_code == 200
-        results = client.post("/api/v1/lexical/search", json={
+        results = client.post("/api/v1/search/lexical", json={
             "query": "pasted stack trace", "limit": 10,
         }).json()["results"]
         assert len(results) == 1
@@ -933,7 +933,7 @@ def test_long_transcript_messages_are_fully_chunked_and_embedding_batches_are_bo
         collections = client.get("/api/v1/vector/collections").json()["collections"]
         transcript = next(item for item in collections if item["name"] == "transcript_text")
         assert transcript["count"] > 64
-        results = client.post("/api/v1/lexical/search", json={
+        results = client.post("/api/v1/search/lexical", json={
             "query": "tailmarkerunique", "limit": 10,
         }).json()["results"]
         assert results
