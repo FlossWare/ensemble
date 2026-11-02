@@ -1358,10 +1358,10 @@ def create_app(
         messages = payload.get("messages")
         if not isinstance(session, dict):
             raise HTTPException(status_code=400, detail="session must be an object")
-        for field in ("session_id", "project", "file"):
+        for field, maximum in (("session_id", 256), ("project", 256), ("file", 4096)):
             value = session.get(field)
-            if not isinstance(value, str) or not value.strip() or len(value) > 4096:
-                raise HTTPException(status_code=400, detail=f"session.{field} must be a non-empty string of at most 4096 characters")
+            if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+                raise HTTPException(status_code=400, detail=f"session.{field} must be a non-empty string of at most {maximum} characters")
         if not isinstance(messages, list) or len(messages) > 500:
             raise HTTPException(status_code=400, detail="messages must be a list of at most 500 entries")
         total_chars = 0
