@@ -27,6 +27,7 @@ documents = Table(
     Column("revision", Integer, nullable=False),
     Column("title", String(2048), nullable=False),
     Column("content", Text, nullable=False),
+    Column("metadata", JSON, nullable=False, default=dict),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("is_current", Boolean, nullable=False, default=True),
     UniqueConstraint("source_id", "revision", name="uq_ensemble_document_source_revision"),
@@ -156,7 +157,7 @@ class SqlDocumentStore:
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0013_lexical_fts":
+        if revision != "0014_document_metadata":
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )
@@ -180,6 +181,7 @@ class SqlDocumentStore:
                 revision=document.revision,
                 title=document.title,
                 content=document.content,
+                metadata=document.metadata,
                 created_at=document.created_at,
                 is_current=False,
             ).on_conflict_do_nothing(
@@ -201,7 +203,7 @@ class SqlDocumentStore:
             await connection.execute(
                 update(self.documents)
                 .where(self.documents.c.id == str(document.id))
-                .values(title=document.title, content=document.content, is_current=False)
+                .values(title=document.title, content=document.content, metadata=document.metadata, is_current=False)
             )
             await connection.execute(
                 update(self.documents)
@@ -273,6 +275,7 @@ class SqlDocumentStore:
                 self.documents.c.revision,
                 self.documents.c.title,
                 self.documents.c.content.label("document_content"),
+                self.documents.c.metadata,
                 self.documents.c.created_at,
                 self.chunks.c.id.label("chunk_id"),
                 self.chunks.c.ordinal,
@@ -293,7 +296,7 @@ class SqlDocumentStore:
         result: list[IndexedChunk] = []
         for row in rows:
             document = Document(
-                row["source_id"], row["revision"], row["title"], row["document_content"]
+                row["source_id"], row["revision"], row["title"], row["document_content"], row["metadata"]
             )
             document.id = UUID(row["document_id"])
             document.created_at = row["created_at"]
