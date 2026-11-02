@@ -15,7 +15,7 @@ Ensemble is the product and implementation boundary. It is not a Claude Code ext
 - MCP is an optional adapter over REST capabilities. It contains no duplicate business logic.
 - Ensemble uses SQLite for its own persistence. Alternative persistence implementations and shared infrastructure belong to FlossWare proper.
 
-See [Architecture and decisions](docs/architecture.md), [REST contract conventions](docs/rest-contracts.md), [POC capability parity](docs/poc-parity.md), [Control Center requirements](docs/control-center-requirements.md), [Control Center API mapping](docs/control-center-api-mapping.md), and [current implementation status](docs/implementation-status.md).
+See [Architecture and decisions](docs/architecture.md), [REST contract conventions](docs/rest-contracts.md), [POC capability parity](docs/poc-parity.md), [parity execution plan](docs/poc-parity-execution-plan.md), [Control Center requirements](docs/control-center-requirements.md), [Control Center API mapping](docs/control-center-api-mapping.md), and [current implementation status](docs/implementation-status.md).
 
 ## Current implementation
 
