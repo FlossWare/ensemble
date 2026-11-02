@@ -16,13 +16,13 @@ class DocumentService:
         self.chunker = chunker
         self.embeddings = embeddings
 
-    async def ingest(self, request: DocumentIn) -> DocumentOut:
+    async def ingest(self, request: DocumentIn, *, embed: bool = True) -> DocumentOut:
         document = Document(request.source_id, request.revision, request.title, request.content)
         records = chunk_text(request.chunk_profile, request.source_id, request.content, request.media_type)
         if not records:
             raise ValueError("document content contains no usable text")
         texts = [record["text"] for record in records]
-        vectors = await self.embeddings.embed(texts, mode="document") if self.embeddings.available else [[] for _ in texts]
+        vectors = await self.embeddings.embed(texts, mode="document") if embed and self.embeddings.available else [[] for _ in texts]
         if len(vectors) != len(texts):
             raise RuntimeError("embedding provider returned an unexpected vector count")
         chunks = [
