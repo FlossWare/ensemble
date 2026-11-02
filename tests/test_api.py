@@ -610,3 +610,56 @@ def test_hybrid_search_enriches_intent_and_related_graph_sessions():
         assert body["intent"]["label"] == "debug"
         assert body["related_sessions"][0]["session_id"] == "session-42"
         assert body["related_sessions"][0]["project"] == "ensemble"
+
+
+def test_hybrid_session_ingestion_is_idempotent_and_populates_retrieval_graph():
+    graph = InMemoryGraphStore()
+    app = create_app(store=InMemoryDocumentStore(), graph_store=graph)
+    payload = {
+        "session": {
+            "session_id": "session-100",
+            "project": "ensemble",
+            "file": "/work/ensemble/session-100.jsonl",
+            "title": "Ensemble debugging session",
+        },
+        "messages": [
+            {
+                "uuid": "message-1", "role": "user", "kind": "text",
+                "text": "Please inspect /work/ensemble/config.py for the retry behavior.",
+                "ts": "2026-11-02T10:00:00Z",
+            },
+            {
+                "uuid": "message-2", "role": "assistant", "kind": "text",
+                "text": "The retry setting in /work/ensemble/config.py is bounded.",
+                "ts": "2026-11-02T10:00:10Z",
+            },
+        ],
+    }
+    with TestClient(app) as client:
+        first = client.post("/api/v1/hybrid/sessions/ingest", json=payload)
+        second = client.post("/api/v1/hybrid/sessions/ingest", json=payload)
+        assert first.status_code == 200
+        assert first.json()["inserted"] == 2
+        assert second.status_code == 200
+        assert second.json()["already_present"] == 2
+
+        search = client.post("/api/v1/hybrid/search", json={
+            "query": "why does /work/ensemble/config.py fail",
+        })
+        assert search.status_code == 200
+        assert search.json()["results"]
+        assert search.json()["related_sessions"][0]["session_id"] == "session-100"
+
+
+def test_hybrid_session_ingestion_rejects_invalid_messages_before_writing():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        response = client.post("/api/v1/hybrid/sessions/ingest", json={
+            "session": {
+                "session_id": "session-invalid",
+                "project": "ensemble",
+                "file": "/work/session.jsonl",
+            },
+            "messages": [{"uuid": "bad", "role": "system", "text": "not accepted"}],
+        })
+        assert response.status_code == 400
