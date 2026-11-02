@@ -63,6 +63,96 @@ def _problem(request: Request, status: int, title: str, detail: str, code: str) 
     )
 
 
+def _context_token_estimate(value: str) -> int:
+    return (len(value) + 3) // 4
+
+
+def _compress_context_text(value: str, query: str, max_chars: int) -> tuple[str, bool]:
+    if max_chars <= 0:
+        return "", bool(value)
+    if len(value) <= max_chars:
+        return value, False
+    query_terms = {
+        token.casefold() for token in re.findall(r"[^\\W_]+", query)
+        if len(token) > 1
+    }
+    sentences = [
+        match.group(0).strip()
+        for match in re.finditer(r"[^.!?\\n]+(?:[.!?]+|$)", value)
+        if match.group(0).strip()
+    ]
+    ranked = []
+    for index, sentence in enumerate(sentences):
+        terms = {token.casefold() for token in re.findall(r"[^\\W_]+", sentence)}
+        ranked.append((len(query_terms & terms), index, sentence))
+    selected, used = [], 0
+    for score, index, sentence in sorted(ranked, key=lambda item: (-item[0], item[1])):
+        extra = len(sentence) + (1 if selected else 0)
+        if used + extra <= max_chars:
+            selected.append((index, sentence))
+            used += extra
+    if selected:
+        selected.sort(key=lambda item: item[0])
+        return " ".join(sentence for _, sentence in selected), True
+    return value[:max_chars].rstrip(), True
+
+
+def _assemble_context(candidates: list[dict[str, Any]], query: str, max_tokens: int) -> dict[str, Any]:
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1 <= max_tokens <= 32_000:
+        raise ValueError("max_tokens must be an integer between 1 and 32000")
+    included, blocks, seen = [], [], set()
+    remaining, omitted, truncated, compressed = max_tokens, 0, 0, 0
+    for candidate in candidates:
+        value = candidate.get("content")
+        if not isinstance(value, str) or not value.strip():
+            omitted += 1
+            continue
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+        if digest in seen:
+            omitted += 1
+            continue
+        seen.add(digest)
+        source = candidate.get("source", "unknown")
+        title = candidate.get("title") or candidate.get("section") or source
+        header = f"[{source}] {title}"
+        block = header + "\\n" + value.strip()
+        needed = _context_token_estimate(block)
+        was_truncated = was_compressed = False
+        if needed > remaining:
+            available = remaining * 4 - len(header) - 1
+            if available <= 0:
+                omitted += 1
+                continue
+            selected, was_compressed = _compress_context_text(value.strip(), query, available)
+            if not selected:
+                omitted += 1
+                continue
+            block = header + "\\n" + selected
+            was_truncated = len(selected) < len(value.strip())
+            needed = _context_token_estimate(block)
+            if needed > remaining:
+                omitted += 1
+                continue
+        item = {key: val for key, val in candidate.items() if key != "content"}
+        item.update({
+            "content": block, "estimated_tokens": needed,
+            "truncated": was_truncated, "compressed": was_compressed,
+            "content_sha256": digest,
+        })
+        included.append(item)
+        blocks.append(block)
+        remaining -= needed
+        truncated += int(was_truncated)
+        compressed += int(was_compressed)
+    return {
+        "context": "\\n\\n".join(blocks), "sources": included,
+        "estimated_tokens": max_tokens - remaining,
+        "token_estimator": "UTF-8 character count divided by four; approximate, not model-tokenizer exact",
+        "max_tokens": max_tokens, "omitted_count": omitted,
+        "truncated_count": truncated, "compressed_count": compressed,
+    }
+
+
 def create_app(
     database_url: str | None = None,
     store: DocumentStore | None = None,
