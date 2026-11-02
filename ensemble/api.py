@@ -16,6 +16,7 @@ from .capabilities import (
 )
 from .embeddings import configured_embedding_provider
 from .reranking import configured_reranker
+from .knowledge_store import KnowledgeStore
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit, Document, Chunk
 from .services import search_indexed
 from .store import DocumentStore, IndexedChunk, SqlDocumentStore
@@ -38,6 +39,7 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
     api_keys = load_api_keys()
     embeddings = configured_embedding_provider()
     reranker = configured_reranker()
+    knowledge_store = KnowledgeStore(document_store.engine) if hasattr(document_store, "engine") else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -54,7 +56,8 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
     )
     app.state.store = document_store
     app.state.embedding_provider = embeddings
-    app.include_router(create_capability_router(document_store, embeddings, reranker), prefix="/api/v1")
+    app.state.knowledge_store = knowledge_store
+    app.include_router(create_capability_router(document_store, embeddings, reranker, knowledge_store), prefix="/api/v1")
 
 
 
@@ -84,7 +87,8 @@ def create_app(database_url: str | None = None, store: DocumentStore | None = No
             return _problem(request, 401, "Unauthorized", "A valid bearer API key is required", "invalid-api-key")
         path = request.url.path
         read_only = (
-            path.endswith("/search")
+            request.method in {"GET", "HEAD"}
+            or path.endswith("/search")
             or path.endswith("/search-candidates")
             or path.endswith("/vector-search")
             or path.endswith("/embeddings")

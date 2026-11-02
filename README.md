@@ -19,7 +19,7 @@ See [Architecture and decisions](docs/architecture.md), [REST contract conventio
 
 ## Current implementation
 
-The Python application provides health/readiness, durable document ingestion, chunking, optional embeddings, Unicode tokenization, provider-backed reranking contracts, bounded lexical and vector candidate retrieval, PostgreSQL pgvector HNSW indexing, and reciprocal-rank fusion through one FastAPI application.
+The Python application provides health/readiness, durable document ingestion, chunking, optional embeddings, partition-scoped memory and graph capabilities, Unicode tokenization, provider-backed reranking contracts, bounded lexical and vector candidate retrieval, PostgreSQL pgvector HNSW indexing, and reciprocal-rank fusion through one FastAPI application.
 
 SQLite is the default local database. PostgreSQL is supported for a shared deployment. The storage adapter is private to the implementation; REST contracts expose neither database choice nor schema. Database schema changes are managed with Alembic migrations.
 

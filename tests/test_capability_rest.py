@@ -116,3 +116,60 @@ def test_tokenization_contract_and_disabled_reranker(tmp_path):
             json={"query": "retrieval", "documents": ["semantic retrieval"]},
         )
         assert reranked.status_code == 503
+
+
+
+def test_partition_scoped_memory_and_graph_capabilities(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'knowledge.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    with TestClient(
+        create_app(database_url=database_url),
+        headers={"Authorization": "Bearer test-key", "X-Ensemble-Partition": "default"},
+    ) as client:
+        memory = client.post("/api/v1/capabilities/memory", json={
+            "memory_key": "preferred-language",
+            "category": "preference",
+            "content": "Java is the preferred implementation language",
+            "importance": 0.9,
+            "metadata": {"source": "conversation"},
+        })
+        assert memory.status_code == 200
+        assert memory.json()["memory_key"] == "preferred-language"
+
+        retrieved = client.get("/api/v1/capabilities/memory/preferred-language")
+        assert retrieved.status_code == 200
+        assert retrieved.json()["content"].startswith("Java is the preferred")
+
+        found = client.post("/api/v1/capabilities/memory/search", json={
+            "query": "implementation language", "limit": 10,
+        })
+        assert found.status_code == 200
+        assert len(found.json()) == 1
+
+        source = client.post("/api/v1/capabilities/graph/nodes", json={
+            "node_type": "project", "label": "Ensemble",
+            "properties": {"status": "active"},
+        })
+        target = client.post("/api/v1/capabilities/graph/nodes", json={
+            "node_type": "capability", "label": "Memory",
+            "properties": {"kind": "knowledge"},
+        })
+        assert source.status_code == 200
+        assert target.status_code == 200
+
+        edge = client.post("/api/v1/capabilities/graph/edges", json={
+            "source_node_id": source.json()["id"],
+            "target_node_id": target.json()["id"],
+            "relation": "provides",
+        })
+        assert edge.status_code == 200
+
+        graph = client.get(
+            f"/api/v1/capabilities/graph/nodes/{source.json()['id']}/neighbors?depth=1"
+        )
+        assert graph.status_code == 200
+        assert len(graph.json()["nodes"]) == 2
+        assert len(graph.json()["edges"]) == 1

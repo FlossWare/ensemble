@@ -13,6 +13,7 @@ from .models import Chunk, Document, DocumentOut
 from .store import DocumentStore, IndexedChunk
 from .reranking import Reranker
 from .tokenization import TOKENIZER_ID, tokenize
+from .knowledge_store import KnowledgeStore
 
 
 class ChunkRequest(BaseModel):
@@ -23,6 +24,33 @@ class ChunkRequest(BaseModel):
 
 class EmbeddingRequest(BaseModel):
     texts: list[str]
+
+
+class MemoryUpsertRequest(BaseModel):
+    memory_key: str = Field(min_length=1, max_length=512)
+    category: str = Field(default="general", min_length=1, max_length=128)
+    content: str = Field(min_length=1)
+    importance: float = Field(default=0.5, ge=0, le=1)
+    metadata: dict = Field(default_factory=dict)
+    expires_at: datetime | None = None
+
+
+class MemorySearchRequest(BaseModel):
+    query: str = ""
+    limit: int = Field(default=10, ge=1, le=100)
+
+
+class GraphNodeRequest(BaseModel):
+    node_type: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=512)
+    properties: dict = Field(default_factory=dict)
+
+
+class GraphEdgeRequest(BaseModel):
+    source_node_id: str = Field(min_length=36, max_length=36)
+    target_node_id: str = Field(min_length=36, max_length=36)
+    relation: str = Field(min_length=1, max_length=128)
+    properties: dict = Field(default_factory=dict)
 
 
 class TokenizationRequest(BaseModel):
@@ -54,9 +82,66 @@ class IndexDocumentRequest(BaseModel):
     embeddings: list[list[float]]
 
 
-def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider, reranker: Reranker) -> APIRouter:
+def create_capability_router(store: DocumentStore, embeddings: EmbeddingProvider, reranker: Reranker, knowledge_store: KnowledgeStore | None) -> APIRouter:
     router = APIRouter()
     chunker = Chunker()
+
+    @router.post("/capabilities/memory", tags=["capabilities", "memory"])
+    async def upsert_memory(request: MemoryUpsertRequest, http_request: Request):
+        if knowledge_store is None:
+            raise HTTPException(status_code=503, detail="memory persistence is unavailable")
+        return await knowledge_store.upsert_memory(
+            http_request.state.partition_id, request.memory_key, request.category,
+            request.content, request.importance, request.metadata, request.expires_at,
+        )
+
+    @router.get("/capabilities/memory/{memory_key}", tags=["capabilities", "memory"])
+    async def get_memory(memory_key: str, http_request: Request):
+        if knowledge_store is None:
+            raise HTTPException(status_code=503, detail="memory persistence is unavailable")
+        result = await knowledge_store.get_memory(http_request.state.partition_id, memory_key)
+        if result is None:
+            raise HTTPException(status_code=404, detail="memory not found")
+        return result
+
+    @router.post("/capabilities/memory/search", tags=["capabilities", "memory"])
+    async def search_memories(request: MemorySearchRequest, http_request: Request):
+        if knowledge_store is None:
+            raise HTTPException(status_code=503, detail="memory persistence is unavailable")
+        return await knowledge_store.search_memories(
+            http_request.state.partition_id, request.query, request.limit
+        )
+
+    @router.post("/capabilities/graph/nodes", tags=["capabilities", "graph"])
+    async def upsert_graph_node(request: GraphNodeRequest, http_request: Request):
+        if knowledge_store is None:
+            raise HTTPException(status_code=503, detail="graph persistence is unavailable")
+        return await knowledge_store.upsert_node(
+            http_request.state.partition_id, request.node_type, request.label, request.properties
+        )
+
+    @router.post("/capabilities/graph/edges", tags=["capabilities", "graph"])
+    async def upsert_graph_edge(request: GraphEdgeRequest, http_request: Request):
+        if knowledge_store is None:
+            raise HTTPException(status_code=503, detail="graph persistence is unavailable")
+        try:
+            return await knowledge_store.upsert_edge(
+                http_request.state.partition_id, request.source_node_id,
+                request.target_node_id, request.relation, request.properties,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/capabilities/graph/nodes/{node_id}/neighbors", tags=["capabilities", "graph"])
+    async def traverse_graph(node_id: str, http_request: Request, depth: int = 1):
+        if knowledge_store is None:
+            raise HTTPException(status_code=503, detail="graph persistence is unavailable")
+        if depth < 1 or depth > 4:
+            raise HTTPException(status_code=400, detail="depth must be between 1 and 4")
+        try:
+            return await knowledge_store.traverse(http_request.state.partition_id, node_id, depth)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.post("/capabilities/tokenization/tokenize", tags=["capabilities", "tokenization"])
     async def tokenize_text(request: TokenizationRequest):

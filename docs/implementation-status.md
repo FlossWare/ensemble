@@ -1,49 +1,61 @@
 # Implementation status
 
-## REST and runtime foundation
+## Runtime and REST boundaries
 
 Implemented:
 - Python 3.12+ FastAPI application with generated OpenAPI.
 - One application and one REST listener with versioned endpoint groups.
 - Co-located capability calls cross HTTP routing and JSON serialization using ASGI transport.
-- Independently addressable chunking, embeddings, and index capability endpoints.
-- Ingestion calls chunking, embedding, and indexing over those REST contracts.
-- Search retrieves indexed chunks and query embeddings through capability REST contracts.
-- Health/readiness and Problem Details error responses.
+- Independently addressable tokenization, chunking, embedding, reranking, index, memory, and graph capability endpoints.
+- Ingestion calls chunking, embedding, and indexing through REST contracts.
+- Search retrieves lexical and vector candidates through REST contracts and applies reciprocal-rank fusion.
+- Public health/readiness endpoints and Problem Details errors.
+
+## Authentication and isolation
+
+Implemented:
+- Bearer API-key authentication configured through `ENSEMBLE_API_KEYS`.
+- Per-key subject, read/write/admin permissions, and allowed partition list.
+- `X-Ensemble-Partition` selection and authorization.
+- Partition isolation at document identity, ingestion, lexical retrieval, vector retrieval, memory persistence/search, graph nodes, graph edges, and graph traversal.
+- Capability-to-capability requests propagate the caller's authentication and partition context.
+
+Remaining hardening:
+- Automated key rotation, audit events, rate limits, external identity-provider integration, and delegated service credentials for capabilities moved to separate hosts.
 
 ## Persistence and ingestion
 
 Implemented:
 - SQLAlchemy 2 asynchronous persistence adapter.
-- SQLite default at .ensemble/ensemble.db and PostgreSQL support via asyncpg.
-- Alembic-managed schema; startup rejects an unmigrated or incomplete database.
-- Transactional document/chunk persistence.
-- Stable document identity for repeated ingestion of the same source and revision.
-- Stable chunk identities for a document revision and ordinal.
-- Re-ingestion replaces the indexed chunk set atomically.
-- Revisions are retained; search returns the highest revision for each source.
+- SQLite local default and PostgreSQL support.
+- Alembic-managed schema; startup rejects unmigrated or unsupported schema revisions.
+- Transactional document/chunk persistence and stable document/chunk identities.
+- Re-ingestion replaces chunk content atomically; revisions are retained.
+- Partition-scoped memory upsert/read/search with expiry and importance ordering.
+- Partition-scoped graph node/edge upsert and bounded bidirectional traversal.
 - Persistence survives application restart.
 
-## Retrieval
+## Retrieval and model capabilities
 
 Implemented:
-- Deterministic Unicode word/punctuation tokenization (`ensemble-unicode-v1`).\n- Deterministic character-window chunking with overlap; token-aware chunking remains planned.\n- Provider-neutral reranking contract with a Cohere-compatible HTTP adapter; it reports unavailable when not configured.
+- Deterministic Unicode word/punctuation tokenizer (`ensemble-unicode-v1`); this is not model-BPE compatible.
+- Character-window chunking with overlap.
 - Optional OpenAI-compatible embedding provider.
-- Database-side lexical candidate retrieval with a bounded candidate set (maximum 1,000).
-- Independent lexical and vector candidate retrieval with reciprocal-rank fusion.\n- PostgreSQL pgvector HNSW cosine index; SQLite exhaustive vector fallback for local development.
-- Document and chunk provenance in search responses.
+- PostgreSQL pgvector HNSW cosine index; SQLite exhaustive local vector fallback.
+- Bounded database-side lexical candidates and independently bounded vector candidates.
+- Reciprocal-rank fusion and document/chunk provenance.
+- Cohere-compatible reranking adapter, reported unavailable when no provider is configured.
 
 Known limitations:
-- Embeddings are stored as JSON and scored in application memory. There is no dedicated vector index.
-- Vector similarity is limited to lexical candidates; semantically related documents without lexical overlap can be missed.
-- Search candidate pagination is not yet exposed; requests are bounded to at most 1,000 candidates.
+- Reranking capability is not yet integrated into the public search pipeline.
 - Chunking is character-window based, not token-aware.
-- API-key authentication, read/write permissions, and partition enforcement are implemented. API keys are configured through `ENSEMBLE_API_KEYS`; health/readiness are public, while all `/api/v1` routes require bearer authentication. Key rotation, audit logging, rate limiting, and external identity-provider integration remain future hardening.
-- Graph, memory-specific APIs, token-aware chunking, ingestion connectors/background jobs, production observability, rate limits, and deployment packaging remain future work. Reranking requires an explicitly configured provider.
+- Memory search is lexical; semantic memory retrieval is not yet implemented.
+- Graph traversal is bounded and returns a neighborhood; graph query language, typed constraints, and graph/vector hybrid retrieval are not implemented.
+- Search pagination, request budgets, query timeouts, production metrics/tracing, ingestion connectors/background jobs, and deployment packaging remain future work.
 
 ## Compatibility and migration
 
-Ensemble schema changes use reviewed Alembic migrations. Production startup never creates or upgrades schema implicitly. Disposable local development databases may be rebuilt. No Ensemble migration reads, modifies, or imports POC storage. POC databases and services remain outside Ensemble ownership and must remain untouched.
+Ensemble schema changes use reviewed Alembic migrations. Production startup never creates or upgrades schema implicitly. No Ensemble migration reads, modifies, or imports POC storage. POC databases and services remain outside Ensemble ownership and must remain untouched.
 
 ## Verification
 
