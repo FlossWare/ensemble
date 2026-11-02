@@ -1377,8 +1377,8 @@ def create_app(
                     "extracted_pages": extracted["extracted_pages"],
                 },
             )
-            result = await documents.ingest(document)
-            return {"ok": True, "document": result, "extraction": {
+            result, decision = await ingest_indexed_document(document, origin="pdf", locator=source_id)
+            return {"ok": True, "decision": decision, "document": result, "extraction": {
                 "page_count": extracted["page_count"],
                 "extracted_pages": extracted["extracted_pages"],
             }}
@@ -1386,6 +1386,8 @@ def create_app(
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except PDFExtractionError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except HTTPException:
+            raise
         except ChunkingError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
@@ -1410,30 +1412,21 @@ def create_app(
             if revision is None:
                 revision = (current["high_sequence"] + 1) if current else 1
             digest = hashlib.sha256(preview["text"].encode("utf-8")).hexdigest()
-            profiles = {"chunking": "legacy-char-window-1200-160", "embedding": embeddings.status().get("model") or "disabled"}
-            decision = await active_index_store.record_revision(source_id, revision, digest, profiles)
-            if decision["decision"] not in {"accepted", "duplicate"}:
-                raise HTTPException(status_code=409, detail="source revision rejected: " + decision["decision"])
-            document = DocumentIn(source_id=source_id, revision=revision, title=preview["title"], content=preview["text"])
-            result = await documents.ingest(document)
+            profiles = {"chunking": "window-v1", "media_type": "text/plain"}
+            document = DocumentIn(
+                source_id=source_id, revision=revision, title=preview["title"],
+                content=preview["text"], chunk_profile="window-v1",
+                metadata={"origin": "web", "locator": source_id},
+            )
+            result, decision = await ingest_indexed_document(
+                document, origin="web", locator=source_id
+            )
             await active_knowledge_store.put({
                 "source_id": source_id, "revision_sequence": revision, "revision_id": digest,
                 "title": preview["title"], "content": preview["text"], "origin": "web",
                 "locator": source_id, "profiles": profiles,
             })
-            if embeddings.available:
-                indexed = await document_store.all_chunks()
-                records = [item for item in indexed if item.document.id == result.id and item.chunk.embedding]
-                if records:
-                    status = embeddings.status()
-                    dimensions = status.get("dimensions") or len(records[0].chunk.embedding)
-                    await active_vector_store.upsert("documents", status.get("model") or "configured", dimensions, [
-                        {"id": str(item.chunk.id), "embedding": item.chunk.embedding, "document": item.chunk.content,
-                         "metadata": {"url": source_id, "source_id": source_id, "content_sha256": digest,
-                                      "revision": revision, "title": preview["title"]}}
-                        for item in records
-                    ])
-            return {"ok": True, "decision": decision["decision"], "source": preview, "document": result}
+            return {"ok": True, "decision": decision, "source": preview, "document": result}
         except ScrapeError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
         except HTTPException:
@@ -1464,7 +1457,8 @@ def create_app(
             return await ingest_session(payload, request)
         try:
             document_request = DocumentIn.model_validate(payload)
-            return await documents.ingest(document_request, embed=False)
+            result, _ = await ingest_indexed_document(document_request, embed=False)
+            return result
         except ChunkingError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
         except ValueError as exc:
@@ -1699,8 +1693,8 @@ def create_app(
                         "session_file": file_path,
                     },
                 )
-                ingested = await documents.ingest(
-                    document, vector_collection="transcript_text"
+                ingested, _ = await ingest_indexed_document(
+                    document, vector_collection="transcript_text", origin="transcript", locator=file_path
                 )
                 if embeddings.available and not ingested.embedded:
                     degraded.append("embeddings")
@@ -1735,7 +1729,10 @@ def create_app(
     @app.post("/api/v1/ingest/documents", response_model=DocumentOut, status_code=201, tags=["ingestion"])
     async def ingest_document(request: DocumentIn):
         try:
-            return await documents.ingest(request)
+            result, _ = await ingest_indexed_document(request)
+            return result
+        except HTTPException:
+            raise
         except ChunkingError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
         except ValueError as exc:
