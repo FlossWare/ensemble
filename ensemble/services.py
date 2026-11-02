@@ -106,7 +106,20 @@ class SearchService:
         self.vector_store = vector_store
 
     async def lexical_search(self, query: str, limit: int = 10) -> list[SearchHit]:
-        return (await self.search_with_status(query, limit, include_vector=False))["results"]
+        candidates = await self.search_with_status(
+            query, min(2000, limit * 4), include_vector=False, rerank=False
+        )
+        seen: set[str] = set()
+        unique: list[SearchHit] = []
+        for hit in candidates["results"]:
+            digest = hashlib.sha256(hit.text.encode("utf-8")).hexdigest()
+            if digest in seen:
+                continue
+            seen.add(digest)
+            unique.append(hit)
+            if len(unique) >= limit:
+                break
+        return unique
 
     async def search(self, query: str, limit: int = 10) -> list[SearchHit]:
         return (await self.search_with_status(query, limit))["results"]
@@ -123,7 +136,7 @@ class SearchService:
                 "retrieval": "lexical", "reranked": False,
             }
 
-        lexical_matches = await self.store.lexical_search(query, limit=200)
+        lexical_matches = await self.store.lexical_search(query, limit=min(2000, max(200, limit * 4)))
         lexical_scores = {
             item.chunk.id: score for item, score in lexical_matches
         }
