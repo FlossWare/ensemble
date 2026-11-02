@@ -30,6 +30,7 @@ from .ranking import DEFAULT_K, fuse
 from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_reranker, validate_rerank_request
 from .scraping import ScrapeError, preview_uri
 from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
+from .file_ingestion import extract_pdf, PDFExtractionError, MAX_PDF_BYTES
 from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
 from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
 from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
@@ -1193,6 +1194,48 @@ def create_app(
         from pathlib import Path
         from fastapi.responses import Response
         return Response(Path(__file__).with_name("control.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+    @app.post("/api/v1/ingestion/pdf", status_code=201, tags=["ingestion"])
+    async def ingest_pdf(request: Request, source_id: str, title: str, revision: int = 1):
+        """Extract text from a bounded PDF upload and pass it through document ingestion."""
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/pdf":
+            raise HTTPException(status_code=415, detail="Content-Type must be application/pdf")
+        if not source_id.strip() or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be 1-1024 characters")
+        if not title.strip() or len(title) > 2048:
+            raise HTTPException(status_code=400, detail="title must be 1-2048 characters")
+        if revision < 1:
+            raise HTTPException(status_code=400, detail="revision must be positive")
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_PDF_BYTES:
+            raise HTTPException(status_code=413, detail="PDF exceeds the 20 MiB upload limit")
+        raw = await request.body()
+        try:
+            extracted = extract_pdf(raw)
+            document = DocumentIn(
+                source_id=source_id, revision=revision, title=title,
+                content=extracted["text"], media_type="application/pdf",
+                metadata={
+                    "source_type": "pdf",
+                    "page_count": extracted["page_count"],
+                    "extracted_pages": extracted["extracted_pages"],
+                },
+            )
+            result = await documents.ingest(document)
+            return {"ok": True, "document": result, "extraction": {
+                "page_count": extracted["page_count"],
+                "extracted_pages": extracted["extracted_pages"],
+            }}
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except PDFExtractionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ChunkingError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="PDF ingestion failed") from exc
 
     @app.post("/api/v1/scrape/preview", tags=["scraping"])
     async def scrape_preview(payload: dict[str, Any]):
