@@ -509,8 +509,8 @@ def test_hybrid_prompt_capture_is_idempotent(tmp_path):
         "cwd": "/home/test/project",
     }
     with TestClient(app) as client:
-        first = client.post("/api/v1/hybrid/prompts", json=payload)
-        second = client.post("/api/v1/hybrid/prompts", json=payload)
+        first = client.post("/api/v1/memory/events", json=payload)
+        second = client.post("/api/v1/memory/events", json=payload)
         assert first.status_code == 200
         assert first.json()["status"] == "stored"
         assert second.json()["status"] == "duplicate"
@@ -862,7 +862,7 @@ def test_successful_hybrid_search_is_recorded_in_memory_search_ledger():
         })
         response = client.post("/api/v1/search/hybrid", json={"query": "retrieval pipeline"})
         assert response.status_code == 200
-        entries = client.post("/api/v1/memory/entries", json={
+        entries = client.post("/api/v1/memory/memories/{name}/entries", json={
             "name": "search-ledger",
         }).json()["entries"]
         assert len(entries) == 1
