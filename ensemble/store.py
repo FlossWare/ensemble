@@ -61,6 +61,7 @@ class DocumentStore(Protocol):
     async def close(self) -> None: ...
     async def check_ready(self) -> None: ...
     async def save(self, document: Document, chunks: list[Chunk]) -> Document: ...
+    async def tombstone_source(self, source_id: str) -> None: ...
     async def all_chunks(self) -> list[IndexedChunk]: ...
     async def lexical_search(self, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]: ...
 
@@ -71,6 +72,7 @@ class InMemoryDocumentStore:
     def __init__(self):
         self._documents: dict[tuple[str, int], Document] = {}
         self._chunks: dict[UUID, list[Chunk]] = {}
+        self._tombstoned: set[str] = set()
 
     async def initialize(self) -> None:
         return None
@@ -82,6 +84,8 @@ class InMemoryDocumentStore:
         return None
 
     async def save(self, document: Document, chunks: list[Chunk]) -> Document:
+        if document.source_id in self._tombstoned:
+            raise ValueError("source is tombstoned")
         key = (document.source_id, document.revision)
         previous = self._documents.get(key)
         if previous is not None:
@@ -92,9 +96,14 @@ class InMemoryDocumentStore:
         self._chunks[document.id] = list(chunks)
         return document
 
+    async def tombstone_source(self, source_id: str) -> None:
+        self._tombstoned.add(source_id)
+
     async def all_chunks(self) -> list[IndexedChunk]:
         latest: dict[str, Document] = {}
         for document in self._documents.values():
+            if document.source_id in self._tombstoned:
+                continue
             current = latest.get(document.source_id)
             if current is None or document.revision > current.revision:
                 latest[document.source_id] = document
@@ -266,6 +275,13 @@ class SqlDocumentStore:
                     lexical_rows,
                 )
         return document
+
+    async def tombstone_source(self, source_id: str) -> None:
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                update(self.documents).where(self.documents.c.source_id == source_id)
+                .values(is_current=False)
+            )
 
     async def all_chunks(self) -> list[IndexedChunk]:
         statement = (
