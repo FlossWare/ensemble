@@ -109,7 +109,7 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 
 Ingestion is idempotent for a given source identifier and revision. Re-ingesting that revision replaces its chunk set transactionally. Search returns only the highest registered revision for each source identifier; historical revisions remain stored but are not included in the active search view.
 
-The current document and search implementation remains an initial vertical slice, not the final complete capability surface. FastAPI publishes the machine-readable schema at /openapi.json.
+Memory append-once payload identity excludes the event `timestamp` metadata field. Replaying the same event ID and content with a different source timestamp is treated as a duplicate, preserving the first stored event timestamp; changing substantive payload content remains a conflict.\n\nThe current document and search implementation remains an initial vertical slice, not the final complete capability surface. FastAPI publishes the machine-readable schema at /openapi.json.
 
 ## 8. Required capability endpoint groups
 
