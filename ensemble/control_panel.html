@@ -54,6 +54,43 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <form id="memory-search-form"><input id="memory-query" type="text" required maxlength="2000" placeholder="Search episodic Memory"><button type="submit">Search Memory</button></form>
 <pre id="memory-results">No query run.</pre>
 </section>
+<section id="graph-workbench">
+<h2>Graph Workbench</h2>
+<p>Read-only node lookup, property-filtered queries, and bounded traversal. This view does not create or modify graph data.</p>
+<form id="graph-query-form"><label>Node type <input id="graph-node-type" type="text" maxlength="128" placeholder="session, file, etc."></label><label>Properties (JSON) <input id="graph-node-properties" type="text" value="{}" maxlength="2000"></label><button type="submit">Query nodes</button></form>
+<form id="graph-node-form"><label>Node ID <input id="graph-node-id" type="text" required maxlength="512"></label><button type="submit">Inspect node</button></form>
+<form id="graph-traverse-form"><label>Start node ID <input id="graph-start-id" type="text" required maxlength="512"></label><label>Direction <select id="graph-direction"><option value="out">Outgoing</option><option value="in">Incoming</option><option value="both">Both</option></select></label><label>Max depth <input id="graph-depth" type="number" min="1" max="3" value="1"></label><label>Edge type <input id="graph-edge-type" type="text" maxlength="128" placeholder="Optional"></label><button type="submit">Traverse</button></form>
+<pre id="graph-results">No graph query run.</pre>
+</section>
+<section id="chunking-workbench">
+<h2>Chunking Workbench</h2>
+<p>Inspect available profiles and preview chunk boundaries. Preview does not persist chunks.</p>
+<div class="toolbar"><button id="chunking-refresh" type="button">Load profiles</button><select id="chunking-profile"></select></div>
+<textarea id="chunking-text" rows="6" style="width:100%" maxlength="200000" placeholder="Text to chunk"></textarea>
+<button id="chunking-preview" type="button">Preview chunks</button>
+<pre id="chunking-results">No chunk preview run.</pre>
+</section>
+<section id="tokenization-workbench">
+<h2>Tokenization Workbench</h2>
+<p>Inspect analyzer profiles and token boundaries. This is a non-persistent diagnostic operation.</p>
+<div class="toolbar"><button id="tokenization-refresh" type="button">Load profiles</button><select id="tokenization-profile"></select></div>
+<textarea id="tokenization-text" rows="4" style="width:100%" maxlength="200000" placeholder="Text to tokenize"></textarea>
+<button id="tokenization-preview" type="button">Tokenize</button>
+<pre id="tokenization-results">No tokenization run.</pre>
+</section>
+<section id="knowledge-workbench">
+<h2>Knowledge Record Inspector</h2>
+<p>Read a record by source identifier, including revision and provenance metadata when exposed by the store.</p>
+<form id="knowledge-lookup-form"><input id="knowledge-source-id" type="text" required maxlength="512" placeholder="Knowledge source identifier"><button type="submit">Inspect record</button></form>
+<pre id="knowledge-results">No Knowledge record selected.</pre>
+</section>
+<section id="pipeline-inspector">
+<h2>Pipeline Inspector · Diagnostic Preview</h2>
+<p>This runs current capability operations against supplied text. It is not a replay or trace of a persisted ingestion or retrieval request, and it does not write data.</p>
+<textarea id="pipeline-text" rows="7" style="width:100%" maxlength="200000" placeholder="Paste text to inspect across processing stages"></textarea>
+<button id="pipeline-run" type="button">Run diagnostic pipeline</button>
+<pre id="pipeline-results">No diagnostic pipeline run.</pre>
+</section>
 <h2>URI ingestion</h2>
 <form id="scrape-form">
 <label for="uri">Public page URI</label>
