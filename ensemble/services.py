@@ -8,7 +8,7 @@ import os
 from collections.abc import Sequence
 from uuid import uuid5, NAMESPACE_URL
 from .chunking import Chunker, chunk as chunk_text
-from .embeddings import EmbeddingProvider
+from .embeddings import EmbeddingProvider, MAX_TEXTS as MAX_EMBEDDING_BATCH
 from .models import Chunk, Document, DocumentIn, DocumentOut, SearchHit
 from .store import DocumentStore
 from .reranking import Reranker
@@ -30,7 +30,11 @@ class DocumentService:
         texts = [record["text"] for record in records]
         if embed and self.embeddings.available:
             try:
-                vectors = await self.embeddings.embed(texts, mode="document")
+                vectors = []
+                for offset in range(0, len(texts), MAX_EMBEDDING_BATCH):
+                    vectors.extend(await self.embeddings.embed(
+                        texts[offset:offset + MAX_EMBEDDING_BATCH], mode="document"
+                    ))
             except Exception:
                 if vector_collection is None:
                     raise
@@ -60,9 +64,7 @@ class DocumentService:
             dimensions = status.get("dimensions") or len(chunks[0].embedding)
             digest = hashlib.sha256(request.content.encode("utf-8")).hexdigest()
             try:
-                await self.vector_store.upsert(
-                    vector_collection, model, dimensions,
-                    [{
+                items = [{
                     "id": str(chunk.id),
                     "embedding": chunk.embedding,
                     "document": chunk.content,
@@ -79,8 +81,11 @@ class DocumentService:
                         "content_sha256": digest,
                         "source_metadata": document.metadata,
                     },
-                    } for chunk in chunks],
-                )
+                } for chunk in chunks]
+                for offset in range(0, len(items), 256):
+                    await self.vector_store.upsert(
+                        vector_collection, model, dimensions, items[offset:offset + 256]
+                    )
                 vector_indexed = True
             except Exception:
                 vector_indexed = False
