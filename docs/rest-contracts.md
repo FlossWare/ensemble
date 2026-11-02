@@ -71,7 +71,7 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/search/hybrid | Unified hybrid retrieval |
 | POST | /api/v1/search/hybrid/knowledge | Knowledge-scoped hybrid retrieval |
 | POST | /api/v1/ingest/sessions | Ingest a structured transcript session and its messages through Memory, Graph, and retrieval indexing |
-| POST | /api/v1/memory/events | Existing prompt capture route; placement under the Memory event model remains under audit |
+| POST | /api/v1/memory/events | Capture an idempotent prompt event in the Memory event ledger |
 | GET | /api/v1/tokenization/health, /ready, /profiles | Tokenization capability status and analyzer profiles |
 | POST | /api/v1/tokenization/tokenize | Versioned deterministic text analysis |
 | GET | /api/v1/extraction/health, /ready | Extraction capability status |
@@ -122,6 +122,19 @@ The POC parity inventory in docs/poc-parity.md defines the complete capability b
 | Memory | Durable memory/event operations, retrieval and operational status |
 
 A Control Center is also a required product surface. It is served by the same application and consumes these REST contracts; it does not create a second backend or duplicate capability logic.
+
+## Memory resource conventions
+
+- `GET /api/v1/memory/memories` lists named memory resources.
+- `GET /api/v1/memory/memories/{name}` reads a named memory.
+- `PUT /api/v1/memory/memories/{name}` replaces its content.
+- `POST /api/v1/memory/memories/{name}/entries` appends an entry.
+- `PUT /api/v1/memory/memories/{name}/entries/{event_id}` appends an idempotent event identified by its stable event ID.
+- `GET /api/v1/memory/memories/{name}/entries` lists bounded entries.
+- `POST /api/v1/memory/search/keywords`, `/semantic`, and `/hybrid` expose distinct retrieval strategies.
+- `POST /api/v1/memory/recall` performs context-aware recall.
+- `POST /api/v1/memory/sources/import` and `/sources/reconcile`, with `GET /api/v1/memory/sources/status`, manage imported Knowledge sources.
+- `POST /api/v1/memory/events` captures prompt events.
 
 ## Graph resource conventions
 
