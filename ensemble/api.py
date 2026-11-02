@@ -2068,9 +2068,9 @@ def create_app(
                 }
                 stored = await active_memory_store.append("session-events", event, event_id=event_id)
                 source_identity = hashlib.sha256(
-                    f"{session_id}|{message['uuid']}|{kind}".encode("utf-8")
+                    f"{message['uuid']}|{kind}".encode("utf-8")
                 ).hexdigest()
-                source_id = "transcript:" + source_identity
+                source_id = f"transcript:{session_id}:{source_identity}"
                 source_state = await active_index_store.get_source(source_id)
                 if source_state is None:
                     revision = 1
