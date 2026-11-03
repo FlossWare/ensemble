@@ -1114,6 +1114,8 @@ def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verifi
         journal = await store.list_generation_changes_after("generation-0002", 0, 10)
         assert [item["tombstoned"] for item in journal] == [False, True]
         assert await store.generation_change_high_watermark("generation-0002") == 2
+        assert await store.acknowledge_generation_change("source-a", 1, tombstoned=False) == 1
+        assert await store.acknowledge_generation_change("source-a", 2, tombstoned=True) == 1
         with pytest.raises(RuntimeError, match="must all be sealed"):
             await store.activate_generation(
                 "generation-0002", "generation-0001", 1,
@@ -1173,6 +1175,8 @@ def test_in_memory_generation_registry_enforces_single_build_and_cutover():
         assert (await store.record_tombstone("source-a", 2))["decision"] == "tombstoned"
         journal = await store.list_generation_changes_after("generation-0002", 0, 10)
         assert [item["tombstoned"] for item in journal] == [False, True]
+        assert await store.acknowledge_generation_change("source-a", 1, tombstoned=False) == 1
+        assert await store.acknowledge_generation_change("source-a", 2, tombstoned=True) == 1
         for capability in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation"):
             await store.record_generation_checkpoint(
                 "generation-0002", capability, {"cursor": "done" if capability != "index_reconciliation" else 2}, sealed=True,
@@ -1768,6 +1772,12 @@ def test_generation_change_reconciliation_is_resumable_and_fenced():
         await store.record_tombstone("source-a", 2)
 
         builder = IndexGenerationBuilder(store)
+        waiting = await builder.reconcile_index_changes_page("generation-shadow", page_size=2)
+        assert waiting["status"] == "waiting_for_ack"
+        assert waiting["page_count"] == 0
+        await store.acknowledge_generation_change("source-a", 1, tombstoned=False)
+        await store.acknowledge_generation_change("source-b", 1, tombstoned=False)
+        await store.acknowledge_generation_change("source-a", 2, tombstoned=True)
         first = await builder.reconcile_index_changes_page("generation-shadow", page_size=2)
         assert first["status"] == "in_progress"
         resumed_builder = IndexGenerationBuilder(store)
