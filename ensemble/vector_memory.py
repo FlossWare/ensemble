@@ -19,6 +19,30 @@ class InMemoryVectorStore:
             for name, item in sorted(self._collections.items())
         ]
 
+
+    async def record_key_upper_bound(self, name: str) -> str | None:
+        records = self._collections.get(name, {}).get("records", {})
+        return max(records) if records else None
+
+    async def list_records_after(
+        self, name: str, cursor: str | None,
+        upper_bound: str | None, limit: int,
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        if upper_bound is None:
+            return []
+        records = self._collections.get(name, {}).get("records", {})
+        keys = [
+            key for key in sorted(records)
+            if key <= upper_bound and (cursor is None or key > cursor)
+        ][:limit]
+        return [{
+            "id": key, "embedding": records[key]["embedding"],
+            "document": records[key]["document"],
+            "metadata": records[key]["metadata"],
+        } for key in keys]
+
     async def existing(self, name: str, ids: list[str]) -> list[str]:
         collection = self._collections.get(name, {"records": {}})
         return [record_id for record_id in ids if record_id in collection["records"]]
