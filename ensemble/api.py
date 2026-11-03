@@ -228,10 +228,17 @@ def create_app(
             try:
                 # The authoritative Index tombstone is retained. Only active
                 # materialized data is reclaimed; generation tombstones remain.
-                await document_store.reclaim_source(source_id)
-                await active_knowledge_store.reclaim_source(source_id)
-                await active_vector_store.reclaim_source(source_id)
-                await active_reclamation_store.complete(source_id)
+                reclaimed = [
+                    await document_store.reclaim_source(source_id),
+                    await active_knowledge_store.reclaim_source(source_id),
+                    await active_vector_store.reclaim_source(source_id),
+                ]
+                if any(count > 500 for count in reclaimed):
+                    # A full page means there may be more rows. Retry the
+                    # idempotent source cleanup in another bounded pass.
+                    await active_reclamation_store.retry(source_id, "additional reclamation pages remain")
+                else:
+                    await active_reclamation_store.complete(source_id)
             except Exception as exc:
                 await active_reclamation_store.retry(source_id, f"{type(exc).__name__}: {exc}")
         return len(jobs)
