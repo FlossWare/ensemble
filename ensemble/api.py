@@ -30,7 +30,7 @@ from .tokenization import PROFILES as TOKENIZATION_PROFILES, TokenizationError, 
 from .extraction import extract, normalize_entity
 from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
-from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_reranker, validate_rerank_request
+from .reranking import MODEL_ID as RERANK_MODEL_ID, LocalRankingProvider, Reranker, RerankingDecorator, RerankingUnavailable, configured_reranker, validate_rerank_request
 from .scraping import ScrapeError, preview_uri
 from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
 from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpointStore, InMemoryTranscriptCheckpointStore
@@ -250,6 +250,7 @@ def create_app(
     )
     documents = DocumentService(document_store, Chunker(), embeddings, active_vector_store)
     search = SearchService(document_store, embeddings, active_reranker, active_vector_store)
+    ranking_decorator = RerankingDecorator(LocalRankingProvider(active_reranker))
 
     async def index_document_entities(source_id: str, revision: int, content: str, *, origin: str, locator: str) -> int:
         """Associate exact extracted entities with a durable source revision."""
@@ -1880,30 +1881,9 @@ def create_app(
                 request.rerank if request.rerank is not None
                 else os.getenv("ENSEMBLE_RERANK_ENABLED", "0").strip() == "1"
             )
-            if rerank_enabled and result["results"]:
-                if not active_reranker.available:
-                    result["degraded"].append("reranking")
-                else:
-                    candidates = result["results"][:min(30, len(result["results"]))]
-                    try:
-                        scores = await asyncio.to_thread(
-                            active_reranker.score, request.query,
-                            [candidate.text[:4000] for candidate in candidates],
-                        )
-                        if len(scores) != len(candidates) or any(
-                            not math.isfinite(float(score)) for score in scores
-                        ):
-                            raise RuntimeError("reranker returned invalid or misaligned scores")
-                        reranked = [
-                            hit.model_copy(update={"rerank_score": float(score)})
-                            for hit, score in zip(candidates, scores)
-                        ]
-                        result["results"] = sorted(
-                            reranked, key=lambda hit: hit.rerank_score, reverse=True
-                        ) + result["results"][len(candidates):]
-                        result["reranked"] = True
-                    except Exception:
-                        result["degraded"].append("reranking")
+            result = await ranking_decorator.apply(
+                request.query, result, enabled=rerank_enabled
+            )
             related = []
             try:
                 exact_paths = {
