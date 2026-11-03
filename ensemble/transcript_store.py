@@ -5,8 +5,12 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from sqlalchemy import Column, DateTime, Integer, JSON, MetaData, String, Table, select, update
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from .partitioning import PartitionedAsyncEngine
 from sqlalchemy.engine import make_url
+
+from .partitioning import PartitionedAsyncEngine
 
 transcript_metadata = MetaData()
 checkpoints = Table(
@@ -46,7 +50,7 @@ class SqliteTranscriptCheckpointStore:
         )
         if make_url(self.database_url).get_backend_name() != "sqlite":
             raise ValueError("Ensemble transcript checkpoints support SQLite only")
-        self.engine: AsyncEngine = create_async_engine(self.database_url, pool_pre_ping=True)
+        self.engine = PartitionedAsyncEngine(self.database_url, pool_pre_ping=True)
 
     async def initialize(self) -> None:
         async with self.engine.connect() as connection:
