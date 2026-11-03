@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import math
 import json
 import httpx
@@ -279,16 +280,17 @@ class HttpRankingProvider:
         async with httpx.AsyncClient(
             timeout=timeout, transport=self.transport
         ) as client:
-            async with client.stream(
-                "POST", self.url, headers=headers, content=body
-            ) as response:
-                response.raise_for_status()
-                chunks, received = [], 0
-                async for chunk in response.aiter_bytes():
-                    received += len(chunk)
-                    if received > MAX_RANKING_RESPONSE_BYTES:
-                        raise ValueError("ranking response exceeds 16 KiB")
-                    chunks.append(chunk)
+            async with asyncio.timeout(self.timeout):
+                async with client.stream(
+                    "POST", self.url, headers=headers, content=body
+                ) as response:
+                    response.raise_for_status()
+                    chunks, received = [], 0
+                    async for chunk in response.aiter_bytes():
+                        received += len(chunk)
+                        if received > MAX_RANKING_RESPONSE_BYTES:
+                            raise ValueError("ranking response exceeds 16 KiB")
+                        chunks.append(chunk)
         try:
             result = json.loads(b"".join(chunks))
             scores = result["scores"]
