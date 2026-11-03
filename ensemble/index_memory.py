@@ -259,7 +259,7 @@ class InMemoryIndexStore:
     ) -> dict[str, Any]:
         import json
         if capability not in {"index", "documents", "vectors", "memory", "knowledge", "index_reconciliation"}:
-            raise ValueError("capability must be index, memory, or knowledge")
+            raise ValueError("capability must be index, documents, vectors, memory, knowledge, or index_reconciliation")
         if not isinstance(checkpoint, dict):
             raise ValueError("checkpoint must be an object")
         try:
