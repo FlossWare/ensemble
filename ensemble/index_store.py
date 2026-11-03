@@ -433,6 +433,8 @@ class SqliteIndexStore:
                 raise KeyError("unknown source")
             if row["purged"]:
                 raise RuntimeError("permanently purged sources cannot be restored")
+            if not row["tombstoned"]:
+                raise RuntimeError("source is not soft-deleted")
             if sequence <= row["high_sequence"]:
                 raise ValueError("restore sequence must exceed the current source sequence")
             await connection.execute(update(sources).where(
