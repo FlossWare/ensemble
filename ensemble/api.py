@@ -2369,16 +2369,30 @@ def create_app(
             if total_chars > 4_000_000:
                 raise HTTPException(status_code=413, detail="session content exceeds 4000000 characters")
         session_id, project, file_path = session["session_id"], session["project"], session["file"]
+        internal = InternalRestClient(app, {
+            "graph": os.getenv("ENSEMBLE_GRAPH_REST_URL"),
+            "memory": os.getenv("ENSEMBLE_MEMORY_REST_URL"),
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "entities": os.getenv("ENSEMBLE_ENTITIES_REST_URL"),
+        })
         try:
-            session_node = await active_graph_store.add_node("session", {
-                "session_id": session_id, "project": project,
-                "title": session.get("title"), "file": file_path,
-            })
-            file_node = await active_graph_store.add_node("file", {
-                "path": file_path, "session_id": session_id, "project": project,
-            })
-            await active_graph_store.add_edge(
-                session_node["id"], file_node["id"], "contains", {}
+            session_node = (await internal.request(
+                "POST", "/api/v1/graph/nodes", request=request,
+                json={"type": "session", "properties": {
+                    "session_id": session_id, "project": project,
+                    "title": session.get("title"), "file": file_path,
+                }},
+            ))["node"]
+            file_node = (await internal.request(
+                "POST", "/api/v1/graph/nodes", request=request,
+                json={"type": "file", "properties": {
+                    "path": file_path, "session_id": session_id, "project": project,
+                }},
+            ))["node"]
+            await internal.request(
+                "POST", "/api/v1/graph/edges", request=request,
+                json={"source": session_node["id"], "target": file_node["id"],
+                      "type": "contains", "properties": {}},
             )
             inserted = duplicates = 0
             degraded = []
@@ -2394,12 +2408,20 @@ def create_app(
                     "kind": kind, "text": message["text"],
                     "timestamp": message.get("ts", ""),
                 }
-                stored = await active_memory_store.append("session-events", event, event_id=event_id)
+                stored = await internal.request(
+                    "PUT",
+                    f"/api/v1/memory/memories/session-events/entries/{event_id}",
+                    request=request, json={"entry": event},
+                )
                 source_identity = hashlib.sha256(
                     f"{session_id}|{message['uuid']}|{kind}".encode("utf-8")
                 ).hexdigest()
                 source_id = f"transcript:{source_identity}"
-                source_state = await active_index_store.get_source(source_id)
+                source_states = (await internal.request(
+                    "POST", "/api/v1/index/sources/query", request=request,
+                    json={"source_ids": [source_id]},
+                )).get("sources", {})
+                source_state = source_states.get(source_id)
                 if source_state is None:
                     revision = 1
                 elif source_state.get("revision_id") == content_revision:
@@ -2432,14 +2454,23 @@ def create_app(
                     duplicates += 1
                 else:
                     inserted += 1
-                for entity in extract(message["text"]):
+                extracted = await internal.request(
+                    "POST", "/api/v1/entities/extract", request=request,
+                    json={"text": message["text"], "source": "transcript"},
+                )
+                for entity in extracted.get("entities", []):
                     if entity.get("exact") and entity.get("type") in {"path", "file"}:
-                        path_node = await active_graph_store.add_node("file", {
-                            "path": entity["text"], "session_id": session_id,
-                            "project": project,
-                        })
-                        await active_graph_store.add_edge(
-                            session_node["id"], path_node["id"], "touched", {}
+                        path_node = (await internal.request(
+                            "POST", "/api/v1/graph/nodes", request=request,
+                            json={"type": "file", "properties": {
+                                "path": entity["text"], "session_id": session_id,
+                                "project": project,
+                            }},
+                        ))["node"]
+                        await internal.request(
+                            "POST", "/api/v1/graph/edges", request=request,
+                            json={"source": session_node["id"], "target": path_node["id"],
+                                  "type": "touched", "properties": {}},
                         )
             return {
                 "ok": True, "session_id": session_id,
