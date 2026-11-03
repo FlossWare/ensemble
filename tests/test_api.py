@@ -448,6 +448,32 @@ def test_knowledge_publication_enters_hybrid_search_and_graph(tmp_path):
         assert all(item["source_id"] != "rfc-entity" for item in after_delete["results"])
 
 
+def test_graph_expansion_source_reads_have_document_and_index_rest_contracts(tmp_path):
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/ingest/documents", json={
+            "source_id": "rest-source-read",
+            "revision": 1,
+            "title": "REST source lookup",
+            "content": "Graph expansion resolves current source chunks through REST.",
+        })
+        assert ingested.status_code == 201
+
+        index = client.post("/api/v1/index/sources/query", json={
+            "source_ids": ["rest-source-read", "missing-source"],
+        })
+        assert index.status_code == 200
+        assert index.json()["sources"]["rest-source-read"]["high_sequence"] == 1
+        assert "missing-source" not in index.json()["sources"]
+
+        chunks = client.post("/api/v1/documents/chunks/query", json={
+            "source_ids": ["rest-source-read"],
+        })
+        assert chunks.status_code == 200
+        assert len(chunks.json()["chunks"]) == 1
+        assert chunks.json()["chunks"][0]["source_id"] == "rest-source-read"
+        assert "Graph expansion resolves current source chunks" in chunks.json()["chunks"][0]["text"]
+
+
 def test_knowledge_is_index_gated_and_revision_ordered(tmp_path):
     with _client(tmp_path) as client:
         first = client.post("/api/v1/knowledge/records", json=_knowledge_record()).json()
