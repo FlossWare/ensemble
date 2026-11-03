@@ -1854,3 +1854,55 @@ def test_index_change_acknowledgement_rest_contract(tmp_path):
         await store.close()
 
     asyncio.run(verify())
+
+
+def test_generation_reconciles_updated_documents_and_vectors():
+    index_store = InMemoryIndexStore()
+    document_store = InMemoryDocumentStore()
+    vector_store = InMemoryVectorStore()
+
+    async def exercise():
+        await index_store.create_generation("generation-doc-vector")
+        first_document = Document("source-a", 1, "Source A", "original content", {"origin": "test"})
+        first_chunk = Chunk(first_document.id, 0, "original content", [1.0, 0.0], start=0, end=16)
+        await document_store.save(first_document, [first_chunk])
+        await vector_store.upsert("knowledge_chunks", "test-model", 2, [{
+            "id": "vector-a", "embedding": [1.0, 0.0], "document": "original content",
+            "metadata": {"source_id": "source-a", "revision": 1},
+        }])
+        await index_store.record_revision("source-a", 1, "revision-a1", {"chunking": "window-v1"})
+        await index_store.acknowledge_generation_change("source-a", 1, tombstoned=False)
+
+        builder = IndexGenerationBuilder(index_store, document_store, vector_store)
+        assert (await builder.copy_index_sources("generation-doc-vector", page_size=10))["status"] == "complete"
+        assert (await builder.copy_documents_page("generation-doc-vector", page_size=10))["status"] == "complete"
+        assert (await builder.copy_vectors_page("generation-doc-vector", page_size=10))["status"] == "complete"
+        assert (await builder.reconcile_index_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+        assert (await builder.reconcile_document_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+        assert (await builder.reconcile_vector_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+
+        updated_document = Document("source-a", 2, "Source A", "updated content", {"origin": "test"})
+        updated_chunk = Chunk(updated_document.id, 0, "updated content", [0.0, 1.0], start=0, end=15)
+        await document_store.save(updated_document, [updated_chunk])
+        await vector_store.upsert("knowledge_chunks", "test-model", 2, [{
+            "id": "vector-a", "embedding": [0.0, 1.0], "document": "updated content",
+            "metadata": {"source_id": "source-a", "revision": 2},
+        }])
+        await index_store.record_revision("source-a", 2, "revision-a2", {"chunking": "window-v1"})
+        await index_store.acknowledge_generation_change("source-a", 2, tombstoned=False)
+
+        assert (await builder.reconcile_index_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+        assert (await builder.reconcile_document_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+        assert (await builder.reconcile_vector_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+
+        generation_chunks = await document_store.generation_all_chunks("generation-doc-vector")
+        assert len(generation_chunks) == 1
+        assert generation_chunks[0].document.revision == 2
+        assert generation_chunks[0].chunk.content == "updated content"
+        vector_hits = await vector_store.query_generation(
+            "generation-doc-vector", "knowledge_chunks", [0.0, 1.0], 10,
+        )
+        assert len(vector_hits) == 1
+        assert vector_hits[0]["document"] == "updated content"
+
+    asyncio.run(exercise())
