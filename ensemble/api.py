@@ -352,23 +352,31 @@ def create_app(
             if not graph_sources:
                 return results, {"matched_entities": graph_matches, "candidate_sources": 0}
 
-            indexed_chunks = await document_store.all_chunks()
-            by_source: dict[str, list[Any]] = {}
-            for item in indexed_chunks:
-                by_source.setdefault(item.document.source_id, []).append(item)
+            source_ids = sorted(graph_sources)
+            source_state_response = await internal.request(
+                "POST", "/api/v1/index/sources/query", request=request,
+                json={"source_ids": source_ids[:200]},
+            )
+            chunk_response = await internal.request(
+                "POST", "/api/v1/documents/chunks/query", request=request,
+                json={"source_ids": source_ids[:200]},
+            )
+            source_states = source_state_response.get("sources", {})
+            by_source: dict[str, list[dict[str, Any]]] = {}
+            for chunk in chunk_response.get("chunks", []):
+                by_source.setdefault(chunk["source_id"], []).append(chunk)
             existing = {
                 (hit.source_id, str(hit.chunk_id)): index
                 for index, hit in enumerate(results)
             }
             expanded = list(results)
-            for source_rank, source_id in enumerate(sorted(graph_sources), start=1):
-                state = await active_index_store.get_source(source_id)
+            for source_rank, source_id in enumerate(source_ids[:200], start=1):
+                state = source_states.get(source_id)
                 if state is None or state.get("tombstoned") or state.get("high_sequence") != graph_sources[source_id]:
                     continue
                 contribution = 1.0 / (60 + source_rank)
                 for item in by_source.get(source_id, []):
-                    document, chunk = item.document, item.chunk
-                    key = (source_id, str(chunk.id))
+                    key = (source_id, str(item["chunk_id"]))
                     if key in existing:
                         position = existing[key]
                         hit = expanded[position]
@@ -378,19 +386,16 @@ def create_app(
                         })
                         continue
                     expanded.append(SearchHit(
-                        document_id=document.id, source_id=source_id,
-                        revision=document.revision, title=document.title,
-                        chunk_id=chunk.id, chunk_ordinal=chunk.ordinal,
-                        text=chunk.content, lexical_score=0.0, vector_score=0.0,
+                        document_id=item["document_id"], source_id=source_id,
+                        revision=item["revision"], title=item["title"],
+                        chunk_id=item["chunk_id"], chunk_ordinal=item["chunk_ordinal"],
+                        text=item["text"], lexical_score=0.0, vector_score=0.0,
                         graph_score=contribution, fusion_score=contribution,
-                        chunk_profile=chunk.profile, chunk_start=chunk.start,
-                        chunk_end=chunk.end, chunk_header=chunk.header,
-                        session_id=document.metadata.get("session_id"),
-                        project=document.metadata.get("project"),
-                        role=document.metadata.get("role"),
-                        kind=document.metadata.get("kind"),
-                        is_subagent=document.metadata.get("is_subagent"),
-                        text_sha=hashlib.sha256(chunk.content.encode("utf-8")).hexdigest(),
+                        chunk_profile=item["chunk_profile"], chunk_start=item["chunk_start"],
+                        chunk_end=item["chunk_end"], chunk_header=item["chunk_header"],
+                        session_id=item.get("session_id"), project=item.get("project"),
+                        role=item.get("role"), kind=item.get("kind"),
+                        is_subagent=item.get("is_subagent"), text_sha=item["text_sha"],
                     ))
             expanded.sort(
                 key=lambda hit: (hit.fusion_score, hit.lexical_score, hit.graph_score, str(hit.chunk_id)),
@@ -669,6 +674,56 @@ def create_app(
         if not 1 <= limit <= 500:
             raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
         return {"ok": True, "sources": await active_index_store.list_sources(limit)}
+
+    @app.post("/api/v1/index/sources/query", tags=["index"])
+    async def index_sources_query(payload: dict[str, Any]):
+        source_ids = payload.get("source_ids")
+        if (not isinstance(source_ids, list) or not source_ids
+                or len(source_ids) > 200
+                or any(not isinstance(value, str) or not value or len(value) > 2048
+                       for value in source_ids)):
+            raise HTTPException(status_code=400, detail="source_ids must contain 1-200 non-empty source identifiers")
+        sources = {}
+        for source_id in dict.fromkeys(source_ids):
+            source = await active_index_store.get_source(source_id)
+            if source is not None:
+                sources[source_id] = source
+        return {"ok": True, "sources": sources}
+
+    @app.post("/api/v1/documents/chunks/query", tags=["documents"])
+    async def document_chunks_query(payload: dict[str, Any]):
+        source_ids = payload.get("source_ids")
+        if (not isinstance(source_ids, list) or not source_ids
+                or len(source_ids) > 200
+                or any(not isinstance(value, str) or not value or len(value) > 2048
+                       for value in source_ids)):
+            raise HTTPException(status_code=400, detail="source_ids must contain 1-200 non-empty source identifiers")
+        selected = set(source_ids)
+        chunks = []
+        for item in await document_store.all_chunks():
+            document, chunk = item.document, item.chunk
+            if document.source_id not in selected:
+                continue
+            chunks.append({
+                "document_id": document.id,
+                "source_id": document.source_id,
+                "revision": document.revision,
+                "title": document.title,
+                "chunk_id": str(chunk.id),
+                "chunk_ordinal": chunk.ordinal,
+                "text": chunk.content,
+                "chunk_profile": chunk.profile,
+                "chunk_start": chunk.start,
+                "chunk_end": chunk.end,
+                "chunk_header": chunk.header,
+                "session_id": document.metadata.get("session_id"),
+                "project": document.metadata.get("project"),
+                "role": document.metadata.get("role"),
+                "kind": document.metadata.get("kind"),
+                "is_subagent": document.metadata.get("is_subagent"),
+                "text_sha": hashlib.sha256(chunk.content.encode("utf-8")).hexdigest(),
+            })
+        return {"ok": True, "chunks": chunks}
 
     @app.get("/api/v1/vector/health", tags=["vector"])
     async def vector_health():
