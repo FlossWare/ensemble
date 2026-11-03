@@ -109,6 +109,7 @@ class DocumentStore(Protocol):
     async def check_ready(self) -> None: ...
     async def save(self, document: Document, chunks: list[Chunk]) -> Document: ...
     async def tombstone_source(self, source_id: str) -> None: ...
+    async def restore_source(self, source_id: str) -> None: ...
     async def reclaim_source(self, source_id: str) -> int: ...
     async def all_chunks(self) -> list[IndexedChunk]: ...
     async def lexical_search(self, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]: ...
@@ -146,6 +147,9 @@ class InMemoryDocumentStore:
 
     async def tombstone_source(self, source_id: str) -> None:
         self._tombstoned.add(source_id)
+
+    async def restore_source(self, source_id: str) -> None:
+        self._tombstoned.discard(source_id)
 
     async def reclaim_source(self, source_id: str) -> int:
         keys = [key for key in self._documents if key[0] == source_id]
@@ -413,6 +417,22 @@ class SqlDocumentStore:
                 update(self.documents).where(self.documents.c.source_id == source_id)
                 .values(is_current=False)
             )
+
+    async def restore_source(self, source_id: str) -> None:
+        async with self.engine.begin() as connection:
+            latest = (await connection.execute(
+                select(self.documents.c.id).where(self.documents.c.source_id == source_id)
+                .order_by(self.documents.c.revision.desc()).limit(1)
+            )).scalar_one_or_none()
+            await connection.execute(
+                update(self.documents).where(self.documents.c.source_id == source_id)
+                .values(is_current=False)
+            )
+            if latest is not None:
+                await connection.execute(
+                    update(self.documents).where(self.documents.c.id == latest)
+                    .values(is_current=True)
+                )
 
     async def reclaim_source(self, source_id: str) -> int:
         async with self.engine.begin() as connection:
