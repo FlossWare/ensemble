@@ -63,7 +63,7 @@ def test_hybrid_reports_lexical_success_when_embedding_provider_is_unavailable()
         assert body["channels"]["lexical"]["candidate_count"] > 0
         assert body["channels"]["vector"]["status"] == "unavailable"
         assert body["retrieval"] == "lexical"
-        assert "vector" in body["degraded"]
+        assert "embeddings" in body["degraded"]
         assert body["results"]
 
 
