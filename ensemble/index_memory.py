@@ -57,7 +57,7 @@ class InMemoryIndexStore:
             current = {
                 "source_id": source_id, "high_sequence": sequence,
                 "revision_id": "tombstone", "profiles": {},
-                "tombstoned": True, "updated_at": now,
+                "tombstoned": True, "purged": False, "updated_at": now,
             }
             self._sources[source_id] = current
             decision = "tombstoned"
@@ -67,6 +67,25 @@ class InMemoryIndexStore:
         else:
             decision = "superseded"
         return {"decision": decision, "source": dict(current)}
+
+    async def restore_source(self, source_id: str, sequence: int) -> dict[str, Any]:
+        current = self._sources.get(source_id)
+        if current is None:
+            raise KeyError("unknown source")
+        if current.get("purged"):
+            raise RuntimeError("permanently purged sources cannot be restored")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= current["high_sequence"]:
+            raise ValueError("restore sequence must exceed the current source sequence")
+        current.update(high_sequence=sequence, tombstoned=False,
+                       updated_at=datetime.now(timezone.utc).isoformat())
+        return dict(current)
+
+    async def mark_purged(self, source_id: str) -> None:
+        current = self._sources.get(source_id)
+        if current is None or not current.get("tombstoned"):
+            raise RuntimeError("only a soft-deleted source can be permanently purged")
+        current["purged"] = True
+        current["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     async def get_source(self, source_id: str) -> dict[str, Any] | None:
         value = self._sources.get(source_id)
