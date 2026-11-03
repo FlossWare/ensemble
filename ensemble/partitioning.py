@@ -147,7 +147,7 @@ async def partition_scope_middleware(request: Request, call_next):
             scope = RequestScope(
                 principal_id=principal["subject"], partition_id=requested,
                 authorization=f"Bearer {credential.strip()}",
-                correlation_id=request.headers.get("x-correlation-id"),
+                correlation_id=correlation_id,
             )
         else:
             if os.getenv("ENSEMBLE_AUTH_REQUIRED", "0").strip() == "1":
