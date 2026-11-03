@@ -51,6 +51,16 @@ for path in databases:
         result = connection.execute("PRAGMA integrity_check").fetchone()[0]
         if result != "ok":
             raise SystemExit(f"SQLite integrity check failed for {path}: {result}")
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        if "ensemble_partition_metadata" not in tables:
+            raise SystemExit(f"Partition metadata is missing from {path}")
+        partition = connection.execute(
+            "SELECT partition_id FROM ensemble_partition_metadata LIMIT 1"
+        ).fetchone()
+        if partition is None or not partition[0]:
+            raise SystemExit(f"Partition identity is missing from {path}")
     finally:
         connection.close()
 print(f"Verified {len(databases)} SQLite databases.")
