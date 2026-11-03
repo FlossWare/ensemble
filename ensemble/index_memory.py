@@ -333,7 +333,7 @@ class InMemoryIndexStore:
         if target is None or target["state"] != "building":
             raise RuntimeError("target generation is not building")
         if not all(target["checkpoints"].get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation", "documents_reconciliation", "vectors_reconciliation", "memory_reconciliation", "knowledge_reconciliation")):
-            raise RuntimeError("index, documents, vectors, memory, knowledge, and all five reconciliation checkpoints must be sealed")
+            raise RuntimeError("index, documents, vectors, memory, knowledge, and all five reconciliation checkpoints must all be sealed")
         if self._write_fence_generation != generation_id:
             raise RuntimeError("Index write fence must be held during generation activation")
         high = await self.generation_change_high_watermark(generation_id)
