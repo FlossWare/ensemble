@@ -353,24 +353,27 @@ def create_app(
                 return results, {"matched_entities": graph_matches, "candidate_sources": 0}
 
             source_ids = sorted(graph_sources)
-            source_state_response = await internal.request(
-                "POST", "/api/v1/index/sources/query", request=request,
-                json={"source_ids": source_ids[:200]},
-            )
-            chunk_response = await internal.request(
-                "POST", "/api/v1/documents/chunks/query", request=request,
-                json={"source_ids": source_ids[:200]},
-            )
-            source_states = source_state_response.get("sources", {})
+            source_states: dict[str, dict[str, Any]] = {}
             by_source: dict[str, list[dict[str, Any]]] = {}
-            for chunk in chunk_response.get("chunks", []):
-                by_source.setdefault(chunk["source_id"], []).append(chunk)
+            for offset in range(0, len(source_ids), 200):
+                batch = source_ids[offset:offset + 200]
+                source_state_response = await internal.request(
+                    "POST", "/api/v1/index/sources/query", request=request,
+                    json={"source_ids": batch},
+                )
+                chunk_response = await internal.request(
+                    "POST", "/api/v1/documents/chunks/query", request=request,
+                    json={"source_ids": batch},
+                )
+                source_states.update(source_state_response.get("sources", {}))
+                for chunk in chunk_response.get("chunks", []):
+                    by_source.setdefault(chunk["source_id"], []).append(chunk)
             existing = {
                 (hit.source_id, str(hit.chunk_id)): index
                 for index, hit in enumerate(results)
             }
             expanded = list(results)
-            for source_rank, source_id in enumerate(source_ids[:200], start=1):
+            for source_rank, source_id in enumerate(source_ids, start=1):
                 state = source_states.get(source_id)
                 if state is None or state.get("tombstoned") or state.get("high_sequence") != graph_sources[source_id]:
                     continue
