@@ -258,7 +258,7 @@ class HttpRankingProvider:
         return {
             "ok": True, "ready": True, "provider": "http",
             "model": self.model or None, "runtime": "remote-http",
-            "endpoint": self.url,
+            "endpoint": self.url, "health_check": "configuration_only",
         }
 
     async def score(self, query: str, documents: list[str]) -> list[float]:
