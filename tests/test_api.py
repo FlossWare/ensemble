@@ -1,4 +1,5 @@
 import json
+import asyncio
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -9,6 +10,8 @@ from ensemble.store import InMemoryDocumentStore
 from ensemble.graph_memory import InMemoryGraphStore
 from ensemble.vector_memory import InMemoryVectorStore
 from ensemble.memory_store import InMemoryMemoryStore
+from ensemble.index_store import SqliteIndexStore
+from ensemble.index_memory import InMemoryIndexStore
 
 
 def _client(tmp_path):
@@ -1085,3 +1088,79 @@ def test_ingestion_routes_use_only_the_canonical_namespace():
 
     assert expected <= paths.keys()
     assert obsolete.isdisjoint(paths)
+
+
+def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verified_cutover(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    store = SqliteIndexStore(database_url)
+
+    async def exercise():
+        await store.initialize()
+        initial = await store.generation_status()
+        assert initial["active_generation_id"] == "generation-0001"
+        assert initial["epoch"] == 1
+
+        await store.create_generation("generation-0002")
+        with pytest.raises(RuntimeError, match="must all be sealed"):
+            await store.activate_generation(
+                "generation-0002", "generation-0001", 1,
+                {"acknowledged_writes_verified": True, "tombstones_verified": True},
+            )
+
+        for capability in ("index", "memory", "knowledge"):
+            await store.record_generation_checkpoint(
+                "generation-0002", capability,
+                {"cursor": capability + "-complete"}, sealed=True,
+            )
+        with pytest.raises(RuntimeError, match="already sealed"):
+            await store.record_generation_checkpoint(
+                "generation-0002", "index", {"cursor": "changed"}, sealed=False,
+            )
+        with pytest.raises(ValueError, match="acknowledged-write"):
+            await store.activate_generation(
+                "generation-0002", "generation-0001", 1,
+                {"acknowledged_writes_verified": True, "tombstones_verified": False},
+            )
+
+        cutover = await store.activate_generation(
+            "generation-0002", "generation-0001", 1,
+            {"acknowledged_writes_verified": True, "tombstones_verified": True},
+        )
+        assert cutover == {"active_generation_id": "generation-0002", "epoch": 2}
+        status = await store.generation_status()
+        states = {item["generation_id"]: item["state"] for item in status["generations"]}
+        assert states == {"generation-0001": "retired", "generation-0002": "active"}
+        with pytest.raises(RuntimeError, match="active generation changed"):
+            await store.activate_generation(
+                "generation-0002", "generation-0001", 1,
+                {"acknowledged_writes_verified": True, "tombstones_verified": True},
+            )
+        await store.close()
+
+    asyncio.run(exercise())
+
+
+def test_in_memory_generation_registry_enforces_single_build_and_cutover():
+    store = InMemoryIndexStore()
+
+    async def exercise():
+        status = await store.generation_status()
+        assert status["active_generation_id"] == "generation-0001"
+        await store.create_generation("generation-0002")
+        with pytest.raises(RuntimeError, match="already in progress"):
+            await store.create_generation("generation-0003")
+        for capability in ("index", "memory", "knowledge"):
+            await store.record_generation_checkpoint(
+                "generation-0002", capability, {"cursor": "done"}, sealed=True,
+            )
+        result = await store.activate_generation(
+            "generation-0002", "generation-0001", 1,
+            {"acknowledged_writes_verified": True, "tombstones_verified": True},
+        )
+        assert result["active_generation_id"] == "generation-0002"
+        assert result["epoch"] == 2
+
+    asyncio.run(exercise())
