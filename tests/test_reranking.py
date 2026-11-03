@@ -144,3 +144,56 @@ def test_reranking_decorator_falls_back_without_changing_baseline():
     assert result["reranked"] is False
     assert [hit.chunk_id for hit in result["results"]] == [hit.chunk_id for hit in original]
     assert "reranking" in result["degraded"]
+
+
+
+def test_http_ranking_provider_uses_bounded_contract_and_authorization():
+    import httpx
+    from ensemble.reranking import HttpRankingProvider
+
+    observed = {}
+
+    def handler(request):
+        observed["url"] = str(request.url)
+        observed["authorization"] = request.headers.get("authorization")
+        observed["payload"] = request.read()
+        return httpx.Response(200, json={"scores": [0.25, 0.9]})
+
+    provider = HttpRankingProvider(
+        "https://ranking.example/api", model="rank-v1",
+        api_key="test-secret", transport=httpx.MockTransport(handler),
+    )
+    scores = asyncio.run(provider.score("query", ["first", "second"]))
+
+    assert scores == [0.25, 0.9]
+    assert observed["url"] == "https://ranking.example/api/rerank"
+    assert observed["authorization"] == "Bearer test-secret"
+    assert b'"model":"rank-v1"' in observed["payload"]
+
+
+def test_http_ranking_provider_rejects_misaligned_scores():
+    import httpx
+    from ensemble.reranking import HttpRankingProvider
+
+    provider = HttpRankingProvider(
+        "https://ranking.example",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"scores": [1.0]})
+        ),
+    )
+    with pytest.raises(ValueError, match="score count"):
+        asyncio.run(provider.score("query", ["first", "second"]))
+
+
+def test_http_ranking_provider_rejects_non_finite_scores():
+    import httpx
+    from ensemble.reranking import HttpRankingProvider
+
+    provider = HttpRankingProvider(
+        "https://ranking.example",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"scores": [float("nan")]})
+        ),
+    )
+    with pytest.raises(ValueError, match="finite"):
+        asyncio.run(provider.score("query", ["first"]))
