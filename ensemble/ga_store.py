@@ -9,6 +9,8 @@ from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, MetaD
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
 
+from .partitioning import PartitionedAsyncEngine
+
 
 ga_metadata = MetaData()
 ga_runs = Table(
@@ -53,7 +55,7 @@ class SqliteGAStore:
         url_text = database_url or os.getenv("ENSEMBLE_DATABASE_URL", "sqlite+aiosqlite:///./.ensemble/ensemble.db")
         if make_url(url_text).get_backend_name() != "sqlite":
             raise ValueError("Ensemble GA persistence supports SQLite only")
-        self.engine: AsyncEngine = create_async_engine(url_text, pool_pre_ping=True)
+        self.engine = PartitionedAsyncEngine(url_text, pool_pre_ping=True)
 
     async def initialize(self) -> None:
         async with self.engine.connect() as connection:
