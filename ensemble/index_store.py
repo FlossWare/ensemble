@@ -246,6 +246,8 @@ class SqliteIndexStore:
         if not isinstance(source, dict) or not required.issubset(source):
             raise ValueError("source state is incomplete")
         source_id = source["source_id"]
+        if not isinstance(source["profiles"], dict) or not isinstance(source["tombstoned"], bool):
+            raise ValueError("profiles must be an object and tombstoned must be boolean")
         sequence = source["high_sequence"]
         revision_id = source["revision_id"]
         profiles = dict(sorted(source["profiles"].items()))
