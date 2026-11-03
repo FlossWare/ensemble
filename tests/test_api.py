@@ -1169,15 +1169,20 @@ def test_in_memory_generation_registry_enforces_single_build_and_cutover():
         await store.create_generation("generation-0002")
         with pytest.raises(RuntimeError, match="already in progress"):
             await store.create_generation("generation-0003")
+        assert (await store.record_revision("source-a", 1, "revision-a", {"chunking": "window-v1"}))["decision"] == "accepted"
+        assert (await store.record_tombstone("source-a", 2))["decision"] == "tombstoned"
+        journal = await store.list_generation_changes_after("generation-0002", 0, 10)
+        assert [item["tombstoned"] for item in journal] == [False, True]
         for capability in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation"):
             await store.record_generation_checkpoint(
-                "generation-0002", capability, {"cursor": "done" if capability != "index_reconciliation" else 0}, sealed=True,
+                "generation-0002", capability, {"cursor": "done" if capability != "index_reconciliation" else 2}, sealed=True,
             )
-        await store.acquire_generation_write_fence("generation-0002", through_change_id=0)
+        await store.acquire_generation_write_fence("generation-0002", through_change_id=2)
+        assert (await store.record_revision("source-b", 1, "revision-b", {"chunking": "window-v1"}))["decision"] == "fenced"
         result = await store.activate_generation(
             "generation-0002", "generation-0001", 1,
             {"acknowledged_writes_verified": True, "tombstones_verified": True,
-             "reconciled_through_change_id": 0},
+             "reconciled_through_change_id": 2},
         )
         assert result["active_generation_id"] == "generation-0002"
         assert result["epoch"] == 2
