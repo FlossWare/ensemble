@@ -29,6 +29,16 @@ records = Table(
     Column("document", Text, nullable=False),
     Column("metadata", JSON, nullable=False),
 )
+generation_records = Table(
+    "ensemble_vector_generation_records",
+    vector_metadata,
+    Column("collection_name", String(128), ForeignKey("ensemble_vector_collections.name", ondelete="CASCADE"), primary_key=True),
+    Column("generation_id", String(64), ForeignKey("ensemble_index_generations.generation_id", ondelete="CASCADE"), primary_key=True),
+    Column("record_id", String(512), primary_key=True),
+    Column("embedding", JSON, nullable=False),
+    Column("document", Text, nullable=False),
+    Column("metadata", JSON, nullable=False),
+)
 
 
 class VectorStore(Protocol):
@@ -40,6 +50,9 @@ class VectorStore(Protocol):
     async def update_metadata(self, name: str, items: list[dict[str, Any]]) -> int: ...
     async def delete_superseded(self, name: str, url: str, keep_sha256: str) -> int: ...
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
+    async def upsert_generation(self, generation_id: str, name: str, model: str, dimensions: int, items: list[dict[str, Any]]) -> int: ...
+    async def query_generation(self, generation_id: str, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
+    async def delete_generation(self, generation_id: str) -> int: ...
 
 
 class SqliteVectorStore:
@@ -55,7 +68,7 @@ class SqliteVectorStore:
         # The Alembic migration owns schema creation. Fail closed on missing vector tables.
         async with self.engine.connect() as connection:
             names = await connection.run_sync(lambda conn: __import__("sqlalchemy").inspect(conn).get_table_names())
-        if not {"ensemble_vector_collections", "ensemble_vector_records"}.issubset(names):
+        if not {"ensemble_vector_collections", "ensemble_vector_records", "ensemble_vector_generation_records"}.issubset(names):
             raise RuntimeError("vector schema is not initialized; run 'alembic upgrade head'")
 
     async def close(self) -> None:
@@ -170,3 +183,82 @@ class SqliteVectorStore:
             })
         scored.sort(key=lambda item: (-item["score"], item["id"]))
         return scored[:top_k]
+
+    async def upsert_generation(
+        self, generation_id: str, name: str, model: str,
+        dimensions: int, items: list[dict[str, Any]],
+    ) -> int:
+        if not generation_id or len(generation_id) > 64:
+            raise ValueError("generation_id must contain 1-64 characters")
+        async with self.engine.begin() as connection:
+            generation = await connection.scalar(
+                select(__import__("sqlalchemy").func.count()).select_from(
+                    __import__("sqlalchemy").table("ensemble_index_generations")
+                ).where(__import__("sqlalchemy").column("generation_id") == generation_id)
+            )
+            if not generation:
+                raise ValueError("unknown index generation")
+            await connection.execute(
+                sqlite_insert(collections).values(
+                    name=name, model=model, dimensions=dimensions,
+                    created_at=datetime.now(timezone.utc),
+                ).on_conflict_do_nothing(index_elements=["name"])
+            )
+            collection = (await connection.execute(
+                select(collections).where(collections.c.name == name)
+            )).mappings().one()
+            if collection["model"] != model or collection["dimensions"] != dimensions:
+                raise RuntimeError("vector collection model or dimension mismatch")
+            if items:
+                statement = sqlite_insert(generation_records).values([{
+                    "collection_name": name, "generation_id": generation_id,
+                    "record_id": item["id"], "embedding": item["embedding"],
+                    "document": item["document"], "metadata": item["metadata"],
+                } for item in items])
+                await connection.execute(statement.on_conflict_do_update(
+                    index_elements=["collection_name", "generation_id", "record_id"],
+                    set_={
+                        "embedding": statement.excluded.embedding,
+                        "document": statement.excluded.document,
+                        "metadata": statement.excluded.metadata,
+                    },
+                ))
+        return len(items)
+
+    async def query_generation(
+        self, generation_id: str, name: str,
+        embedding: list[float], top_k: int,
+    ) -> list[dict[str, Any]]:
+        if top_k < 1:
+            return []
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(
+                select(
+                    generation_records.c.record_id, generation_records.c.embedding,
+                    generation_records.c.document, generation_records.c.metadata,
+                ).where(
+                    generation_records.c.generation_id == generation_id,
+                    generation_records.c.collection_name == name,
+                )
+            )).mappings().all()
+        scored = []
+        for row in rows:
+            if len(row["embedding"]) != len(embedding):
+                continue
+            score = sum(left * right for left, right in zip(row["embedding"], embedding))
+            scored.append({
+                "id": row["record_id"], "document": row["document"],
+                "score": float(score), "metadata": row["metadata"],
+            })
+        scored.sort(key=lambda item: (-item["score"], item["id"]))
+        return scored[:top_k]
+
+    async def delete_generation(self, generation_id: str) -> int:
+        async with self.engine.begin() as connection:
+            result = await connection.execute(
+                delete(generation_records).where(
+                    generation_records.c.generation_id == generation_id
+                )
+            )
+        return result.rowcount or 0
+
