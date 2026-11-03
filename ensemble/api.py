@@ -245,8 +245,15 @@ def create_app(
 
     async def reclamation_worker() -> None:
         while True:
-            processed = await reclaim_due_sources()
-            await asyncio.sleep(1 if processed else 15)
+            try:
+                processed = await reclaim_due_sources()
+                await asyncio.sleep(1 if processed else 15)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A transient queue/database failure must not permanently stop
+                # reclamation for this application process.
+                await asyncio.sleep(15)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -643,7 +650,7 @@ def create_app(
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         decision = await active_index_store.record_tombstone(source_id, sequence)
-        if decision["decision"] == "tombstoned":
+        if decision.get("source", {}).get("tombstoned"):
             await tombstone_indexed_source(source_id)
         return {"ok": True, "decision": decision["decision"], "source_id": source_id}
 
@@ -689,7 +696,7 @@ def create_app(
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         result = await active_index_store.record_tombstone(source_id, sequence)
-        if result["decision"] == "tombstoned":
+        if result.get("source", {}).get("tombstoned"):
             await tombstone_indexed_source(source_id)
         return {"ok": True, **result}
 
