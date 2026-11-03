@@ -1115,6 +1115,8 @@ def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verifi
         journal = await store.list_generation_changes_after("generation-0002", 0, 10)
         assert [item["tombstoned"] for item in journal] == [False, False, True]
         assert await store.generation_change_high_watermark("generation-0002") == 3
+        with pytest.raises(RuntimeError, match="unacknowledged source mutations"):
+            await store.acquire_generation_write_fence("generation-0002", through_change_id=3)
         assert await store.acknowledge_generation_change("source-prebuild", 1, tombstoned=False) == 1
         assert await store.acknowledge_generation_change("source-a", 1, tombstoned=False) == 1
         assert await store.acknowledge_generation_change("source-a", 2, tombstoned=True) == 1
