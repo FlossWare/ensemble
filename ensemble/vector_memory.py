@@ -79,12 +79,13 @@ class InMemoryVectorStore:
     async def tombstone_source(self, source_id: str) -> int:
         changed = 0
         for collection in self._collections.values():
-            for item in collection.get("records", {}).values():
-                metadata = item.get("metadata", {})
-                if metadata.get("source_id") == source_id or metadata.get("url") == source_id:
-                    if not metadata.get("_tombstoned"):
-                        metadata["_tombstoned"] = True
-                        changed += 1
+            for records in [collection.get("records", {}), *collection.get("generations", {}).values()]:
+                for item in records.values():
+                    metadata = item.get("metadata", {})
+                    if metadata.get("source_id") == source_id or metadata.get("url") == source_id:
+                        if not metadata.get("_tombstoned"):
+                            metadata["_tombstoned"] = True
+                            changed += 1
         return changed
 
     async def reclaim_source(self, source_id: str) -> int:
@@ -142,6 +143,8 @@ class InMemoryVectorStore:
         generation = collection.get("generations", {}).get(generation_id, {})
         scored = []
         for record_id, item in generation.items():
+            if item.get("metadata", {}).get("_tombstoned"):
+                continue
             if len(item["embedding"]) != len(embedding):
                 continue
             score = sum(left * right for left, right in zip(item["embedding"], embedding))
