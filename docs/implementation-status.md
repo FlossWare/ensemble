@@ -75,3 +75,22 @@ Not yet implemented:
 - Authentication, partition enforcement, durable ingestion/background jobs, production observability, rate limits, backup/restore automation, and deployment/upgrade hardening.
 
 SQLite is the only persistence implementation in this repository. FTS5 provides the lexical index. Embeddings are stored as JSON and scored by exact scan in the application; this is not a scalable approximate-nearest-neighbor vector index.
+
+
+## Index generation coordination foundation
+
+Implemented:
+- Versioned SQLite migration for durable index-generation metadata and a singleton active-generation pointer.
+- Monotonically increasing active-generation epoch for compare-and-swap cutover.
+- Database constraint allowing at most one generation in the building state.
+- Independent sealed checkpoints for Index, Memory, and Knowledge.
+- Cutover guard requiring all three checkpoints sealed plus explicit acknowledged-write and tombstone verification.
+- Atomic active-pointer update and active/retired state transition in one SQLite transaction.
+- In-memory adapter with matching lifecycle and cutover rules.
+
+Not yet implemented:
+- Shadow generation storage for actual document/chunk/vector retrieval data.
+- Write fences coordinated with every ingestion and tombstone writer.
+- Reconciliation of writes accepted while the generation is being built.
+- Restart recovery for interrupted rebuilds and uncertain cutover.
+- Public rebuild operations. These remain intentionally unavailable until the data-plane guarantees are implemented.
