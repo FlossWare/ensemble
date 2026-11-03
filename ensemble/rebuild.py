@@ -347,7 +347,10 @@ class IndexGenerationBuilder:
         page = await self.index_store.list_generation_changes_after(
             generation_id, cursor, page_size,
         )
-        for change in page:
+        pending_change = next((index for index, change in enumerate(page)
+                               if not change.get("acknowledged", False)), None)
+        ready_page = page if pending_change is None else page[:pending_change]
+        for change in ready_page:
             await self.index_store.put_generation_source(generation_id, {
                 "source_id": change["source_id"],
                 "high_sequence": change["high_sequence"],
@@ -356,10 +359,11 @@ class IndexGenerationBuilder:
                 "tombstoned": change["tombstoned"],
                 "updated_at": change["created_at"],
             })
-        next_cursor = page[-1]["change_id"] if page else cursor
-        change_count += len(page)
+        next_cursor = ready_page[-1]["change_id"] if ready_page else cursor
+        change_count += len(ready_page)
         high_watermark = await self.index_store.generation_change_high_watermark(generation_id)
-        caught_up = next_cursor == high_watermark and len(page) < page_size
+        waiting_for_ack = pending_change is not None
+        caught_up = not waiting_for_ack and next_cursor == high_watermark and len(page) < page_size
         checkpoint = {
             "cursor": next_cursor,
             "change_count": change_count,
@@ -370,9 +374,10 @@ class IndexGenerationBuilder:
         )
         return {
             "generation_id": generation_id,
-            "status": "caught_up" if caught_up else "in_progress",
-            "page_count": len(page), "change_count": change_count,
-            "cursor": next_cursor, "high_watermark": high_watermark,
+            "status": "waiting_for_ack" if waiting_for_ack else ("caught_up" if caught_up else "in_progress"),
+            "page_count": len(ready_page), "pending_change_id": page[pending_change]["change_id"] if waiting_for_ack else None,
+            "change_count": change_count, "cursor": next_cursor,
+            "high_watermark": high_watermark,
         }
 
     async def fence_reconciled_generation(self, generation_id: str) -> dict[str, Any]:
