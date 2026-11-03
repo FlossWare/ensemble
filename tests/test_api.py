@@ -448,6 +448,28 @@ def test_knowledge_publication_enters_hybrid_search_and_graph(tmp_path):
         assert all(item["source_id"] != "rfc-entity" for item in after_delete["results"])
 
 
+def test_search_retrieve_rest_contract_owns_lexical_vector_retrieval(tmp_path):
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/ingest/documents", json={
+            "source_id": "search-retrieve-source",
+            "revision": 1,
+            "title": "Search retrieval contract",
+            "content": "The Search capability owns lexical and vector retrieval.",
+        })
+        assert ingested.status_code == 201
+
+        response = client.post("/api/v1/search/retrieve", json={
+            "query": "lexical vector retrieval",
+            "limit": 5,
+            "rerank": True,
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["results"][0]["source_id"] == "search-retrieve-source"
+        assert body["retrieval"] == "lexical"
+        assert body["reranked"] is False
+
+
 def test_graph_expansion_source_reads_have_document_and_index_rest_contracts(tmp_path):
     with _client(tmp_path) as client:
         ingested = client.post("/api/v1/ingest/documents", json={
