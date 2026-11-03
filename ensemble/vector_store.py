@@ -49,6 +49,7 @@ class VectorStore(Protocol):
     async def upsert(self, name: str, model: str, dimensions: int, items: list[dict[str, Any]]) -> int: ...
     async def update_metadata(self, name: str, items: list[dict[str, Any]]) -> int: ...
     async def delete_superseded(self, name: str, url: str, keep_sha256: str) -> int: ...
+    async def reclaim_source(self, source_id: str) -> int: ...
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
     async def upsert_generation(self, generation_id: str, name: str, model: str, dimensions: int, items: list[dict[str, Any]]) -> int: ...
     async def query_generation(self, generation_id: str, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
@@ -202,6 +203,24 @@ class SqliteVectorStore:
             if stale:
                 await connection.execute(delete(records).where(
                     records.c.collection_name == name, records.c.record_id.in_(stale)
+                ))
+        return len(stale)
+
+    async def reclaim_source(self, source_id: str) -> int:
+        async with self.engine.begin() as connection:
+            rows = (await connection.execute(
+                select(records.c.collection_name, records.c.record_id, records.c.metadata)
+            )).mappings().all()
+            stale = [
+                (row["collection_name"], row["record_id"])
+                for row in rows
+                if (row["metadata"] or {}).get("source_id") == source_id
+                or (row["metadata"] or {}).get("url") == source_id
+            ]
+            for collection_name, record_id in stale:
+                await connection.execute(delete(records).where(
+                    records.c.collection_name == collection_name,
+                    records.c.record_id == record_id,
                 ))
         return len(stale)
 
