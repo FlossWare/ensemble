@@ -336,8 +336,9 @@ class InMemoryIndexStore:
         if verification.get("reconciled_through_change_id") != high:
             raise RuntimeError("generation change journal has not been fully reconciled")
         now = datetime.now(timezone.utc).isoformat()
-        self._generations[self._active_generation_id]["state"] = "retired"
-        self._generations[self._active_generation_id]["updated_at"] = now
+        previous_active_generation_id = self._active_generation_id
+        self._generations[previous_active_generation_id]["state"] = "retired"
+        self._generations[previous_active_generation_id]["updated_at"] = now
         target.update(
             state="active", verification=dict(verification),
             activated_at=now, updated_at=now,
@@ -345,7 +346,7 @@ class InMemoryIndexStore:
         self._active_generation_id = generation_id
         self._generation_epoch += 1
         self._write_fence_generation = None
-        self._generation_changes[self._active_generation_id] = []
+        self._generation_changes[previous_active_generation_id] = []
         self._generation_changes[generation_id] = []
         return {
             "active_generation_id": self._active_generation_id,
