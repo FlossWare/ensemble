@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, delete, select, text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, delete, func, or_, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -52,7 +52,45 @@ class VectorStore(Protocol):
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
     async def upsert_generation(self, generation_id: str, name: str, model: str, dimensions: int, items: list[dict[str, Any]]) -> int: ...
     async def query_generation(self, generation_id: str, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
-    async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int: ...
+    async def list_records_for_source(self, name: str, source_id: str, limit: int = 10000) -> list[dict[str, Any]]:
+        if not isinstance(source_id, str) or not source_id:
+            raise ValueError("source_id is required")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        statement = select(
+            records.c.record_id, records.c.embedding,
+            records.c.document, records.c.metadata,
+        ).where(
+            records.c.collection_name == name,
+            or_(
+                func.json_extract(records.c.metadata, "$.source_id") == source_id,
+                func.json_extract(records.c.metadata, "$.url") == source_id,
+            ),
+        ).order_by(records.c.record_id).limit(limit + 1)
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(statement)).mappings().all()
+        if len(rows) > limit:
+            raise RuntimeError("source has too many vector records for one reconciliation page")
+        return [{
+            "id": row["record_id"], "embedding": row["embedding"],
+            "document": row["document"], "metadata": row["metadata"],
+        } for row in rows]
+
+    async def delete_generation_source(self, generation_id: str, source_id: str) -> int:
+        statement = delete(generation_records).where(
+            generation_records.c.generation_id == generation_id,
+            or_(
+                func.json_extract(generation_records.c.metadata, "$.source_id") == source_id,
+                func.json_extract(generation_records.c.metadata, "$.url") == source_id,
+            ),
+        )
+        async with self.engine.begin() as connection:
+            result = await connection.execute(statement)
+        return int(result.rowcount or 0)
+
+    async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:
+        return await self.delete_generation_source(generation_id, source_id)
+
     async def delete_generation(self, generation_id: str) -> int: ...
     async def record_key_upper_bound(self, name: str) -> str | None: ...
     async def list_records_after(self, name: str, cursor: str | None, upper_bound: str | None, limit: int) -> list[dict[str, Any]]: ...
