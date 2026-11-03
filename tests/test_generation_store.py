@@ -34,8 +34,9 @@ def test_generation_lifecycle_checkpoints_and_atomic_activation(tmp_path):
             )
 
         await store.transition("generation-a", "reconciling")
-        await store.transition("generation-a", "fenced")
+        await store.acquire_fence("generation-a", 21)
         await store.transition("generation-a", "verifying", applied_watermark=21)
+        await store.checkpoint("generation-a", "verification", {"verified": True}, sealed=True, watermark=21)
         await store.transition("generation-a", "ready")
         activated = await store.activate(
             "generation-a", expected_active_generation_id=None,
@@ -47,8 +48,9 @@ def test_generation_lifecycle_checkpoints_and_atomic_activation(tmp_path):
 
         await store.create("generation-b", snapshot_watermark=21)
         await store.transition("generation-b", "reconciling")
-        await store.transition("generation-b", "fenced")
+        await store.acquire_fence("generation-b", 25)
         await store.transition("generation-b", "verifying", applied_watermark=25)
+        await store.checkpoint("generation-b", "verification", {"verified": True}, sealed=True, watermark=25)
         await store.transition("generation-b", "ready")
         with pytest.raises(ValueError, match="active generation changed"):
             await store.activate(
