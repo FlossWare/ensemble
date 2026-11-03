@@ -7,7 +7,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from ensemble.api import create_app
+from ensemble.graph_store import SqliteGraphStore
 from ensemble.index_store import SqliteIndexStore
+from ensemble.knowledge_store import SqliteKnowledgeStore
+from ensemble.memory_store import SqliteMemoryStore
+from ensemble.vector_store import SqliteVectorStore
 from ensemble.partitioning import (
     RequestScope, _ensure_partition_schema, partition_database_url,
     partition_scope_middleware, reset_request_scope, set_request_scope,
@@ -163,3 +167,67 @@ def test_document_ingestion_and_retrieval_do_not_cross_partitions(tmp_path, monk
             json={"query": "beta-only", "limit": 10},
         )
         assert denied.status_code == 403
+
+
+def test_memory_knowledge_graph_and_vector_stores_are_partition_isolated(tmp_path):
+    async def exercise():
+        base = f"sqlite+aiosqlite:///{tmp_path / 'capabilities.db'}"
+        await asyncio.to_thread(_ensure_partition_schema, base, "default")
+        knowledge = SqliteKnowledgeStore(base)
+        graph = SqliteGraphStore(base)
+        vector = SqliteVectorStore(base)
+        memory = SqliteMemoryStore(base)
+        stores = [knowledge, graph, vector, memory]
+        try:
+            for store in stores:
+                await store.initialize()
+
+            token = set_request_scope(RequestScope(partition_id="workspace-a"))
+            await knowledge.put({
+                "source_id": "same-source", "revision_sequence": 1,
+                "revision_id": "alpha-revision", "title": "Alpha",
+                "content": "alpha knowledge", "origin": "test",
+                "locator": "alpha://source", "profiles": {},
+            })
+            await graph.add_node("test", {"value": "alpha"}, node_id="same-node")
+            await vector.upsert("shared-collection", "test-model", 2, [{
+                "id": "same-record", "embedding": [1.0, 0.0],
+                "document": "alpha vector", "metadata": {"partition": "alpha"},
+            }])
+            await memory.write("shared-memory", "alpha memory")
+            reset_request_scope(token)
+
+            token = set_request_scope(RequestScope(partition_id="workspace-b"))
+            assert await knowledge.get("same-source") is None
+            assert await graph.get_node("same-node") is None
+            assert await vector.existing("shared-collection", ["same-record"]) == []
+            assert await memory.read("shared-memory") is None
+            await knowledge.put({
+                "source_id": "same-source", "revision_sequence": 1,
+                "revision_id": "beta-revision", "title": "Beta",
+                "content": "beta knowledge", "origin": "test",
+                "locator": "beta://source", "profiles": {},
+            })
+            await graph.add_node("test", {"value": "beta"}, node_id="same-node")
+            await vector.upsert("shared-collection", "test-model", 2, [{
+                "id": "same-record", "embedding": [0.0, 1.0],
+                "document": "beta vector", "metadata": {"partition": "beta"},
+            }])
+            await memory.write("shared-memory", "beta memory")
+            assert (await knowledge.get("same-source"))["revision_id"] == "beta-revision"
+            assert (await graph.get_node("same-node"))["properties"]["value"] == "beta"
+            assert await vector.existing("shared-collection", ["same-record"]) == ["same-record"]
+            assert await memory.read("shared-memory") == "beta memory"
+            reset_request_scope(token)
+
+            token = set_request_scope(RequestScope(partition_id="workspace-a"))
+            assert (await knowledge.get("same-source"))["revision_id"] == "alpha-revision"
+            assert (await graph.get_node("same-node"))["properties"]["value"] == "alpha"
+            assert await vector.existing("shared-collection", ["same-record"]) == ["same-record"]
+            assert await memory.read("shared-memory") == "alpha memory"
+            reset_request_scope(token)
+        finally:
+            for store in stores:
+                await store.close()
+
+    asyncio.run(exercise())
