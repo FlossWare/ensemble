@@ -6,12 +6,13 @@ from alembic.config import Config
 from fastapi.testclient import TestClient
 
 from ensemble.api import create_app
-from ensemble.store import InMemoryDocumentStore
+from ensemble.store import InMemoryDocumentStore, SqlDocumentStore
 from ensemble.graph_memory import InMemoryGraphStore
 from ensemble.vector_memory import InMemoryVectorStore
 from ensemble.memory_store import InMemoryMemoryStore
 from ensemble.index_store import SqliteIndexStore
 from ensemble.index_memory import InMemoryIndexStore
+from ensemble.models import Document, Chunk
 from ensemble.vector_store import SqliteVectorStore
 
 
@@ -1231,5 +1232,80 @@ def test_in_memory_vector_generation_storage_isolated():
         assert (await store.query_generation("shadow", "knowledge", [0.0, 1.0], 5))[0]["document"] == "shadow"
         assert await store.delete_generation("shadow") == 1
         assert await store.query_generation("shadow", "knowledge", [0.0, 1.0], 5) == []
+
+    asyncio.run(exercise())
+
+
+def test_document_generation_storage_isolated_and_revision_aware(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'document-generations.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    store = SqlDocumentStore(database_url)
+    index_store = SqliteIndexStore(database_url)
+
+    async def exercise():
+        await store.initialize()
+        await index_store.initialize()
+        await index_store.create_generation("generation-shadow")
+
+        active = Document(
+            "same-source", 1, "Active document",
+            "The active generation contains original lexical terminology.",
+        )
+        active_chunk = Chunk(active.id, 0, active.content, [1.0, 0.0])
+        await store.save(active, [active_chunk])
+
+        shadow_v1 = Document(
+            "same-source", 1, "Shadow document",
+            "The shadow generation contains replacement terminology.",
+        )
+        shadow_v1_chunk = Chunk(shadow_v1.id, 0, shadow_v1.content, [0.0, 1.0])
+        await store.upsert_generation("generation-shadow", shadow_v1, [shadow_v1_chunk])
+
+        shadow_v2 = Document(
+            "same-source", 2, "Shadow document revision two",
+            "The newest shadow generation contains final lexical terminology.",
+        )
+        shadow_v2_chunk = Chunk(shadow_v2.id, 0, shadow_v2.content, [0.5, 0.5])
+        await store.upsert_generation("generation-shadow", shadow_v2, [shadow_v2_chunk])
+
+        active_chunks = await store.all_chunks()
+        shadow_chunks = await store.generation_all_chunks("generation-shadow")
+        assert len(active_chunks) == 1
+        assert active_chunks[0].chunk.content == active.content
+        assert len(shadow_chunks) == 1
+        assert shadow_chunks[0].document.revision == 2
+        assert shadow_chunks[0].chunk.content == shadow_v2.content
+
+        hits = await store.generation_lexical_search(
+            "generation-shadow", "final lexical terminology", 10,
+        )
+        assert len(hits) == 1
+        assert hits[0][0].document.revision == 2
+
+        assert await store.delete_generation("generation-shadow") == 2
+        assert await store.generation_all_chunks("generation-shadow") == []
+        assert len(await store.all_chunks()) == 1
+        await store.close()
+        await index_store.close()
+
+    asyncio.run(exercise())
+
+
+def test_in_memory_document_generation_storage_isolated():
+    store = InMemoryDocumentStore()
+
+    async def exercise():
+        active = Document("same-source", 1, "Active", "active source content")
+        await store.save(active, [Chunk(active.id, 0, active.content)])
+        shadow = Document("same-source", 1, "Shadow", "shadow source content")
+        await store.upsert_generation(
+            "shadow", shadow, [Chunk(shadow.id, 0, shadow.content)],
+        )
+        assert (await store.all_chunks())[0].chunk.content == "active source content"
+        assert (await store.generation_all_chunks("shadow"))[0].chunk.content == "shadow source content"
+        assert await store.delete_generation("shadow") == 1
+        assert await store.generation_all_chunks("shadow") == []
 
     asyncio.run(exercise())
