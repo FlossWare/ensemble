@@ -53,7 +53,7 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 
 ## 6. Internal capability dispatch
 
-Capability-to-capability calls use the same versioned REST contracts as external consumers, including when capabilities are co-located in the initial application. The initial implementation uses an ASGI-local HTTP transport; this preserves HTTP routing, request validation, and JSON serialization without introducing another process or listener.
+Capability-to-capability calls use the same versioned REST contracts as external consumers, including when capabilities are co-located in the initial application. The initial implementation uses an ASGI-local HTTP transport; this preserves HTTP routing, request validation, and JSON serialization without introducing another process or listener. Hybrid graph expansion also reads current source state through Index and source chunks through the Documents resource contract.
 
 Each capability group can be assigned an independent REST base URL. The initial configuration keys are:
 
@@ -103,6 +103,8 @@ When a key is unset, requests for that capability use the co-located ASGI transp
 | POST | /api/v1/index/revisions | Record a revision and return accepted/duplicate/conflict/superseded/tombstoned decision |
 | POST | /api/v1/index/tombstones | Permanently tombstone a source at a revision sequence |
 | GET | /api/v1/index/sources/{source_id}, /manifest | Read source state and bounded source manifest |
+| POST | /api/v1/index/sources/query | Read current source state for a bounded set of source identifiers |
+| POST | /api/v1/documents/chunks/query | Read chunks for a bounded set of source identifiers with document and chunk provenance |
 | GET | /api/v1/vector/health, /collections | Vector storage status and collection inventory |
 | POST | /api/v1/vector/collections/{name}/records/lookup | Find existing record IDs |
 | PUT | /api/v1/vector/collections/{name}/records | Idempotently create or replace vectors and metadata |
