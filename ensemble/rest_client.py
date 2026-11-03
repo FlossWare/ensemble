@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 
 
 class InternalRestClient:
@@ -63,7 +63,13 @@ class InternalRestClient:
                 json=json,
                 params=params,
             )
-            response.raise_for_status()
+            if not response.is_success:
+                try:
+                    payload = response.json()
+                    detail = payload.get("detail", payload) if isinstance(payload, dict) else payload
+                except ValueError:
+                    detail = response.text or "internal capability request failed"
+                raise HTTPException(status_code=response.status_code, detail=detail)
             if not response.content:
                 return None
             return response.json()
