@@ -61,7 +61,7 @@ class InMemoryIndexStore:
                     self._generation_changes.setdefault(generation["generation_id"], []).append({
                         "change_id": self._change_sequence, "generation_id": generation["generation_id"],
                         "source_id": source_id, "high_sequence": sequence, "revision_id": revision_id,
-                        "profiles": snapshot, "tombstoned": False,
+                        "profiles": snapshot, "tombstoned": False, "acknowledged": False,
                         "created_at": current["updated_at"],
                     })
         return {"decision": decision, "source": dict(current)}
@@ -93,7 +93,7 @@ class InMemoryIndexStore:
                         "change_id": self._change_sequence, "generation_id": generation["generation_id"],
                         "source_id": source_id, "high_sequence": current["high_sequence"],
                         "revision_id": current["revision_id"], "profiles": current["profiles"],
-                        "tombstoned": True, "created_at": current["updated_at"],
+                        "tombstoned": True, "acknowledged": False, "created_at": current["updated_at"],
                     })
         return {"decision": decision, "source": dict(current)}
 
@@ -201,6 +201,24 @@ class InMemoryIndexStore:
         return [dict(item) for item in self._generation_changes.get(generation_id, [])
                 if item["change_id"] > after_change_id][:limit]
 
+    async def acknowledge_generation_change(self, source_id: str, sequence: int, tombstoned: bool) -> int:
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("sequence must be a positive integer")
+        if not isinstance(tombstoned, bool):
+            raise ValueError("tombstoned must be a boolean")
+        acknowledged = 0
+        for generation in self._generations.values():
+            if generation["state"] != "building":
+                continue
+            for change in self._generation_changes.get(generation["generation_id"], []):
+                if (change["source_id"] == source_id and change["high_sequence"] == sequence
+                        and change["tombstoned"] is tombstoned and not change.get("acknowledged", False)):
+                    change["acknowledged"] = True
+                    acknowledged += 1
+        return acknowledged
+
     async def generation_change_high_watermark(self, generation_id: str) -> int:
         changes = self._generation_changes.get(generation_id, [])
         return changes[-1]["change_id"] if changes else 0
@@ -211,6 +229,12 @@ class InMemoryIndexStore:
         generation = self._generations.get(generation_id)
         if generation is None or generation["state"] != "building":
             raise RuntimeError("generation is not in building state")
+        pending = [
+            item for item in self._generation_changes.get(generation_id, [])
+            if not item.get("acknowledged", False)
+        ]
+        if pending:
+            raise RuntimeError("unacknowledged source mutations remain; do not fence generation writes")
         high = await self.generation_change_high_watermark(generation_id)
         if high != through_change_id:
             raise RuntimeError("generation change journal advanced; reconcile before acquiring the write fence")
