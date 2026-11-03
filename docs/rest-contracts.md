@@ -61,8 +61,10 @@ Each capability group can be assigned an independent REST base URL. The initial 
 - `ENSEMBLE_MEMORY_REST_URL`
 - `ENSEMBLE_INTENT_REST_URL`
 - `ENSEMBLE_ENTITIES_REST_URL`
+- `ENSEMBLE_GRAPH_REST_URL`
+- `ENSEMBLE_RERANKING_REST_URL`
 
-When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. This is an incremental implementation: only call paths explicitly migrated to the internal REST client satisfy the boundary. Direct store/service calls elsewhere remain migration work and must not be described as REST-composed.
+When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. Context Assembly dispatches to Search, Memory, Intent, and Entity REST endpoints. Hybrid Search dispatches intent classification, entity extraction, Graph query/traversal, reranking, and its search-ledger write through their REST contracts. The core retrieval engine and graph-expanded source material still have direct persistence/service dependencies; those are explicit remaining migration work. Only call paths explicitly migrated to the internal REST client satisfy the boundary.
 
 ## 7. Initial implemented endpoints
 
