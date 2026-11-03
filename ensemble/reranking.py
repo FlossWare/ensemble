@@ -148,14 +148,70 @@ class LocalRankingProvider:
 
 
 class RerankingDecorator:
-    """Decorate any async retriever returning a search-result status mapping.
-
-    The wrapped retriever remains authoritative for candidate identity, provenance,
-    channel diagnostics, and baseline order. Ranking only changes candidate order.
-    """
+    """Decorate any async retriever returning a search-result status mapping."""
 
     def __init__(self, provider: RankingProvider | None):
         self.provider = provider
+
+    async def apply(self, query: str, result: dict, *, enabled: bool) -> dict:
+        result["ranking"] = {
+            "status": "not_requested",
+            "provider": None,
+            "candidate_count": 0,
+        }
+        result["reranked"] = False
+        if not enabled or not result.get("results"):
+            return result
+
+        provider = self.provider
+        candidates = result["results"][:min(MAX_DOCUMENTS, len(result["results"]))]
+        result["ranking"]["candidate_count"] = len(candidates)
+        if provider is None or not provider.available:
+            result["ranking"].update({
+                "status": "fallback",
+                "provider": None if provider is None else provider.status().get("provider"),
+                "reason": "provider_unavailable",
+            })
+            result.setdefault("degraded", []).append("reranking")
+            result["degraded"] = sorted(set(result["degraded"]))
+            result["status"] = "partial" if result.get("ok") else result.get("status", "unavailable")
+            return result
+
+        try:
+            documents = [item.text[:MAX_DOCUMENT_CHARS] for item in candidates]
+            validate_rerank_request(query, documents)
+            scores = await provider.score(query, documents)
+            if (
+                not isinstance(scores, list)
+                or len(scores) != len(candidates)
+                or any(isinstance(score, bool) or not math.isfinite(float(score)) for score in scores)
+            ):
+                raise RuntimeError("ranking provider returned invalid or misaligned scores")
+            scored = [
+                candidate.model_copy(update={"rerank_score": float(score)})
+                for candidate, score in zip(candidates, scores)
+            ]
+            result["results"] = [
+                item for _, item in sorted(
+                    enumerate(scored), key=lambda pair: (-pair[1].rerank_score, pair[0])
+                )
+            ] + result["results"][len(candidates):]
+            result["ranking"].update({
+                "status": "reranked",
+                "provider": provider.status().get("provider", "unknown"),
+            })
+            result["reranked"] = True
+        except Exception as exc:
+            result["ranking"].update({
+                "status": "fallback",
+                "provider": provider.status().get("provider", "unknown"),
+                "reason": "provider_error",
+                "error": type(exc).__name__,
+            })
+            result.setdefault("degraded", []).append("reranking")
+            result["degraded"] = sorted(set(result["degraded"]))
+            result["status"] = "partial" if result.get("ok") else result.get("status", "unavailable")
+        return result
 
     def __call__(self, retrieve):
         from functools import wraps
@@ -167,66 +223,9 @@ class RerankingDecorator:
                 os.getenv("ENSEMBLE_RERANK_ENABLED", "0").strip() == "1"
                 if requested is None else bool(requested)
             )
-            # The base retriever owns retrieval and RRF. It must not rerank itself.
             call_kwargs = dict(kwargs)
             call_kwargs["rerank"] = False
             result = await retrieve(query, *args, **call_kwargs)
-            result["ranking"] = {
-                "status": "not_requested",
-                "provider": None,
-                "candidate_count": 0,
-            }
-            result["reranked"] = False
-            if not enabled or not result.get("results"):
-                return result
-            provider = self.provider
-            candidates = result["results"][:min(MAX_DOCUMENTS, len(result["results"]))]
-            result["ranking"]["candidate_count"] = len(candidates)
-            if provider is None or not provider.available:
-                result["ranking"].update({
-                    "status": "fallback",
-                    "provider": None if provider is None else provider.status().get("provider"),
-                    "reason": "provider_unavailable",
-                })
-                result.setdefault("degraded", []).append("reranking")
-                result["degraded"] = sorted(set(result["degraded"]))
-                result["status"] = "partial" if result.get("ok") else result.get("status", "unavailable")
-                return result
-            try:
-                validate_rerank_request(query, [item.text[:MAX_DOCUMENT_CHARS] for item in candidates])
-                scores = await provider.score(
-                    query, [item.text[:MAX_DOCUMENT_CHARS] for item in candidates]
-                )
-                if (
-                    not isinstance(scores, list)
-                    or len(scores) != len(candidates)
-                    or any(isinstance(score, bool) or not math.isfinite(float(score)) for score in scores)
-                ):
-                    raise RuntimeError("ranking provider returned invalid or misaligned scores")
-                scored = [
-                    candidate.model_copy(update={"rerank_score": float(score)})
-                    for candidate, score in zip(candidates, scores)
-                ]
-                result["results"] = [
-                    item for _, item in sorted(
-                        enumerate(scored), key=lambda pair: (-pair[1].rerank_score, pair[0])
-                    )
-                ] + result["results"][len(candidates):]
-                result["ranking"].update({
-                    "status": "reranked",
-                    "provider": provider.status().get("provider", "unknown"),
-                })
-                result["reranked"] = True
-            except Exception as exc:
-                result["ranking"].update({
-                    "status": "fallback",
-                    "provider": provider.status().get("provider", "unknown"),
-                    "reason": "provider_error",
-                    "error": type(exc).__name__,
-                })
-                result.setdefault("degraded", []).append("reranking")
-                result["degraded"] = sorted(set(result["degraded"]))
-                result["status"] = "partial" if result.get("ok") else result.get("status", "unavailable")
-            return result
+            return await self.apply(query, result, enabled=enabled)
 
         return decorated
