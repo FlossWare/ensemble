@@ -41,3 +41,16 @@ A reusable reranking decorator wraps a compatible retriever. It obtains the unde
 3. Add an opt-in HTTP provider with strict bounds and explicit health/configuration reporting.
 4. Expose ranking mode, provider identity, and fallback reason in hybrid-search diagnostics.
 5. Verify that disabled, unavailable, malformed, timeout, and successful provider cases preserve the baseline contract.
+
+## HTTP provider configuration
+
+The HTTP adapter is selected only when `ENSEMBLE_RANKING_BASE_URL` is non-empty. It POSTs to `{base_url}/rerank` with JSON containing `query`, `documents`, and optional `model`. The response contract is a JSON object with a `scores` array containing exactly one finite numeric score per input document, in input order.
+
+Supported settings:
+
+- `ENSEMBLE_RANKING_BASE_URL`: provider base URL; enables the HTTP adapter.
+- `ENSEMBLE_RANKING_MODEL`: optional provider model identifier.
+- `ENSEMBLE_RANKING_API_KEY`: optional bearer token.
+- `ENSEMBLE_RANKING_TIMEOUT`: request timeout, clamped to 1-30 seconds.
+
+When the base URL is absent, the existing local cross-encoder is used. No network request is made unless the HTTP adapter is explicitly configured. The provider health response reports configuration readiness, not a live remote health probe; actual request failures are surfaced as reranking fallback diagnostics.
