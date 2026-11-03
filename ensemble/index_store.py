@@ -162,7 +162,7 @@ class SqliteIndexStore:
         checkpoint: dict[str, Any], sealed: bool = False,
     ) -> dict[str, Any]:
         if capability not in {"index", "documents", "vectors", "memory", "knowledge", "index_reconciliation"}:
-            raise ValueError("capability must be index, memory, or knowledge")
+            raise ValueError("capability must be index, documents, vectors, memory, knowledge, or index_reconciliation")
         if not isinstance(checkpoint, dict):
             raise ValueError("checkpoint must be an object")
         import json
