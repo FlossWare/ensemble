@@ -10,7 +10,7 @@ from ensemble.store import InMemoryDocumentStore, SqlDocumentStore
 from ensemble.graph_memory import InMemoryGraphStore
 from ensemble.vector_memory import InMemoryVectorStore
 from ensemble.memory_store import InMemoryMemoryStore
-from ensemble.knowledge_store import InMemoryKnowledgeStore
+from ensemble.knowledge_store import InMemoryKnowledgeStore, SqliteKnowledgeStore
 from ensemble.index_store import SqliteIndexStore
 from ensemble.index_memory import InMemoryIndexStore
 from ensemble.models import Document, Chunk
@@ -1951,5 +1951,39 @@ def test_generation_reconciles_knowledge_updates_and_tombstones():
         assert (await builder.reconcile_knowledge_changes_page("generation-knowledge", page_size=10))["status"] == "caught_up"
         tombstone = await knowledge_store.get_generation("generation-knowledge", "knowledge-a")
         assert tombstone["tombstoned"] is True
+
+    asyncio.run(exercise())
+
+
+def test_sqlite_knowledge_generation_storage_and_tombstones(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'knowledge-generations.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    index_store = SqliteIndexStore(database_url)
+    knowledge_store = SqliteKnowledgeStore(database_url)
+
+    async def exercise():
+        await index_store.initialize()
+        await knowledge_store.initialize()
+        await index_store.create_generation("generation-knowledge-sql")
+        record = {
+            "source_id": "knowledge-sql", "revision_sequence": 1,
+            "revision_id": "revision-sql-1", "title": "Knowledge SQL",
+            "content": "durable knowledge content", "origin": "test",
+            "locator": "test://knowledge-sql", "profiles": {"chunking": "window-v1"},
+        }
+        await knowledge_store.put(record)
+        active = await knowledge_store.get("knowledge-sql")
+        await knowledge_store.upsert_generation("generation-knowledge-sql", active)
+        shadow = await knowledge_store.get_generation("generation-knowledge-sql", "knowledge-sql")
+        assert shadow["revision_sequence"] == 1
+        assert shadow["provenance"]["locator"] == "test://knowledge-sql"
+        await knowledge_store.tombstone_generation_source("generation-knowledge-sql", "knowledge-sql")
+        tombstoned = await knowledge_store.get_generation("generation-knowledge-sql", "knowledge-sql")
+        assert tombstoned["tombstoned"] is True
+        assert await knowledge_store.delete_generation("generation-knowledge-sql") == 1
+        await knowledge_store.close()
+        await index_store.close()
 
     asyncio.run(exercise())
