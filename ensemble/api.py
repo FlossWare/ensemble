@@ -1867,11 +1867,29 @@ def create_app(
             entities = extract(request.query, source="search.query")
             result["intent"] = intent
             result["entities"] = entities
-            result["results"], graph_expansion = await expand_graph_results(
-                request.query, entities, result["results"], request.limit
-            )
+            try:
+                graph_timeout = float(os.getenv("ENSEMBLE_RETRIEVAL_GRAPH_TIMEOUT", "2"))
+            except (TypeError, ValueError):
+                graph_timeout = 2.0
+            if not math.isfinite(graph_timeout):
+                graph_timeout = 2.0
+            graph_timeout = min(30.0, max(0.05, graph_timeout))
+            try:
+                result["results"], graph_expansion = await asyncio.wait_for(
+                    expand_graph_results(
+                        request.query, entities, result["results"], request.limit
+                    ),
+                    timeout=graph_timeout,
+                )
+            except TimeoutError:
+                graph_expansion = {
+                    "matched_entities": [], "candidate_sources": 0,
+                    "degraded": True, "timed_out": True,
+                }
             result["graph_expansion"] = graph_expansion
-            if graph_expansion.get("degraded"):
+            if graph_expansion.get("timed_out"):
+                result["degraded"].append("graph_timeout")
+            elif graph_expansion.get("degraded"):
                 result["degraded"].append("graph")
             elif graph_expansion.get("candidate_sources"):
                 result["retrieval"] = "hybrid"
