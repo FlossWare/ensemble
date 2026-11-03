@@ -1107,6 +1107,13 @@ def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verifi
         assert initial["epoch"] == 1
 
         await store.create_generation("generation-0002")
+        accepted = await store.record_revision("source-a", 1, "revision-a", {"chunking": "window-v1"})
+        assert accepted["decision"] == "accepted"
+        tombstoned = await store.record_tombstone("source-a", 2)
+        assert tombstoned["decision"] == "tombstoned"
+        journal = await store.list_generation_changes_after("generation-0002", 0, 10)
+        assert [item["tombstoned"] for item in journal] == [False, True]
+        assert await store.generation_change_high_watermark("generation-0002") == 2
         with pytest.raises(RuntimeError, match="must all be sealed"):
             await store.activate_generation(
                 "generation-0002", "generation-0001", 1,
@@ -1128,14 +1135,16 @@ def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verifi
                 {"acknowledged_writes_verified": True, "tombstones_verified": False},
             )
         await store.record_generation_checkpoint(
-            "generation-0002", "index_reconciliation", {"cursor": 0}, sealed=True,
+            "generation-0002", "index_reconciliation", {"cursor": 2}, sealed=True,
         )
-        await store.acquire_generation_write_fence("generation-0002", through_change_id=0)
+        await store.acquire_generation_write_fence("generation-0002", through_change_id=2)
+        fenced = await store.record_revision("source-b", 1, "revision-b", {"chunking": "window-v1"})
+        assert fenced["decision"] == "fenced"
 
         cutover = await store.activate_generation(
             "generation-0002", "generation-0001", 1,
             {"acknowledged_writes_verified": True, "tombstones_verified": True,
-             "reconciled_through_change_id": 0},
+             "reconciled_through_change_id": 2},
         )
         assert cutover == {"active_generation_id": "generation-0002", "epoch": 2}
         status = await store.generation_status()
