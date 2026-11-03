@@ -11,7 +11,7 @@ from .chunking import Chunker, chunk as chunk_text
 from .embeddings import EmbeddingProvider, MAX_TEXTS as MAX_EMBEDDING_BATCH
 from .models import Chunk, Document, DocumentIn, DocumentOut, SearchHit
 from .store import DocumentStore
-from .reranking import LocalRankingProvider, Reranker, RerankingDecorator
+from .reranking import Reranker, RerankingDecorator, configured_ranking_provider
 from .vector_store import VectorStore
 
 
@@ -123,7 +123,7 @@ class SearchService:
         self.embeddings = embeddings
         self.reranker = reranker
         self.vector_store = vector_store
-        provider = LocalRankingProvider(reranker) if reranker is not None else None
+        provider = configured_ranking_provider(reranker)
         self.search_with_status = RerankingDecorator(provider)(self._search_with_status)
 
     async def lexical_search(self, query: str, limit: int = 10) -> list[SearchHit]:
