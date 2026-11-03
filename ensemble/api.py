@@ -1930,7 +1930,7 @@ def create_app(
                     "extracted_pages": extracted["extracted_pages"],
                 },
             )
-            result, decision = await ingest_indexed_document(document, origin="pdf", locator=source_id)
+            result, decision = await ingest_indexed_document(document, origin="pdf", locator=source_id, request=request)
             return {"ok": True, "decision": decision, "document": result, "extraction": {
                 "page_count": extracted["page_count"],
                 "extracted_pages": extracted["extracted_pages"],
@@ -1956,7 +1956,7 @@ def create_app(
             raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
 
     @app.post("/api/v1/ingest/urls", status_code=201, tags=["ingestion"])
-    async def scrape_and_ingest(payload: dict[str, Any]):
+    async def scrape_and_ingest(payload: dict[str, Any], request: Request):
         try:
             preview = await preview_uri(payload.get("uri"))
             source_id = preview["final_uri"]
@@ -1972,7 +1972,7 @@ def create_app(
                 metadata={"origin": "web", "locator": source_id},
             )
             result, decision = await ingest_indexed_document(
-                document, origin="web", locator=source_id
+                document, origin="web", locator=source_id, request=request
             )
             await active_knowledge_store.put({
                 "source_id": source_id, "revision_sequence": revision, "revision_id": digest,
@@ -2010,7 +2010,7 @@ def create_app(
             return await ingest_session(payload, request)
         try:
             document_request = DocumentIn.model_validate(payload)
-            result, _ = await ingest_indexed_document(document_request, embed=False)
+            result, _ = await ingest_indexed_document(document_request, embed=False, request=request)
             return result
         except ChunkingError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
@@ -2420,7 +2420,8 @@ def create_app(
                     },
                 )
                 ingested, _ = await ingest_indexed_document(
-                    document, vector_collection="transcript_text", origin="transcript", locator=file_path
+                    document, vector_collection="transcript_text", origin="transcript", locator=file_path,
+                    request=request,
                 )
                 if embeddings.available and not ingested.embedded:
                     degraded.append("embeddings")
@@ -2451,9 +2452,9 @@ def create_app(
             raise HTTPException(status_code=503, detail="session ingestion dependency unavailable") from exc
 
     @app.post("/api/v1/ingest/documents", response_model=DocumentOut, status_code=201, tags=["ingestion"])
-    async def ingest_document(request: DocumentIn):
+    async def ingest_document(document: DocumentIn, http_request: Request):
         try:
-            result, _ = await ingest_indexed_document(request)
+            result, _ = await ingest_indexed_document(document, request=http_request)
             return result
         except HTTPException:
             raise
