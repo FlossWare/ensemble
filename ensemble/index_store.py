@@ -181,8 +181,8 @@ class SqliteIndexStore:
         self, generation_id: str, capability: str,
         checkpoint: dict[str, Any], sealed: bool = False,
     ) -> dict[str, Any]:
-        if capability not in {"index", "documents", "vectors", "memory", "knowledge", "index_reconciliation"}:
-            raise ValueError("capability must be index, documents, vectors, memory, knowledge, or index_reconciliation")
+        if capability not in {"index", "documents", "vectors", "memory", "knowledge", "index_reconciliation", "documents_reconciliation", "vectors_reconciliation", "memory_reconciliation", "knowledge_reconciliation"}:
+            raise ValueError("capability must be one of the five capability checkpoints or their reconciliation checkpoints")
         if not isinstance(checkpoint, dict):
             raise ValueError("checkpoint must be an object")
         import json
@@ -233,8 +233,8 @@ class SqliteIndexStore:
             if target is None or target["state"] != "building":
                 raise RuntimeError("target generation is not building")
             checkpoints = target["checkpoints"] or {}
-            if not all(checkpoints.get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation")):
-                raise RuntimeError("index, documents, vectors, memory, knowledge, and index reconciliation checkpoints must all be sealed")
+            if not all(checkpoints.get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation", "documents_reconciliation", "vectors_reconciliation", "memory_reconciliation", "knowledge_reconciliation")):
+                raise RuntimeError("index, documents, vectors, memory, knowledge, and all five reconciliation checkpoints must be sealed")
             fence = (await connection.execute(select(generation_write_fence).where(
                 generation_write_fence.c.singleton_id == 1,
                 generation_write_fence.c.generation_id == generation_id,
