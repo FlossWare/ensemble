@@ -99,6 +99,8 @@ class InMemoryIndexStore:
             raise ValueError("source state is incomplete")
         if not isinstance(source["source_id"], str) or not source["source_id"] or len(source["source_id"]) > 512:
             raise ValueError("source_id must contain 1-512 characters")
+        if not isinstance(source["profiles"], dict) or not isinstance(source["tombstoned"], bool):
+            raise ValueError("profiles must be an object and tombstoned must be boolean")
         sequence = source["high_sequence"]
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise ValueError("high_sequence must be a positive integer")
