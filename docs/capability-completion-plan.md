@@ -125,11 +125,22 @@ Do not ship a rebuild operation that can silently lose acknowledged writes or re
 
 ### 11. Security and deployment
 
-- Define authentication and authorization boundaries.
-- Enforce scope/partition isolation across ingestion, Memory, Knowledge, Graph, Vector, and retrieval.
-- Add rate limits and resource bounds.
-- Complete installation, upgrade, backup, restore, and recovery workflows.
-- Add production observability and actionable diagnostics.
+Implemented in the partition-isolation branch:
+
+- Bearer-token authentication with principal-to-partition allow-lists.
+- Partition selection is separate from authorization; a client-supplied partition header cannot grant access.
+- Physical SQLite database isolation across every persistent capability, with automatic migration and identity verification for named partitions.
+- Internal REST propagation of the authenticated partition and credential.
+- Local unauthenticated mode restricted to the default partition; non-loopback listeners require configured partition credentials.
+- Control Center credential entry uses tab-scoped browser session storage.
+
+Remaining before production readiness:
+
+- Broader adversarial tests for all capability paths, deletion, replay, and recovery.
+- Backup/restore and retention verification across the full partition directory.
+- Credential rotation/revocation procedures and audit trails.
+- Rate limits, resource bounds, production observability, and actionable security diagnostics.
+- Deployment and upgrade hardening for multiple named partitions.
 
 ## Deferred work
 
