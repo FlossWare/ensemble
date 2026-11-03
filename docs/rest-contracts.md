@@ -31,7 +31,11 @@
 
 ## 4. Request context
 
-The server derives caller identity and authorized data scope from trusted authentication and authorization context. Callers must not be able to grant themselves access by supplying tenant or partition identifiers in an ordinary request body.
+When partition credentials are configured, API callers authenticate with `Authorization: Bearer <token>`. The server hashes the credential with SHA-256 and resolves the principal and authorized partition allow-list from `ENSEMBLE_PARTITION_TOKENS`. Tokens are never accepted from query parameters or request bodies.
+
+`X-Ensemble-Partition` is an optional selector within the authenticated principal's allow-list. It does not grant access. If the token authorizes one partition, that partition is selected automatically; if it authorizes multiple partitions, the caller must select one. An unauthorized selection is rejected before capability execution.
+
+Without a token map, local single-partition mode is limited to the existing `default` database and remote API clients are rejected. Non-loopback listeners require a configured token map. Internal REST calls propagate the selected partition and credential.
 
 Where useful, request metadata may include a caller-generated correlation ID. Correlation metadata is not an authorization credential.
 
