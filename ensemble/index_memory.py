@@ -78,6 +78,8 @@ class InMemoryIndexStore:
             raise KeyError("unknown source")
         if current.get("purged"):
             raise RuntimeError("permanently purged sources cannot be restored")
+        if not current.get("tombstoned"):
+            raise RuntimeError("source is not soft-deleted")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= current["high_sequence"]:
             raise ValueError("restore sequence must exceed the current source sequence")
         current.update(high_sequence=sequence, tombstoned=False,
