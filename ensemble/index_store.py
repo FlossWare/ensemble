@@ -18,6 +18,7 @@ sources = Table(
     Column("revision_id", String(512), nullable=False),
     Column("profiles", JSON, nullable=False),
     Column("tombstoned", Boolean, nullable=False),
+    Column("purged", Boolean, nullable=False, server_default="0"),
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
@@ -78,7 +79,7 @@ def _as_source(row: Any) -> dict[str, Any]:
     return {
         "source_id": row["source_id"], "high_sequence": row["high_sequence"],
         "revision_id": row["revision_id"], "profiles": row["profiles"],
-        "tombstoned": bool(row["tombstoned"]), "updated_at": row["updated_at"].isoformat(),
+        "tombstoned": bool(row["tombstoned"]), "purged": bool(row["purged"]), "updated_at": row["updated_at"].isoformat(),
     }
 
 
@@ -281,6 +282,8 @@ class SqliteIndexStore:
                     profiles=profiles, tombstoned=tombstoned, updated_at=now,
                 ))
                 decision = "accepted"
+            elif row["purged"]:
+                decision = "purged"
             elif row["tombstoned"]:
                 decision = "tombstoned"
             elif tombstoned:
@@ -399,6 +402,8 @@ class SqliteIndexStore:
                     profiles={}, tombstoned=True, updated_at=now,
                 ))
                 decision = "tombstoned"
+            elif row["purged"]:
+                decision = "purged"
             elif sequence >= row["high_sequence"]:
                 await connection.execute(update(sources).where(
                     sources.c.source_id == source_id
@@ -416,6 +421,35 @@ class SqliteIndexStore:
         async with self.engine.connect() as connection:
             row = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
         return _as_source(row) if row else None
+
+    async def restore_source(self, source_id: str, sequence: int) -> dict[str, Any]:
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("sequence must be a positive integer")
+        async with self.engine.begin() as connection:
+            row = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
+            if row is None:
+                raise KeyError("unknown source")
+            if row["purged"]:
+                raise RuntimeError("permanently purged sources cannot be restored")
+            if sequence <= row["high_sequence"]:
+                raise ValueError("restore sequence must exceed the current source sequence")
+            await connection.execute(update(sources).where(
+                sources.c.source_id == source_id
+            ).values(high_sequence=sequence, tombstoned=False, updated_at=datetime.now(timezone.utc)))
+            updated = (await connection.execute(select(sources).where(
+                sources.c.source_id == source_id
+            ))).mappings().one()
+        return _as_source(updated)
+
+    async def mark_purged(self, source_id: str) -> None:
+        async with self.engine.begin() as connection:
+            changed = await connection.execute(update(sources).where(
+                sources.c.source_id == source_id,
+                sources.c.tombstoned.is_(True),
+                sources.c.purged.is_(False),
+            ).values(purged=True, updated_at=datetime.now(timezone.utc)))
+            if changed.rowcount != 1:
+                raise RuntimeError("only a soft-deleted source can be permanently purged")
 
     async def list_sources(self, limit: int) -> list[dict[str, Any]]:
         async with self.engine.connect() as connection:
