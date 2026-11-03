@@ -75,3 +75,18 @@ Not yet implemented:
 - Authentication, partition enforcement, durable ingestion/background jobs, production observability, rate limits, backup/restore automation, and deployment/upgrade hardening.
 
 SQLite is the only persistence implementation in this repository. FTS5 provides the lexical index. Embeddings are stored as JSON and scored by exact scan in the application; this is not a scalable approximate-nearest-neighbor vector index.
+
+## Partition isolation implementation
+
+Implemented in the current partition-isolation branch:
+
+- The existing configured SQLite database remains the `default` partition; named partitions are physically isolated in separate SQLite files under the persistence root's `partitions` directory.
+- Every SQLite-backed capability store resolves its connection from the authenticated request scope: Documents/Chunks, Vector, Index, Knowledge, Graph, Memory, transcript checkpoints, GA, Thompson, Learning, and generation metadata.
+- New named partition databases run the repository's Alembic migration chain on first use and record a partition identity marker. Existing default-partition data is not copied into named partitions.
+- Bearer credentials are matched by SHA-256 digest against `ENSEMBLE_PARTITION_TOKENS`. The token's partition allow-list is authoritative; `X-Ensemble-Partition` is only a selector.
+- Unauthenticated local mode is restricted to the default partition. Non-loopback listeners require a configured partition token map.
+- Internal REST calls propagate the authenticated partition and credential. The Control Center now has tab-scoped credential and partition fields.
+
+Verification on the latest successful partition CI run: **162 passed, 1 skipped** before the end-to-end ingestion/retrieval isolation test and external-listener configuration test were added. Those additions are awaiting the latest CI run.
+
+Still required before partition isolation is review-ready: broader adversarial coverage across all capability types and destructive operations; backup/restore verification for the complete partition directory; key rotation/revocation and credential administration; rate limiting and audit/diagnostic coverage; and a security review of the Control Center and remote capability trust boundary. In-memory adapters remain test-only and are rejected when partition credentials are configured.
