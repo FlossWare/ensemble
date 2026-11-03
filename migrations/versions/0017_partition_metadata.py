@@ -16,9 +16,6 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
                   server_default=sa.func.current_timestamp()),
     )
-    op.execute(
-        sa.text("INSERT INTO ensemble_partition_metadata (partition_id) VALUES ('default')")
-    )
 
 
 def downgrade() -> None:
