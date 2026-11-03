@@ -18,6 +18,7 @@ from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chu
 from .embeddings import EmbeddingProvider, MAX_BODY_BYTES as MAX_EMBED_BODY_BYTES, configured_embedding_provider, validate_embedding_request
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
+from .rest_client import InternalRestClient
 from .store import DocumentStore, InMemoryDocumentStore, SqlDocumentStore
 from .vector_store import SqliteVectorStore, VectorStore
 from .vector_memory import InMemoryVectorStore
@@ -1421,7 +1422,7 @@ def create_app(
         return {"ok": True, "ready": True, "token_estimator": "characters-divided-by-four"}
 
     @app.post("/api/v1/context/assemble", tags=["context"])
-    async def context_assemble(payload: dict[str, Any]):
+    async def context_assemble(payload: dict[str, Any], request: Request):
         query = payload.get("query")
         limit = payload.get("limit", 10)
         max_tokens = payload.get("max_tokens", 4000)
@@ -1444,22 +1445,32 @@ def create_app(
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise HTTPException(status_code=400, detail="limit must be an integer between 1 and 100")
 
+        internal = InternalRestClient(app, os.getenv("ENSEMBLE_INTERNAL_REST_URL"))
         candidates = []
         degraded = []
+        intent_result = None
+        entity_result = []
         if include_search:
             try:
-                found = await search.search_with_status(query, limit=limit, rerank=False)
-                entities = extract(query, source="context.query")
-                hits, graph = await expand_graph_results(query, entities, found["results"], limit)
+                found = await internal.request(
+                    "POST", "/api/v1/search/hybrid",
+                    request=request,
+                    json={"query": query, "limit": limit, "rerank": False},
+                )
                 degraded.extend(found.get("degraded", []))
+                graph = found.get("graph_expansion", {})
                 if graph.get("degraded"):
                     degraded.append("graph")
-                for hit in hits:
+                for hit in found.get("results", []):
                     candidates.append({
-                        "source": "ensemble-retrieval", "title": hit.title,
-                        "content": hit.text, "score": hit.fusion_score,
-                        "source_id": hit.source_id, "revision": hit.revision,
-                        "chunk_id": str(hit.chunk_id), "graph_score": hit.graph_score,
+                        "source": "ensemble-retrieval",
+                        "title": hit.get("title", ""),
+                        "content": hit.get("text", ""),
+                        "score": hit.get("fusion_score", 0.0),
+                        "source_id": hit.get("source_id"),
+                        "revision": hit.get("revision"),
+                        "chunk_id": hit.get("chunk_id"),
+                        "graph_score": hit.get("graph_score", 0.0),
                     })
             except Exception:
                 degraded.append("search")
@@ -1467,36 +1478,82 @@ def create_app(
         if include_memory:
             try:
                 if memory_name is not None:
-                    recalled = await active_memory_store.retrieve(
-                        memory_name, execution_context, limit
+                    recalled = await internal.request(
+                        "POST", "/api/v1/memory/recall",
+                        request=request,
+                        json={
+                            "name": memory_name,
+                            "context": execution_context,
+                            "limit": limit,
+                        },
                     )
-                    priorities = {"parent": 100, "ancestor": 90, "same-request": 70, "related-lineage": 60}
-                    for item in recalled:
+                    priorities = {
+                        "parent": 100, "ancestor": 90,
+                        "same-request": 70, "related-lineage": 60,
+                    }
+                    for item in recalled.get("results", []):
                         candidates.append({
                             "source": "memory-recall",
                             "title": item.get("relation", "related execution"),
-                            "content": json.dumps(item.get("record", {}), ensure_ascii=False, sort_keys=True),
+                            "content": json.dumps(
+                                item.get("record", {}), ensure_ascii=False, sort_keys=True
+                            ),
                             "score": priorities.get(item.get("relation"), 0),
                             "relation": item.get("relation"),
                             "execution_context": item.get("execution_context"),
                         })
-                for item in await active_memory_store.search_semantic(query, top_k=limit):
+
+                semantic = await internal.request(
+                    "POST", "/api/v1/memory/search/semantic",
+                    request=request,
+                    json={"query": query, "top_k": limit},
+                )
+                for item in semantic.get("results", []):
                     file_name, section = item.get("file"), item.get("section", "full")
                     content = item.get("content", "")
                     if isinstance(file_name, str):
-                        chunks = await active_memory_store.chunk(file_name, size=2000)
-                        selected = next((part for part in chunks if part.get("header") == section), None)
+                        chunked = await internal.request(
+                            "POST", "/api/v1/memory/chunking",
+                            request=request,
+                            json={"name": file_name, "size": 2000},
+                        )
+                        selected = next(
+                            (part for part in chunked.get("chunks", [])
+                             if part.get("header") == section),
+                            None,
+                        )
                         if selected:
                             content = selected.get("content", content)
                     candidates.append({
-                        "source": "memory-document", "title": f"{file_name} · {section}",
-                        "content": content, "score": float(item.get("score", 0.0)),
-                        "file": file_name, "section": section,
+                        "source": "memory-document",
+                        "title": f"{file_name} · {section}",
+                        "content": content,
+                        "score": float(item.get("score", 0.0)),
+                        "file": file_name,
+                        "section": section,
                     })
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 400:
+                    raise HTTPException(status_code=400, detail="memory request was invalid") from exc
+                degraded.append("memory")
             except Exception:
                 degraded.append("memory")
+
+        try:
+            intent_result = await internal.request(
+                "POST", "/api/v1/intent/classify",
+                request=request, json={"text": query},
+            )
+        except Exception:
+            degraded.append("intent")
+
+        try:
+            entity_result = (await internal.request(
+                "POST", "/api/v1/entities/extract",
+                request=request, json={"text": query, "source": "context.query"},
+            )).get("entities", [])
+        except Exception:
+            degraded.append("entities")
 
         candidates.sort(key=lambda item: -float(item.get("score", 0.0)))
         try:
@@ -1505,7 +1562,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "ok": True, **assembled, "query": query,
-            "intent": classify(query), "entities": extract(query, source="context.query"),
+            "intent": intent_result, "entities": entity_result,
             "degraded": sorted(set(degraded)),
         }
 
