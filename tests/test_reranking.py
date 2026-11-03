@@ -197,3 +197,33 @@ def test_http_ranking_provider_rejects_non_finite_scores():
     )
     with pytest.raises(ValueError, match="finite"):
         asyncio.run(provider.score("query", ["first"]))
+
+
+
+def test_hybrid_search_applies_ranking_decorator_after_retrieval():
+    from ensemble.embeddings import DisabledEmbeddingProvider
+
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        reranker=StubReranker(),
+        embedding_provider=DisabledEmbeddingProvider(),
+    )
+    with TestClient(app) as client:
+        for source_id, content in (
+            ("short-candidate", "retrieval relevance"),
+            ("long-candidate", "retrieval relevance with additional context about ranking quality and candidate selection"),
+        ):
+            response = client.post("/api/v1/ingest/documents", json={
+                "source_id": source_id, "revision": 1,
+                "title": source_id, "content": content,
+            })
+            assert response.status_code == 201
+
+        response = client.post("/api/v1/search/hybrid", json={
+            "query": "retrieval relevance", "limit": 10, "rerank": True,
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ranking"]["status"] == "reranked"
+        assert body["ranking"]["provider"] == "local-cross-encoder"
+        assert body["reranked"] is True
