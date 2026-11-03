@@ -83,9 +83,12 @@ class InMemoryVectorStore:
             stale = [record_id for record_id, item in records.items()
                      if item.get("metadata", {}).get("source_id") == source_id
                      or item.get("metadata", {}).get("url") == source_id]
-            for record_id in stale:
+            selected = stale[:500]
+            for record_id in selected:
                 del records[record_id]
-            removed += len(stale)
+            removed += len(selected)
+            if len(stale) > 500:
+                return 501
         return removed
 
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]:
