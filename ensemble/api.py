@@ -646,6 +646,7 @@ def create_app(
             graph_entities = await index_document_entities(
                 source_id, sequence, content,
                 origin=provenance["origin"], locator=provenance["locator"],
+                request=request,
             )
         except Exception:
             graph_entities = 0
