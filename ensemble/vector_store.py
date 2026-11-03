@@ -76,9 +76,10 @@ class VectorStore(Protocol):
             "document": row["document"], "metadata": row["metadata"],
         } for row in rows]
 
-    async def delete_generation_source(self, generation_id: str, source_id: str) -> int:
+    async def delete_generation_source(self, generation_id: str, source_id: str, name: str | None = None) -> int:
         statement = delete(generation_records).where(
             generation_records.c.generation_id == generation_id,
+            *([generation_records.c.collection_name == name] if name is not None else []),
             or_(
                 func.json_extract(generation_records.c.metadata, "$.source_id") == source_id,
                 func.json_extract(generation_records.c.metadata, "$.url") == source_id,
