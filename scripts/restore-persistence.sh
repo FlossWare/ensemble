@@ -11,7 +11,7 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
 fi
 
 ARCHIVE="$(realpath -e "$1")"
-ROOT="$(realpath -m "${2:-/var/lib/ensemble}")"
+ROOT="$(realpath -m "${2:-${ENSEMBLE_PERSISTENCE_ROOT:-/var/lib/ensemble}}")"
 PARENT="$(dirname "$ROOT")"
 NAME="$(basename "$ROOT")"
 SERVICE="${ENSEMBLE_SERVICE_NAME:-ensemble}"
