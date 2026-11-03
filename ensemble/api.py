@@ -1445,7 +1445,12 @@ def create_app(
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise HTTPException(status_code=400, detail="limit must be an integer between 1 and 100")
 
-        internal = InternalRestClient(app, os.getenv("ENSEMBLE_INTERNAL_REST_URL"))
+        internal = InternalRestClient(app, {
+            "search": os.getenv("ENSEMBLE_SEARCH_REST_URL"),
+            "memory": os.getenv("ENSEMBLE_MEMORY_REST_URL"),
+            "intent": os.getenv("ENSEMBLE_INTENT_REST_URL"),
+            "entities": os.getenv("ENSEMBLE_ENTITIES_REST_URL"),
+        })
         candidates = []
         degraded = []
         intent_result = None
