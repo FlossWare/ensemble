@@ -56,7 +56,7 @@ class InMemoryIndexStore:
             decision = "superseded"
         if decision == "accepted":
             for generation in self._generations.values():
-                if generation["state"] == "building":
+                if generation["state"] in {"active", "building"}:
                     self._change_sequence += 1
                     self._generation_changes.setdefault(generation["generation_id"], []).append({
                         "change_id": self._change_sequence, "generation_id": generation["generation_id"],
@@ -87,7 +87,7 @@ class InMemoryIndexStore:
             decision = "superseded"
         if decision == "tombstoned":
             for generation in self._generations.values():
-                if generation["state"] == "building":
+                if generation["state"] in {"active", "building"}:
                     self._change_sequence += 1
                     self._generation_changes.setdefault(generation["generation_id"], []).append({
                         "change_id": self._change_sequence, "generation_id": generation["generation_id"],
@@ -210,13 +210,18 @@ class InMemoryIndexStore:
             raise ValueError("tombstoned must be a boolean")
         acknowledged = 0
         for generation in self._generations.values():
-            if generation["state"] != "building":
-                continue
-            for change in self._generation_changes.get(generation["generation_id"], []):
-                if (change["source_id"] == source_id and change["high_sequence"] == sequence
-                        and change["tombstoned"] is tombstoned and not change.get("acknowledged", False)):
-                    change["acknowledged"] = True
-                    acknowledged += 1
+            if generation["state"] == "building":
+                for change in self._generation_changes.get(generation["generation_id"], []):
+                    if (change["source_id"] == source_id and change["high_sequence"] == sequence
+                            and change["tombstoned"] is tombstoned and not change.get("acknowledged", False)):
+                        change["acknowledged"] = True
+                        acknowledged += 1
+            elif generation["state"] == "active":
+                self._generation_changes[generation["generation_id"]] = [
+                    change for change in self._generation_changes.get(generation["generation_id"], [])
+                    if not (change["source_id"] == source_id and change["high_sequence"] == sequence
+                            and change["tombstoned"] is tombstoned)
+                ]
         return acknowledged
 
     async def generation_change_high_watermark(self, generation_id: str) -> int:
@@ -274,7 +279,16 @@ class InMemoryIndexStore:
             "created_at": now, "updated_at": now, "activated_at": None,
         }
         self._generations[generation_id] = value
+        pending = [
+            dict(item) for item in self._generation_changes.get(self._active_generation_id, [])
+            if not item.get("acknowledged", False)
+        ]
         self._generation_changes[generation_id] = []
+        for item in pending:
+            self._change_sequence += 1
+            copied = dict(item)
+            copied.update(change_id=self._change_sequence, generation_id=generation_id, acknowledged=False)
+            self._generation_changes[generation_id].append(copied)
         return dict(value)
 
     async def record_generation_checkpoint(
@@ -331,6 +345,8 @@ class InMemoryIndexStore:
         self._active_generation_id = generation_id
         self._generation_epoch += 1
         self._write_fence_generation = None
+        self._generation_changes[self._active_generation_id] = []
+        self._generation_changes[generation_id] = []
         return {
             "active_generation_id": self._active_generation_id,
             "epoch": self._generation_epoch,
