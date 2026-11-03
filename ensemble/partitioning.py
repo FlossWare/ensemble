@@ -16,7 +16,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from sqlalchemy.engine import URL, make_url
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 
@@ -171,18 +171,10 @@ def _ensure_partition_schema(database_url: str, partition_id: str) -> None:
     with _MIGRATION_LOCKS_GUARD:
         lock = _MIGRATION_LOCKS.setdefault(key, threading.Lock())
     with lock:
-        connection = sqlite3.connect(key)
-        try:
-            exists = connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='alembic_version'"
-            ).fetchone()
-        finally:
-            connection.close()
-        if not exists:
-            ini = Path(__file__).resolve().parents[1] / "alembic.ini"
-            config = Config(str(ini))
-            config.attributes["database_url"] = database_url
-            command.upgrade(config, "head")
+        ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+        config = Config(str(ini))
+        config.attributes["database_url"] = database_url
+        command.upgrade(config, "head")
         connection = sqlite3.connect(key)
         try:
             row = connection.execute(
@@ -191,6 +183,12 @@ def _ensure_partition_schema(database_url: str, partition_id: str) -> None:
             if row is None:
                 connection.execute(
                     "INSERT INTO ensemble_partition_metadata(partition_id) VALUES (?)",
+                    (partition_id,),
+                )
+                connection.commit()
+            elif row[0] == "default" and partition_id != "default":
+                connection.execute(
+                    "UPDATE ensemble_partition_metadata SET partition_id = ?",
                     (partition_id,),
                 )
                 connection.commit()
