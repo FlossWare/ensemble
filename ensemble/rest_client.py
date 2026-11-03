@@ -39,7 +39,7 @@ class InternalRestClient:
         }
         if "authorization" not in headers and scope.authorization:
             headers["authorization"] = scope.authorization
-        if "x-ensemble-partition" not in headers and scope.partition_id != "default":
+        if "x-ensemble-partition" not in headers and (scope.authorization or scope.partition_id != "default"):
             headers["x-ensemble-partition"] = scope.partition_id
         if "x-correlation-id" not in headers and scope.correlation_id:
             headers["x-correlation-id"] = scope.correlation_id
