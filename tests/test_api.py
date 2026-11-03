@@ -1161,3 +1161,52 @@ def test_ingestion_routes_use_only_the_canonical_namespace():
 
     assert expected <= paths.keys()
     assert obsolete.isdisjoint(paths)
+
+
+def test_tombstone_cleanup_retries_failed_vector_collection_without_blocking_others():
+    class FlakyVectorStore(InMemoryVectorStore):
+        def __init__(self):
+            super().__init__()
+            self.fail_once = {"knowledge_chunks": True}
+
+        async def delete_superseded(self, name, url, keep_sha256):
+            if self.fail_once.get(name):
+                self.fail_once[name] = False
+                raise RuntimeError("transient vector cleanup failure")
+            return await super().delete_superseded(name, url, keep_sha256)
+
+    vector_store = FlakyVectorStore()
+    for collection in ("knowledge_chunks", "transcript_text"):
+        asyncio.run(vector_store.upsert(collection, "test-model", 2, [{
+            "id": collection + "-record",
+            "embedding": [1.0, 0.0],
+            "document": "source content",
+            "metadata": {
+                "url": "retryable-source",
+                "source_id": "retryable-source",
+                "content_sha256": "a" * 64,
+            },
+        }]))
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        vector_store=vector_store,
+        index_store=InMemoryIndexStore(),
+    )
+
+    with TestClient(app) as client:
+        payload = {"source_id": "retryable-source", "revision_sequence": 1}
+        first = client.post("/api/v1/index/tombstones", json=payload)
+        assert first.status_code == 200
+        cleanup = first.json()["cleanup"]
+        assert cleanup["status"] == "partial"
+        assert cleanup["retryable"] is True
+        assert any(item["target"] == "vector:knowledge_chunks" for item in cleanup["failed"])
+        # The other collection was still cleaned despite the first failure.
+        counts = {item["name"]: item["count"] for item in asyncio.run(vector_store.list_collections())}
+        assert counts == {"knowledge_chunks": 1, "transcript_text": 0}
+
+        retry = client.post("/api/v1/index/tombstones", json=payload)
+        assert retry.status_code == 200
+        assert retry.json()["cleanup"]["status"] == "complete"
+        counts = {item["name"]: item["count"] for item in asyncio.run(vector_store.list_collections())}
+        assert counts == {"knowledge_chunks": 0, "transcript_text": 0}
