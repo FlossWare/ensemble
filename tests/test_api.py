@@ -12,6 +12,7 @@ from ensemble.vector_memory import InMemoryVectorStore
 from ensemble.memory_store import InMemoryMemoryStore
 from ensemble.index_store import SqliteIndexStore
 from ensemble.index_memory import InMemoryIndexStore
+from ensemble.vector_store import SqliteVectorStore
 
 
 def _client(tmp_path):
@@ -1162,5 +1163,73 @@ def test_in_memory_generation_registry_enforces_single_build_and_cutover():
         )
         assert result["active_generation_id"] == "generation-0002"
         assert result["epoch"] == 2
+
+    asyncio.run(exercise())
+
+
+def test_vector_generation_storage_isolated_from_other_generations(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'vector-generations.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    index_store = SqliteIndexStore(database_url)
+    vector_store = SqliteVectorStore(database_url)
+
+    async def exercise():
+        await index_store.initialize()
+        await vector_store.initialize()
+        await index_store.create_generation("generation-shadow")
+        first = [{
+            "id": "same-record",
+            "embedding": [1.0, 0.0],
+            "document": "active generation content",
+            "metadata": {"revision": 1},
+        }]
+        shadow = [{
+            "id": "same-record",
+            "embedding": [0.0, 1.0],
+            "document": "shadow generation content",
+            "metadata": {"revision": 2},
+        }]
+        await vector_store.upsert("knowledge", "test-model", 2, first)
+        await vector_store.upsert_generation(
+            "generation-shadow", "knowledge", "test-model", 2, shadow,
+        )
+
+        active_results = await vector_store.query("knowledge", [1.0, 0.0], 5)
+        shadow_results = await vector_store.query_generation(
+            "generation-shadow", "knowledge", [0.0, 1.0], 5,
+        )
+        assert [item["document"] for item in active_results] == ["active generation content"]
+        assert [item["document"] for item in shadow_results] == ["shadow generation content"]
+        assert await vector_store.delete_generation("generation-shadow") == 1
+        assert await vector_store.query_generation(
+            "generation-shadow", "knowledge", [0.0, 1.0], 5,
+        ) == []
+        assert [item["document"] for item in await vector_store.query(
+            "knowledge", [1.0, 0.0], 5,
+        )] == ["active generation content"]
+        await vector_store.close()
+        await index_store.close()
+
+    asyncio.run(exercise())
+
+
+def test_in_memory_vector_generation_storage_isolated():
+    store = InMemoryVectorStore()
+
+    async def exercise():
+        await store.upsert("knowledge", "test-model", 2, [{
+            "id": "shared", "embedding": [1.0, 0.0],
+            "document": "active", "metadata": {},
+        }])
+        await store.upsert_generation("shadow", "knowledge", "test-model", 2, [{
+            "id": "shared", "embedding": [0.0, 1.0],
+            "document": "shadow", "metadata": {},
+        }])
+        assert (await store.query("knowledge", [1.0, 0.0], 5))[0]["document"] == "active"
+        assert (await store.query_generation("shadow", "knowledge", [0.0, 1.0], 5))[0]["document"] == "shadow"
+        assert await store.delete_generation("shadow") == 1
+        assert await store.query_generation("shadow", "knowledge", [0.0, 1.0], 5) == []
 
     asyncio.run(exercise())
