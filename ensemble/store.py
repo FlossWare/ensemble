@@ -111,11 +111,6 @@ class DocumentStore(Protocol):
 class InMemoryDocumentStore:
     """Non-durable adapter retained for isolated tests and development."""
 
-    def __init__(self):
-        self._documents: dict[tuple[str, int], Document] = {}
-        self._chunks: dict[UUID, list[Chunk]] = {}
-        self._tombstoned: set[str] = set()
-
     async def initialize(self) -> None:
         return None
 
