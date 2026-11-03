@@ -52,6 +52,7 @@ class VectorStore(Protocol):
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
     async def upsert_generation(self, generation_id: str, name: str, model: str, dimensions: int, items: list[dict[str, Any]]) -> int: ...
     async def query_generation(self, generation_id: str, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
+    async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int: ...
     async def delete_generation(self, generation_id: str) -> int: ...
 
 
@@ -251,6 +252,29 @@ class SqliteVectorStore:
             })
         scored.sort(key=lambda item: (-item["score"], item["id"]))
         return scored[:top_k]
+
+    async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:
+        async with self.engine.begin() as connection:
+            rows = (await connection.execute(
+                select(
+                    generation_records.c.collection_name,
+                    generation_records.c.record_id,
+                    generation_records.c.metadata,
+                ).where(generation_records.c.generation_id == generation_id)
+            )).mappings().all()
+            matches = [
+                (row["collection_name"], row["record_id"])
+                for row in rows
+                if row["metadata"].get("source_id") == source_id
+                or row["metadata"].get("url") == source_id
+            ]
+            for collection_name, record_id in matches:
+                await connection.execute(delete(generation_records).where(
+                    generation_records.c.generation_id == generation_id,
+                    generation_records.c.collection_name == collection_name,
+                    generation_records.c.record_id == record_id,
+                ))
+        return len(matches)
 
     async def delete_generation(self, generation_id: str) -> int:
         async with self.engine.begin() as connection:
