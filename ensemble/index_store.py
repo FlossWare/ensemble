@@ -62,6 +62,7 @@ generation_changes = Table(
     Column("revision_id", String(512), nullable=False),
     Column("profiles", JSON, nullable=False),
     Column("tombstoned", Boolean, nullable=False),
+    Column("acknowledged", Boolean, nullable=False, default=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 generation_write_fence = Table(
@@ -93,6 +94,7 @@ class IndexStore(Protocol):
     async def generation_change_high_watermark(self, generation_id: str) -> int: ...
     async def acquire_generation_write_fence(self, generation_id: str, through_change_id: int) -> dict[str, Any]: ...
     async def release_generation_write_fence(self, generation_id: str) -> bool: ...
+    async def acknowledge_generation_change(self, source_id: str, sequence: int, tombstoned: bool) -> int: ...
 
 
 def _as_source(row: Any) -> dict[str, Any]:
@@ -415,6 +417,25 @@ class SqliteIndexStore:
             )).mappings().all()
         return [dict(row) for row in rows]
 
+    async def acknowledge_generation_change(self, source_id: str, sequence: int, tombstoned: bool) -> int:
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("sequence must be a positive integer")
+        if not isinstance(tombstoned, bool):
+            raise ValueError("tombstoned must be a boolean")
+        async with self.engine.begin() as connection:
+            result = await connection.execute(generation_changes.update().where(
+                generation_changes.c.generation_id.in_(
+                    select(generations.c.generation_id).where(generations.c.state == "building")
+                ),
+                generation_changes.c.source_id == source_id,
+                generation_changes.c.high_sequence == sequence,
+                generation_changes.c.tombstoned.is_(tombstoned),
+                generation_changes.c.acknowledged.is_(False),
+            ).values(acknowledged=True))
+        return int(result.rowcount or 0)
+
     async def generation_change_high_watermark(self, generation_id: str) -> int:
         from sqlalchemy import func
         async with self.engine.connect() as connection:
@@ -439,6 +460,12 @@ class SqliteIndexStore:
             if existing and existing["generation_id"] != generation_id:
                 raise RuntimeError("another generation owns the Index write fence")
             from sqlalchemy import func
+            pending = int(await connection.scalar(select(func.count()).select_from(generation_changes).where(
+                generation_changes.c.generation_id == generation_id,
+                generation_changes.c.acknowledged.is_(False),
+            )) or 0)
+            if pending:
+                raise RuntimeError("unacknowledged source mutations remain; do not fence generation writes")
             high = int(await connection.scalar(select(func.max(generation_changes.c.change_id)).where(
                 generation_changes.c.generation_id == generation_id
             )) or 0)
@@ -495,7 +522,7 @@ class SqliteIndexStore:
                 if building:
                     await connection.execute(generation_changes.insert().values(
                         generation_id=building, source_id=source_id, high_sequence=sequence,
-                        revision_id=revision_id, profiles=profile_snapshot, tombstoned=False, created_at=now,
+                        revision_id=revision_id, profiles=profile_snapshot, tombstoned=False, acknowledged=False, created_at=now,
                     ))
         return {"decision": decision, "source": _as_source(current)}
 
@@ -530,7 +557,7 @@ class SqliteIndexStore:
                     await connection.execute(generation_changes.insert().values(
                         generation_id=building, source_id=source_id,
                         high_sequence=current["high_sequence"], revision_id=current["revision_id"],
-                        profiles=current["profiles"], tombstoned=True, created_at=now,
+                        profiles=current["profiles"], tombstoned=True, acknowledged=False, created_at=now,
                     ))
         return {"decision": decision, "source": _as_source(current)}
 
