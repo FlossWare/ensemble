@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import math
+import json
+import httpx
 import threading
 from pathlib import Path
 from typing import Any, Protocol
@@ -229,3 +231,90 @@ class RerankingDecorator:
             return await self.apply(query, result, enabled=enabled)
 
         return decorated
+
+
+MAX_RANKING_REQUEST_BYTES = 256 * 1024
+MAX_RANKING_RESPONSE_BYTES = 16 * 1024
+
+
+class HttpRankingProvider:
+    """Opt-in adapter for a remote ranking endpoint returning ordered scores."""
+
+    def __init__(
+        self, base_url: str, *, model: str = "", api_key: str = "",
+        timeout: float = 10.0, transport: Any | None = None,
+    ):
+        self.url = base_url.rstrip("/") + "/rerank"
+        self.model = model
+        self.api_key = api_key
+        self.timeout = max(1.0, min(float(timeout), 30.0))
+        self.transport = transport
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "ok": True, "ready": True, "provider": "http",
+            "model": self.model or None, "runtime": "remote-http",
+            "endpoint": self.url,
+        }
+
+    async def score(self, query: str, documents: list[str]) -> list[float]:
+        validate_rerank_request(query, documents)
+        payload: dict[str, Any] = {"query": query, "documents": documents}
+        if self.model:
+            payload["model"] = self.model
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        if len(body) > MAX_RANKING_REQUEST_BYTES:
+            raise ValueError("ranking request exceeds 256 KiB")
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        timeout = httpx.Timeout(
+            connect=min(2.0, self.timeout), read=self.timeout,
+            write=min(5.0, self.timeout), pool=min(2.0, self.timeout),
+        )
+        async with httpx.AsyncClient(
+            timeout=timeout, transport=self.transport
+        ) as client:
+            async with client.stream(
+                "POST", self.url, headers=headers, content=body
+            ) as response:
+                response.raise_for_status()
+                chunks, received = [], 0
+                async for chunk in response.aiter_bytes():
+                    received += len(chunk)
+                    if received > MAX_RANKING_RESPONSE_BYTES:
+                        raise ValueError("ranking response exceeds 16 KiB")
+                    chunks.append(chunk)
+        try:
+            result = json.loads(b"".join(chunks))
+            scores = result["scores"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ValueError("ranking response must contain a scores array") from exc
+        if not isinstance(scores, list) or len(scores) != len(documents):
+            raise ValueError("ranking response score count does not match candidate count")
+        normalized = []
+        for score in scores:
+            if isinstance(score, bool):
+                raise ValueError("ranking scores must be finite numbers")
+            value = float(score)
+            if not math.isfinite(value):
+                raise ValueError("ranking scores must be finite numbers")
+            normalized.append(value)
+        return normalized
+
+
+def configured_ranking_provider(reranker: Reranker | None) -> RankingProvider | None:
+    """Prefer an explicitly configured HTTP provider; otherwise adapt the local model."""
+    base_url = os.getenv("ENSEMBLE_RANKING_BASE_URL", "").strip()
+    if base_url:
+        return HttpRankingProvider(
+            base_url,
+            model=os.getenv("ENSEMBLE_RANKING_MODEL", "").strip(),
+            api_key=os.getenv("ENSEMBLE_RANKING_API_KEY", ""),
+            timeout=float(os.getenv("ENSEMBLE_RANKING_TIMEOUT", "10")),
+        )
+    return LocalRankingProvider(reranker) if reranker is not None else None
