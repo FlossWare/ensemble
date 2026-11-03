@@ -456,6 +456,7 @@ def create_app(
         # Index state is authoritative for every query surface.
         await document_store.tombstone_source(source_id)
         await active_knowledge_store.tombstone(source_id)
+        await active_vector_store.tombstone_source(source_id)
 
     app.state.store = document_store
     app.state.embedding_provider = embeddings
@@ -665,9 +666,10 @@ def create_app(
         if not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
         try:
-            source = await active_index_store.restore_source(source_id, sequence)
             await document_store.restore_source(source_id)
             await active_knowledge_store.restore(source_id)
+            await active_vector_store.restore_source(source_id)
+            source = await active_index_store.restore_source(source_id, sequence)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="unknown source") from exc
         except (ValueError, RuntimeError) as exc:
