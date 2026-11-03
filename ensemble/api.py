@@ -452,12 +452,10 @@ def create_app(
     async def tombstone_indexed_source(source_id: str) -> None:
         # Visibility changes synchronously; physical deletion is durable,
         # bounded, retryable background work.
+        # Soft deletion is reversible: retain all materialized data.
+        # Index state is authoritative for every query surface.
         await document_store.tombstone_source(source_id)
         await active_knowledge_store.tombstone(source_id)
-        # Raw Vector queries must hide the record immediately too; physical
-        # row removal remains deferred to the reclamation worker.
-        await active_vector_store.tombstone_source(source_id)
-        await active_reclamation_store.enqueue(source_id)
 
     app.state.store = document_store
     app.state.embedding_provider = embeddings
@@ -660,6 +658,33 @@ def create_app(
     @app.get("/api/v1/index/reclamation", tags=["index"])
     async def index_reclamation_status():
         return {"ok": True, "jobs": await active_reclamation_store.status()}
+
+    @app.post("/api/v1/index/sources/{source_id}/restore", tags=["index"])
+    async def index_restore_source(source_id: str, payload: dict[str, Any]):
+        sequence = payload.get("revision_sequence")
+        if not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        try:
+            source = await active_index_store.restore_source(source_id, sequence)
+            await document_store.restore_source(source_id)
+            await active_knowledge_store.restore(source_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="unknown source") from exc
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "source": source}
+
+    @app.post("/api/v1/index/sources/{source_id}/purge", tags=["index"])
+    async def index_purge_source(source_id: str):
+        source = await active_index_store.get_source(source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="unknown source")
+        try:
+            await active_index_store.mark_purged(source_id)
+            await active_reclamation_store.enqueue(source_id)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "source_id": source_id, "purge": "queued"}
 
     @app.get("/api/v1/index/health", tags=["index"])
     async def index_health():
