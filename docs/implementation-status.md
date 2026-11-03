@@ -232,7 +232,7 @@ Still outstanding:
 
 Implemented on `feature/deferred-source-reclamation`:
 
-- Source deletion first records the authoritative, irreversible Index tombstone and immediately removes the source from active document and Knowledge views.
+- Source deletion first records the authoritative, irreversible Index tombstone and immediately hides the source from document, Knowledge, and active/shadow Vector query results.
 - Physical cleanup is enqueued in SQLite and processed by a single in-process background worker.
 - Cleanup removes active document/chunk and FTS rows, Knowledge payloads, and source-attributed records from every active vector collection.
 - Physical cleanup is bounded to 500 document or vector records per source per pass. Additional pages are retried rather than processed as one unbounded request.
