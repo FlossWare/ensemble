@@ -35,6 +35,7 @@ class KnowledgeStore(Protocol):
     async def put(self, record: dict[str, Any]) -> str: ...
     async def get(self, source_id: str) -> dict[str, Any] | None: ...
     async def tombstone(self, source_id: str) -> None: ...
+    async def reclaim_source(self, source_id: str) -> int: ...
 
 
 class SqliteKnowledgeStore:
@@ -100,6 +101,13 @@ class SqliteKnowledgeStore:
                 ).values(tombstoned=True, updated_at=datetime.now(timezone.utc))
             )
 
+    async def reclaim_source(self, source_id: str) -> int:
+        async with self.engine.begin() as connection:
+            result = await connection.execute(
+                knowledge_records.delete().where(knowledge_records.c.source_id == source_id)
+            )
+        return result.rowcount or 0
+
 
 class InMemoryKnowledgeStore:
     def __init__(self):
@@ -128,3 +136,6 @@ class InMemoryKnowledgeStore:
     async def tombstone(self, source_id: str) -> None:
         if source_id in self._records:
             self._records[source_id]["tombstoned"] = True
+
+    async def reclaim_source(self, source_id: str) -> int:
+        return int(self._records.pop(source_id, None) is not None)
