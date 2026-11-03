@@ -1143,6 +1143,10 @@ def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verifi
         await store.record_generation_checkpoint(
             "generation-0002", "index_reconciliation", {"cursor": high_watermark}, sealed=True,
         )
+        for capability in ("documents_reconciliation", "vectors_reconciliation", "memory_reconciliation", "knowledge_reconciliation"):
+            await store.record_generation_checkpoint(
+                "generation-0002", capability, {"cursor": high_watermark}, sealed=True,
+            )
         await store.acquire_generation_write_fence("generation-0002", through_change_id=high_watermark)
         fenced = await store.record_revision("source-b", 1, "revision-b", {"chunking": "window-v1"})
         assert fenced["decision"] == "fenced"
@@ -1182,9 +1186,13 @@ def test_in_memory_generation_registry_enforces_single_build_and_cutover():
         assert await store.acknowledge_generation_change("source-a", 1, tombstoned=False) == 1
         assert await store.acknowledge_generation_change("source-a", 2, tombstoned=True) == 1
         high_watermark = await store.generation_change_high_watermark("generation-0002")
-        for capability in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation"):
+        for capability in ("index", "documents", "vectors", "memory", "knowledge",
+                           "index_reconciliation", "documents_reconciliation", "vectors_reconciliation",
+                           "memory_reconciliation", "knowledge_reconciliation"):
             await store.record_generation_checkpoint(
-                "generation-0002", capability, {"cursor": "done" if capability != "index_reconciliation" else high_watermark}, sealed=True,
+                "generation-0002", capability,
+                {"cursor": "done" if not capability.endswith("_reconciliation") else high_watermark},
+                sealed=True,
             )
         await store.acquire_generation_write_fence("generation-0002", through_change_id=high_watermark)
         assert (await store.record_revision("source-b", 1, "revision-b", {"chunking": "window-v1"}))["decision"] == "fenced"
