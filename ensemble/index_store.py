@@ -192,7 +192,10 @@ class SqliteIndexStore:
             row = (await connection.execute(select(generation_control).where(
                 generation_control.c.singleton_id == 1
             ))).mappings().one()
-        return dict(row)
+        return {
+            "active_generation_id": row["active_generation_id"],
+            "epoch": row["epoch"],
+        }
 
     async def abort_generation(self, generation_id: str, reason: str) -> dict[str, Any]:
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 2048:
