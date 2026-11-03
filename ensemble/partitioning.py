@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import hashlib
 import ipaddress
+import logging
 import json
 import os
 import re
@@ -12,6 +13,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config
@@ -25,6 +27,7 @@ _PARTITION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MIGRATION_LOCKS: dict[str, threading.Lock] = {}
 _MIGRATION_LOCKS_GUARD = threading.Lock()
 _MIGRATED_DATABASES: set[str] = set()
+_LOG = logging.getLogger("ensemble.partitioning")
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,7 @@ def _partition_token_map() -> dict[str, dict[str, Any]]:
 
 
 def _problem(status: int, title: str, detail: str, code: str) -> JSONResponse:
+    _LOG.warning("partition_request_rejected status=%s code=%s", status, code)
     return JSONResponse(
         status_code=status,
         media_type="application/problem+json",
@@ -115,7 +119,9 @@ def _is_loopback_client(request: Request) -> bool:
 
 
 async def partition_scope_middleware(request: Request, call_next):
-    scope = RequestScope(correlation_id=request.headers.get("x-correlation-id"))
+    supplied_correlation_id = request.headers.get("x-correlation-id", "")
+    correlation_id = supplied_correlation_id if re.fullmatch(r"[A-Za-z0-9._-]{1,128}", supplied_correlation_id) else uuid4().hex
+    scope = RequestScope(correlation_id=correlation_id)
     if request.url.path.startswith("/api/v1/") and not _is_public_path(request.url.path):
         try:
             token_map = _partition_token_map()
@@ -158,7 +164,20 @@ async def partition_scope_middleware(request: Request, call_next):
     request.state.correlation_id = scope.correlation_id
     token = set_request_scope(scope)
     try:
-        return await call_next(request)
+        response = await call_next(request)
+        response.headers.setdefault("X-Correlation-ID", scope.correlation_id or "")
+        _LOG.info(
+            "partition_request principal=%s partition=%s method=%s status=%s correlation_id=%s",
+            scope.principal_id, scope.partition_id, request.method,
+            response.status_code, scope.correlation_id,
+        )
+        return response
+    except Exception:
+        _LOG.exception(
+            "partition_request_failed principal=%s partition=%s method=%s correlation_id=%s",
+            scope.principal_id, scope.partition_id, request.method, scope.correlation_id,
+        )
+        raise
     finally:
         reset_request_scope(token)
 
