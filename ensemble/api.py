@@ -43,6 +43,7 @@ from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
 from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
 from .config import settings_from_env, resolve_database_url
+from .partitioning import partition_scope_middleware
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -249,6 +250,7 @@ def create_app(
         description="REST-first memory, knowledge, and retrieval platform.",
         lifespan=lifespan,
     )
+    app.middleware("http")(partition_scope_middleware)
     documents = DocumentService(document_store, Chunker(), embeddings, active_vector_store)
     search = SearchService(document_store, embeddings, active_reranker, active_vector_store)
 
