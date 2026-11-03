@@ -54,9 +54,22 @@ class InMemoryIndexStore:
             decision = "duplicate" if current["revision_id"] == revision_id and current["profiles"] == snapshot else "conflict"
         else:
             decision = "superseded"
+        if decision == "accepted":
+            for generation in self._generations.values():
+                if generation["state"] == "building":
+                    self._change_sequence += 1
+                    self._generation_changes.setdefault(generation["generation_id"], []).append({
+                        "change_id": self._change_sequence, "generation_id": generation["generation_id"],
+                        "source_id": source_id, "high_sequence": sequence, "revision_id": revision_id,
+                        "profiles": snapshot, "tombstoned": False,
+                        "created_at": current["updated_at"],
+                    })
         return {"decision": decision, "source": dict(current)}
 
     async def record_tombstone(self, source_id: str, sequence: int) -> dict[str, Any]:
+        if self._write_fence_generation is not None:
+            current = self._sources.get(source_id)
+            return {"decision": "fenced", "source": dict(current) if current else None}
         current = self._sources.get(source_id)
         now = datetime.now(timezone.utc).isoformat()
         if current is None:
@@ -72,6 +85,16 @@ class InMemoryIndexStore:
             decision = "tombstoned"
         else:
             decision = "superseded"
+        if decision == "tombstoned":
+            for generation in self._generations.values():
+                if generation["state"] == "building":
+                    self._change_sequence += 1
+                    self._generation_changes.setdefault(generation["generation_id"], []).append({
+                        "change_id": self._change_sequence, "generation_id": generation["generation_id"],
+                        "source_id": source_id, "high_sequence": current["high_sequence"],
+                        "revision_id": current["revision_id"], "profiles": current["profiles"],
+                        "tombstoned": True, "created_at": current["updated_at"],
+                    })
         return {"decision": decision, "source": dict(current)}
 
     async def get_source(self, source_id: str) -> dict[str, Any] | None:
@@ -170,6 +193,37 @@ class InMemoryIndexStore:
         ][:limit]
         return [dict(records[key]) for key in keys]
 
+    async def list_generation_changes_after(self, generation_id: str, after_change_id: int, limit: int) -> list[dict[str, Any]]:
+        if isinstance(after_change_id, bool) or not isinstance(after_change_id, int) or after_change_id < 0:
+            raise ValueError("after_change_id must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        return [dict(item) for item in self._generation_changes.get(generation_id, [])
+                if item["change_id"] > after_change_id][:limit]
+
+    async def generation_change_high_watermark(self, generation_id: str) -> int:
+        changes = self._generation_changes.get(generation_id, [])
+        return changes[-1]["change_id"] if changes else 0
+
+    async def acquire_generation_write_fence(self, generation_id: str, through_change_id: int) -> dict[str, Any]:
+        if self._write_fence_generation not in (None, generation_id):
+            raise RuntimeError("another generation owns the Index write fence")
+        generation = self._generations.get(generation_id)
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        high = await self.generation_change_high_watermark(generation_id)
+        if high != through_change_id:
+            raise RuntimeError("generation change journal advanced; reconcile before acquiring the write fence")
+        self._write_fence_generation = generation_id
+        return {"generation_id": generation_id, "through_change_id": high,
+                "acquired_at": datetime.now(timezone.utc).isoformat()}
+
+    async def release_generation_write_fence(self, generation_id: str) -> bool:
+        if self._write_fence_generation != generation_id:
+            return False
+        self._write_fence_generation = None
+        return True
+
     async def generation_status(self) -> dict[str, Any]:
         return {
             "active_generation_id": self._active_generation_id,
@@ -196,6 +250,7 @@ class InMemoryIndexStore:
             "created_at": now, "updated_at": now, "activated_at": None,
         }
         self._generations[generation_id] = value
+        self._generation_changes[generation_id] = []
         return dict(value)
 
     async def record_generation_checkpoint(
@@ -235,6 +290,11 @@ class InMemoryIndexStore:
         target = self._generations.get(generation_id)
         if target is None or target["state"] != "building":
             raise RuntimeError("target generation is not building")
+        if self._write_fence_generation != generation_id:
+            raise RuntimeError("Index write fence must be held during generation activation")
+        high = await self.generation_change_high_watermark(generation_id)
+        if verification.get("reconciled_through_change_id") != high:
+            raise RuntimeError("generation change journal has not been fully reconciled")
         if not all(target["checkpoints"].get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge")):
             raise RuntimeError("index, documents, vectors, memory, and knowledge checkpoints must all be sealed")
         now = datetime.now(timezone.utc).isoformat()
@@ -246,6 +306,7 @@ class InMemoryIndexStore:
         )
         self._active_generation_id = generation_id
         self._generation_epoch += 1
+        self._write_fence_generation = None
         return {
             "active_generation_id": self._active_generation_id,
             "epoch": self._generation_epoch,
