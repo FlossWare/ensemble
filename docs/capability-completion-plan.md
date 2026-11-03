@@ -80,7 +80,7 @@ Implement durable index rebuilds that can safely coexist with writes:
 - Release fences and persist completion.
 - Recover safely from crashes, lost responses, expired fences, and uncertain cutover.
 
-**Foundation implemented:** SQLite now has a durable generation registry, a singleton active-generation pointer with a monotonically increasing epoch, and a single-building-generation constraint. Index, Memory, and Knowledge checkpoints can be recorded and sealed. Cutover uses compare-and-swap against the expected active generation and epoch, and refuses activation unless all three checkpoints are sealed and acknowledged writes plus tombstones are explicitly verified. The in-memory adapter mirrors these state transitions.
+**Foundation implemented:** SQLite now has a durable generation registry, a singleton active-generation pointer with a monotonically increasing epoch, and a single-building-generation constraint. Index, Documents, Vectors, Memory, and Knowledge checkpoints can be recorded and sealed. Cutover uses compare-and-swap against the expected active generation and epoch, and refuses activation unless all five checkpoints are sealed and acknowledged writes plus tombstones are explicitly verified. The in-memory adapter mirrors these state transitions.
 
 **Vector shadow storage implemented:** migration 0017 adds generation-scoped vector records keyed by collection, generation, and record ID. The SQLite and in-memory adapters can write, query, and delete a shadow generation without changing active-generation vector query results. This is isolated storage only; it does not yet copy active vectors, coordinate writes, or activate a generation.
 
