@@ -373,6 +373,39 @@ def test_knowledge_store_readback_and_provenance(tmp_path):
         assert len(record["content_sha256"]) == 64
 
 
+def test_knowledge_hybrid_search_uses_embedding_and_vector_rest_contracts():
+    class Embeddings:
+        available = True
+
+        def status(self):
+            return {"ok": True, "ready": True, "model": "knowledge-test", "dimensions": 3}
+
+        async def embed(self, texts, mode="document"):
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+    vectors = InMemoryVectorStore()
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        embedding_provider=Embeddings(),
+        vector_store=vectors,
+    )
+    with TestClient(app) as client:
+        stored = client.post("/api/v1/knowledge/records", json=_knowledge_record(
+            source_id="knowledge-rest-search",
+            content="REST composition for Knowledge vector retrieval.",
+        ))
+        assert stored.status_code == 200
+
+        result = client.post("/api/v1/search/hybrid/knowledge", json={
+            "query": "Knowledge vector retrieval", "limit": 5,
+        })
+        assert result.status_code == 200
+        body = result.json()
+        assert body["retrieval"] == "knowledge-only"
+        assert body["results"]
+        assert body["results"][0]["metadata"]["source_id"] == "knowledge-rest-search"
+
+
 def test_knowledge_vector_records_follow_revision_and_tombstone():
     from ensemble.vector_memory import InMemoryVectorStore
 
