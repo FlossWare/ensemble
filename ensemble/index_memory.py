@@ -32,10 +32,12 @@ class InMemoryIndexStore:
             current = {
                 "source_id": source_id, "high_sequence": sequence,
                 "revision_id": revision_id, "profiles": snapshot,
-                "tombstoned": False, "updated_at": datetime.now(timezone.utc).isoformat(),
+                "tombstoned": False, "purged": False, "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             self._sources[source_id] = current
             decision = "accepted"
+        elif current.get("purged"):
+            decision = "purged"
         elif current["tombstoned"]:
             decision = "tombstoned"
         elif sequence > current["high_sequence"]:
@@ -61,6 +63,8 @@ class InMemoryIndexStore:
             }
             self._sources[source_id] = current
             decision = "tombstoned"
+        elif current.get("purged"):
+            decision = "purged"
         elif sequence >= current["high_sequence"]:
             current.update(high_sequence=max(sequence, current["high_sequence"]), tombstoned=True, updated_at=now)
             decision = "tombstoned"
