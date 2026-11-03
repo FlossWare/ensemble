@@ -314,17 +314,19 @@ def create_app(
             result.metadata = {**result.metadata, "graph_entities_indexed": 0, "graph_degraded": True}
         return result, decision["decision"]
 
-    async def expand_graph_results(query: str, entities: list[dict[str, Any]], results: list[SearchHit], limit: int):
+    async def expand_graph_results(query: str, entities: list[dict[str, Any]], results: list[SearchHit], limit: int, internal: InternalRestClient, request: Request):
         graph_sources: dict[str, int] = {}
         graph_matches = []
         try:
             for candidate in entities:
                 if not candidate.get("exact"):
                     continue
-                matches = await active_graph_store.query_nodes(
-                    "entity",
-                    {"entity_type": candidate["type"], "normalized": candidate["normalized"]},
-                )
+                matches = (await internal.request(
+                    "POST", "/api/v1/graph/query", request=request,
+                    json={"type": "entity", "properties": {
+                        "entity_type": candidate["type"], "normalized": candidate["normalized"],
+                    }},
+                )).get("nodes", [])
                 if len(matches) != 1:
                     continue
                 entity_node = matches[0]
@@ -333,9 +335,11 @@ def create_app(
                     "type": candidate["type"],
                     "normalized": candidate["normalized"],
                 })
-                related = await active_graph_store.traverse(
-                    entity_node["id"], direction="in", max_depth=1, edge_type="mentions"
-                )
+                related = (await internal.request(
+                    "POST", "/api/v1/graph/traverse", request=request,
+                    json={"start": entity_node["id"], "direction": "in",
+                          "max_depth": 1, "edge_type": "mentions"},
+                )).get("results", [])
                 for item in related:
                     source_node = item["node"]
                     if source_node.get("type") != "source":
@@ -1913,15 +1917,45 @@ def create_app(
         }
 
     @app.post("/api/v1/search/hybrid", tags=["search"])
-    async def hybrid_search(request: SearchIn):
+    async def hybrid_search(search_request: SearchIn, request: Request):
+        internal = InternalRestClient(app, {
+            "graph": os.getenv("ENSEMBLE_GRAPH_REST_URL"),
+            "entities": os.getenv("ENSEMBLE_ENTITIES_REST_URL"),
+            "intent": os.getenv("ENSEMBLE_INTENT_REST_URL"),
+            "reranking": os.getenv("ENSEMBLE_RERANKING_REST_URL"),
+            "memory": os.getenv("ENSEMBLE_MEMORY_REST_URL"),
+        })
         try:
-            result = await search.search_with_status(request.query, request.limit, rerank=False)
-            intent = classify(request.query)
-            entities = extract(request.query, source="search.query")
+            # Search remains the owning retrieval implementation. Enrichment,
+            # graph access, reranking, and the audit ledger use their REST contracts.
+            result = await search.search_with_status(
+                search_request.query, search_request.limit, rerank=False
+            )
+
+            try:
+                intent = await internal.request(
+                    "POST", "/api/v1/intent/classify", request=request,
+                    json={"text": search_request.query},
+                )
+            except Exception:
+                intent = None
+                result["degraded"].append("intent")
+
+            try:
+                entities_response = await internal.request(
+                    "POST", "/api/v1/entities/extract", request=request,
+                    json={"text": search_request.query, "source": "search.query"},
+                )
+                entities = entities_response.get("entities", [])
+            except Exception:
+                entities = []
+                result["degraded"].append("entities")
+
             result["intent"] = intent
             result["entities"] = entities
             result["results"], graph_expansion = await expand_graph_results(
-                request.query, entities, result["results"], request.limit
+                search_request.query, entities, result["results"],
+                search_request.limit, internal, request,
             )
             result["graph_expansion"] = graph_expansion
             if graph_expansion.get("degraded"):
@@ -1930,33 +1964,35 @@ def create_app(
                 result["retrieval"] = "hybrid"
 
             rerank_enabled = (
-                request.rerank if request.rerank is not None
+                search_request.rerank if search_request.rerank is not None
                 else os.getenv("ENSEMBLE_RERANK_ENABLED", "0").strip() == "1"
             )
             if rerank_enabled and result["results"]:
-                if not active_reranker.available:
+                candidates = result["results"][:min(30, len(result["results"]))]
+                try:
+                    reranked = await internal.request(
+                        "POST", "/api/v1/reranking/rerank", request=request,
+                        json={
+                            "query": search_request.query,
+                            "documents": [candidate.text[:4000] for candidate in candidates],
+                        },
+                    )
+                    scores = reranked.get("scores", [])
+                    if len(scores) != len(candidates) or any(
+                        not math.isfinite(float(score)) for score in scores
+                    ):
+                        raise RuntimeError("reranker returned invalid or misaligned scores")
+                    reranked_hits = [
+                        hit.model_copy(update={"rerank_score": float(score)})
+                        for hit, score in zip(candidates, scores)
+                    ]
+                    result["results"] = sorted(
+                        reranked_hits, key=lambda hit: hit.rerank_score, reverse=True
+                    ) + result["results"][len(candidates):]
+                    result["reranked"] = True
+                except Exception:
                     result["degraded"].append("reranking")
-                else:
-                    candidates = result["results"][:min(30, len(result["results"]))]
-                    try:
-                        scores = await asyncio.to_thread(
-                            active_reranker.score, request.query,
-                            [candidate.text[:4000] for candidate in candidates],
-                        )
-                        if len(scores) != len(candidates) or any(
-                            not math.isfinite(float(score)) for score in scores
-                        ):
-                            raise RuntimeError("reranker returned invalid or misaligned scores")
-                        reranked = [
-                            hit.model_copy(update={"rerank_score": float(score)})
-                            for hit, score in zip(candidates, scores)
-                        ]
-                        result["results"] = sorted(
-                            reranked, key=lambda hit: hit.rerank_score, reverse=True
-                        ) + result["results"][len(candidates):]
-                        result["reranked"] = True
-                    except Exception:
-                        result["degraded"].append("reranking")
+
             related = []
             try:
                 exact_paths = {
@@ -1964,7 +2000,10 @@ def create_app(
                     if item.get("exact") and item.get("type") in {"path", "file"}
                 }
                 if exact_paths:
-                    file_nodes = await active_graph_store.query_nodes("file", {})
+                    file_nodes = (await internal.request(
+                        "POST", "/api/v1/graph/query", request=request,
+                        json={"type": "file", "properties": {}},
+                    )).get("nodes", [])
                     sessions = {}
                     for file_node in file_nodes:
                         path = (file_node.get("properties") or {}).get("path", "")
@@ -1973,9 +2012,12 @@ def create_app(
                             for candidate in exact_paths
                         ):
                             continue
-                        for hit in await active_graph_store.traverse(
-                            file_node["id"], direction="in", max_depth=1, edge_type="touched"
-                        ):
+                        touched = (await internal.request(
+                            "POST", "/api/v1/graph/traverse", request=request,
+                            json={"start": file_node["id"], "direction": "in",
+                                  "max_depth": 1, "edge_type": "touched"},
+                        )).get("results", [])
+                        for hit in touched:
                             node = hit["node"]
                             props = node.get("properties") or {}
                             session_id = props.get("session_id")
@@ -1990,13 +2032,16 @@ def create_app(
             except Exception:
                 result["degraded"].append("graph")
             result["related_sessions"] = related
-            # Successful searches are recorded for audit/learning. Ledger failure
-            # must never turn a successful retrieval into a failed request.
+
+            # Successful searches are recorded for audit/learning through the
+            # Memory resource contract. Ledger failure never fails retrieval.
             try:
-                await active_memory_store.append(
-                    "search-ledger",
-                    {
-                        "query": request.query,
+                await internal.request(
+                    "PUT",
+                    f"/api/v1/memory/memories/search-ledger/entries/search-{uuid4()}",
+                    request=request,
+                    json={"entry": {
+                        "query": search_request.query,
                         "intent": result["intent"],
                         "degraded": result["degraded"],
                         "result_count": len(result["results"]),
@@ -2006,8 +2051,7 @@ def create_app(
                             "chunk_id": str(hit.chunk_id),
                             "score": hit.fusion_score,
                         } for hit in result["results"]],
-                    },
-                    event_id=f"search-{uuid4()}",
+                    }},
                 )
             except Exception:
                 pass
