@@ -8,7 +8,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from ensemble.index_store import SqliteIndexStore
-from ensemble.partitioning import (\n    RequestScope, _ensure_partition_schema, partition_database_url,\n    partition_scope_middleware, reset_request_scope, set_request_scope,\n)
+from ensemble.partitioning import (
+    RequestScope, _ensure_partition_schema, partition_database_url,
+    partition_scope_middleware, reset_request_scope, set_request_scope,
+)
 
 
 def test_partition_database_urls_are_stable_and_separate(tmp_path):
