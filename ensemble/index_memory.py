@@ -258,7 +258,7 @@ class InMemoryIndexStore:
         checkpoint: dict[str, Any], sealed: bool = False,
     ) -> dict[str, Any]:
         import json
-        if capability not in {"index", "documents", "vectors", "memory", "knowledge"}:
+        if capability not in {"index", "documents", "vectors", "memory", "knowledge", "index_reconciliation"}:
             raise ValueError("capability must be index, memory, or knowledge")
         if not isinstance(checkpoint, dict):
             raise ValueError("checkpoint must be an object")
@@ -295,8 +295,8 @@ class InMemoryIndexStore:
         high = await self.generation_change_high_watermark(generation_id)
         if verification.get("reconciled_through_change_id") != high:
             raise RuntimeError("generation change journal has not been fully reconciled")
-        if not all(target["checkpoints"].get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge")):
-            raise RuntimeError("index, documents, vectors, memory, and knowledge checkpoints must all be sealed")
+        if not all(target["checkpoints"].get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation")):
+            raise RuntimeError("index, documents, vectors, memory, knowledge, and index reconciliation checkpoints must all be sealed")
         now = datetime.now(timezone.utc).isoformat()
         self._generations[self._active_generation_id]["state"] = "retired"
         self._generations[self._active_generation_id]["updated_at"] = now
