@@ -1431,3 +1431,88 @@ def test_in_memory_index_source_keyset_pagination():
         assert await store.list_sources_after("source-d", upper_bound, 2) == []
 
     asyncio.run(exercise())
+
+
+def test_generation_index_source_state_is_durable_monotonic_and_pageable(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-index-sources.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    store = SqliteIndexStore(database_url)
+
+    async def exercise():
+        await store.initialize()
+        await store.create_generation("generation-shadow")
+        for source_id in ("source-a", "source-b", "source-c"):
+            result = await store.put_generation_source("generation-shadow", {
+                "source_id": source_id, "high_sequence": 1,
+                "revision_id": "r1", "profiles": {"chunking": "window-v1"},
+                "tombstoned": False,
+            })
+            assert result["decision"] == "accepted"
+
+        updated = await store.put_generation_source("generation-shadow", {
+            "source_id": "source-b", "high_sequence": 2,
+            "revision_id": "r2", "profiles": {"chunking": "markdown-v1"},
+            "tombstoned": False,
+        })
+        assert updated["decision"] == "accepted"
+        stale = await store.put_generation_source("generation-shadow", {
+            "source_id": "source-b", "high_sequence": 1,
+            "revision_id": "r1", "profiles": {"chunking": "window-v1"},
+            "tombstoned": False,
+        })
+        assert stale["decision"] == "superseded"
+
+        tombstone = await store.put_generation_source("generation-shadow", {
+            "source_id": "source-c", "high_sequence": 3,
+            "revision_id": "tombstone", "profiles": {},
+            "tombstoned": True,
+        })
+        assert tombstone["decision"] == "tombstoned"
+        delayed = await store.put_generation_source("generation-shadow", {
+            "source_id": "source-c", "high_sequence": 4,
+            "revision_id": "r4", "profiles": {},
+            "tombstoned": False,
+        })
+        assert delayed["decision"] == "tombstoned"
+
+        page1 = await store.list_generation_sources_after(
+            "generation-shadow", None, "source-c", 2,
+        )
+        page2 = await store.list_generation_sources_after(
+            "generation-shadow", page1[-1]["source_id"], "source-c", 2,
+        )
+        assert [item["source_id"] for item in page1 + page2] == [
+            "source-a", "source-b", "source-c",
+        ]
+        assert (await store.get_generation_source(
+            "generation-shadow", "source-b",
+        ))["revision_id"] == "r2"
+        assert (await store.get_generation_source(
+            "generation-shadow", "source-c",
+        ))["tombstoned"] is True
+        await store.close()
+
+    asyncio.run(exercise())
+
+
+def test_in_memory_generation_index_source_state_matches_durable_rules():
+    store = InMemoryIndexStore()
+
+    async def exercise():
+        await store.create_generation("shadow")
+        source = {
+            "source_id": "source-a", "high_sequence": 1,
+            "revision_id": "r1", "profiles": {}, "tombstoned": False,
+        }
+        assert (await store.put_generation_source("shadow", source))["decision"] == "accepted"
+        newer = {**source, "high_sequence": 2, "revision_id": "r2"}
+        assert (await store.put_generation_source("shadow", newer))["decision"] == "accepted"
+        assert (await store.put_generation_source("shadow", source))["decision"] == "superseded"
+        tombstone = {**newer, "high_sequence": 3, "revision_id": "tombstone", "tombstoned": True}
+        assert (await store.put_generation_source("shadow", tombstone))["decision"] == "tombstoned"
+        assert (await store.put_generation_source("shadow", newer))["decision"] == "tombstoned"
+        assert (await store.list_generation_sources_after("shadow", None, "source-a", 10))[0]["tombstoned"] is True
+
+    asyncio.run(exercise())
