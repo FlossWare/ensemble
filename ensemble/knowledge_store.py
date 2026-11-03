@@ -123,6 +123,11 @@ class SqliteKnowledgeStore:
 
     async def upsert_generation(self, generation_id: str, record: dict[str, Any]) -> str:
         digest = hashlib.sha256(record["content"].encode("utf-8")).hexdigest()
+        provenance = record.get("provenance") or {}
+        origin = record.get("origin") or provenance.get("origin")
+        locator = record.get("locator") or provenance.get("locator")
+        if not isinstance(origin, str) or not isinstance(locator, str):
+            raise ValueError("Knowledge record provenance is incomplete")
         values = {
             "generation_id": generation_id,
             "source_id": record["source_id"],
@@ -131,8 +136,8 @@ class SqliteKnowledgeStore:
             "title": record["title"],
             "content": record["content"],
             "content_sha256": digest,
-            "origin": record["origin"],
-            "locator": record["locator"],
+            "origin": origin,
+            "locator": locator,
             "profiles": record["profiles"],
             "tombstoned": False,
             "updated_at": datetime.now(timezone.utc),
