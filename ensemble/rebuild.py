@@ -527,7 +527,7 @@ class IndexGenerationBuilder:
             for collection in collections:
                 name = collection["name"]
                 records = await self.vector_store.list_records_for_source(name, change["source_id"])
-                await self.vector_store.delete_generation_source(generation_id, change["source_id"])
+                await self.vector_store.delete_generation_source(generation_id, change["source_id"], name=name)
                 if records:
                     await self.vector_store.upsert_generation(
                         generation_id, name, collection["model"], collection["dimensions"], records,
