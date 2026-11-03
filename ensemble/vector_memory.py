@@ -100,6 +100,20 @@ class InMemoryVectorStore:
         scored.sort(key=lambda item: (-item["score"], item["id"]))
         return scored[:max(0, top_k)]
 
+    async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:
+        removed = 0
+        for collection in self._collections.values():
+            generation = collection.get("generations", {}).get(generation_id, {})
+            stale = [
+                record_id for record_id, item in generation.items()
+                if item.get("metadata", {}).get("source_id") == source_id
+                or item.get("metadata", {}).get("url") == source_id
+            ]
+            for record_id in stale:
+                del generation[record_id]
+            removed += len(stale)
+        return removed
+
     async def delete_generation(self, generation_id: str) -> int:
         removed = 0
         for collection in self._collections.values():
