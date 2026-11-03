@@ -104,7 +104,11 @@ Implement durable index rebuilds that can safely coexist with writes:
 
 **Acknowledgement REST contract implemented:** `POST /api/v1/index/changes/acknowledge` marks a source revision or tombstone complete after dependent capability writes have succeeded. The lower-level Index revision route does not acknowledge by itself; callers composing Index and other capability routes must acknowledge only after the full operation completes.
 
-**Still not complete:** journal replay currently updates shadow Index source state only. Document/chunk, lexical, vector, Memory, and Knowledge materializations still need reconciliation from those changes. The rebuild/reconciliation lifecycle is not yet exposed through REST, and restart recovery for a process that stops while the durable fence is held still needs an explicit operational path. Keep the rebuild API unavailable until those requirements are satisfied.
+**Document/chunk reconciliation implemented:** acknowledged journal entries can be replayed into shadow Documents and Chunks using the latest active source revision. The builder verifies that the active document revision matches the reconciled Index source, applies generation tombstones, and persists an independent keyset checkpoint. A missing or mismatched active document fails closed.
+
+**Vector reconciliation implemented:** acknowledged changes are replayed per active vector collection. Reconciliation removes the old shadow records for that source before copying current active records, and applies tombstones across collections. SQLite uses source-scoped JSON metadata lookup; a source with more than 10,000 vector records fails closed rather than being partially copied. The in-memory adapter mirrors the behavior.
+
+**Still not complete:** Memory and Knowledge materialization reconciliation, REST rebuild orchestration, and restart recovery for a process that stops while the durable fence is held. The final fence and activation now require all five capability reconciliation checkpoints, including Memory and Knowledge, so the rebuild API remains unavailable until those requirements are satisfied.
 
 Do not ship a rebuild operation that can silently lose acknowledged writes or resurrect deleted content.
 
