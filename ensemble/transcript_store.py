@@ -6,8 +6,6 @@ from typing import Any, Protocol
 
 from sqlalchemy import Column, DateTime, Integer, JSON, MetaData, String, Table, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine
-
-from .partitioning import PartitionedAsyncEngine
 from sqlalchemy.engine import make_url
 
 from .partitioning import PartitionedAsyncEngine
