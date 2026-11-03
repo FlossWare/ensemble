@@ -941,13 +941,17 @@ def create_app(
 
     @app.get("/api/v1/reranking/health", tags=["reranking"])
     async def reranking_health():
-        status = active_reranker.status()
-        return JSONResponse(status_code=200 if active_reranker.available else 503, content=status)
+        status = (
+            ranking_provider.status() if ranking_provider is not None
+            else {"ok": False, "ready": False, "provider": "disabled",
+                  "error": "ranking provider is not configured"}
+        )
+        available = ranking_provider is not None and ranking_provider.available
+        return JSONResponse(status_code=200 if available else 503, content=status)
 
     @app.get("/api/v1/reranking/ready", tags=["reranking"])
     async def reranking_ready():
-        status = active_reranker.status()
-        return JSONResponse(status_code=200 if active_reranker.available else 503, content=status)
+        return await reranking_health()
 
     @app.post("/api/v1/reranking/rerank", tags=["reranking"])
     async def rerank_candidates(payload: dict[str, Any]):
@@ -956,11 +960,16 @@ def create_app(
             validate_rerank_request(query, documents)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if ranking_provider is None or not ranking_provider.available:
+            raise HTTPException(status_code=503, detail="ranking provider is not configured")
         try:
-            scores = await asyncio.to_thread(active_reranker.score, query, documents)
-        except RerankingUnavailable as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return {"ok": True, "model": RERANK_MODEL_ID, "scores": scores}
+            scores = await ranking_provider.score(query, documents)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="ranking provider failed") from exc
+        return {
+            "ok": True, "provider": ranking_provider.status().get("provider"),
+            "model": ranking_provider.status().get("model"), "scores": scores,
+        }
 
     @app.get("/api/v1/ranking/health", tags=["ranking"])
     async def ranking_health():
