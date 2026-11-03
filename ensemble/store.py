@@ -203,7 +203,10 @@ class InMemoryDocumentStore:
     async def generation_all_chunks(self, generation_id: str) -> list[IndexedChunk]:
         generation = self._generation_data.get(generation_id, {})
         latest: dict[str, tuple[Document, list[Chunk]]] = {}
+        tombstones = self._generation_tombstones.get(generation_id, set())
         for (source_id, _revision), pair in generation.items():
+            if source_id in tombstones:
+                continue
             current = latest.get(source_id)
             if current is None or pair[0].revision > current[0].revision:
                 latest[source_id] = pair
@@ -607,6 +610,9 @@ class SqlDocumentStore:
             )
             await connection.execute(delete(generation_documents).where(
                 generation_documents.c.generation_id == generation_id
+            ))
+            await connection.execute(delete(generation_source_tombstones).where(
+                generation_source_tombstones.c.generation_id == generation_id
             ))
         return int(count or 0)
 
