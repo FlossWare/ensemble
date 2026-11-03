@@ -210,3 +210,20 @@ Still outstanding:
 - Memory and Knowledge snapshot/copy passes.
 - Write fences and concurrent-write reconciliation.
 - Crash recovery across a complete multi-store rebuild and atomic activation.
+
+
+## Resumable vector generation copy pass
+
+Implemented:
+- SQLite and in-memory vector stores expose ordered, bounded record enumeration.
+- The builder captures the collection set, model identity, dimensions, and per-collection record upper key at pass start.
+- Bounded vector pages are copied into generation-scoped vector records with independent record IDs.
+- Every source-attributed vector record must resolve to generation-scoped Index state; unknown or unattributed records fail closed.
+- Records belonging to tombstoned sources are skipped.
+- The Vectors checkpoint persists collection index, cursor, copied count, and tombstone-skip count; it seals only after all captured collections complete.
+- Tests cover multi-page copying, tombstone filtering, active/shadow isolation, and rejection of unattributed records.
+
+Still outstanding:
+- Reconciliation for records and collections created or updated during the bounded copy.
+- Memory and Knowledge snapshot/copy passes.
+- Write fences, acknowledged-write verification, crash recovery, and atomic cutover across all stores.
