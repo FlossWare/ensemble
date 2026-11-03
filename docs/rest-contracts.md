@@ -63,8 +63,10 @@ Each capability group can be assigned an independent REST base URL. The initial 
 - `ENSEMBLE_ENTITIES_REST_URL`
 - `ENSEMBLE_GRAPH_REST_URL`
 - `ENSEMBLE_RERANKING_REST_URL`
+- `ENSEMBLE_EMBEDDINGS_REST_URL`
+- `ENSEMBLE_VECTOR_REST_URL`
 
-When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. Context Assembly dispatches to Search, Memory, Intent, and Entity REST endpoints. Hybrid Search dispatches intent classification, entity extraction, Graph query/traversal, reranking, and its search-ledger write through their REST contracts. Hybrid Search invokes the Search capability through `POST /api/v1/search/retrieve`. Search retains ownership of its retrieval algorithm and persistence rather than exposing its internal store implementation to Hybrid. Setting `ENSEMBLE_SEARCH_REST_URL` moves Search behind a separate REST server without changing the Hybrid contract. Remaining direct store access inside Search is capability-owned implementation, not cross-capability composition. Only call paths explicitly migrated to the internal REST client satisfy the boundary.
+When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. Context Assembly dispatches to Search, Memory, Intent, and Entity REST endpoints. Hybrid Search dispatches base retrieval to Search, intent classification and entity extraction to their capabilities, Graph query/traversal to Graph, reranking to Reranking, and its search-ledger write to Memory through REST. Knowledge-scoped Hybrid Search dispatches embedding and vector queries through their REST contracts. Hybrid Search invokes the Search capability through `POST /api/v1/search/retrieve`. Search retains ownership of its retrieval algorithm and persistence rather than exposing its internal store implementation to Hybrid. Setting `ENSEMBLE_SEARCH_REST_URL` moves Search behind a separate REST server without changing the Hybrid contract. Remaining direct store access inside Search is capability-owned implementation, not cross-capability composition. Only call paths explicitly migrated to the internal REST client satisfy the boundary.
 
 ## 7. Initial implemented endpoints
 
@@ -87,6 +89,8 @@ When a key is unset, requests for that capability use the co-located ASGI transp
 | GET | /api/v1/search/hybrid/health, /api/v1/search/hybrid/ready | Hybrid retrieval capability status |
 | POST | /api/v1/search/hybrid | Unified hybrid retrieval |
 | POST | /api/v1/search/hybrid/knowledge | Knowledge-scoped hybrid retrieval |
+| POST | /api/v1/embeddings/embed | Generate query or document embeddings |
+| POST | /api/v1/vector/collections/{name}/query | Query a named vector collection |
 | POST | /api/v1/memory/events | Capture an idempotent prompt event in the Memory event ledger |
 | GET | /api/v1/tokenization/health, /ready, /profiles | Tokenization capability status and analyzer profiles |
 | POST | /api/v1/tokenization/tokenize | Versioned deterministic text analysis |
