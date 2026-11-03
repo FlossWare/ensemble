@@ -74,7 +74,7 @@ class InMemoryIndexStore:
     async def list_sources(self, limit: int) -> list[dict[str, Any]]:
         return [dict(self._sources[key]) for key in sorted(self._sources)[:limit]]
 
-    async def source_snapshot_upper_bound(self) -> str | None:
+    async def source_key_upper_bound(self) -> str | None:
         return max(self._sources) if self._sources else None
 
     async def list_sources_after(
