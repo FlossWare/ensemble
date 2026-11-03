@@ -475,12 +475,12 @@ def create_app(
             "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
         })
         await internal.request(
-            "POST", f"/api/v1/documents/sources/{source_id}/tombstone",
-            request=request, json={},
+            "POST", "/api/v1/documents/sources/tombstone",
+            request=request, json={"source_id": source_id},
         )
         await internal.request(
-            "POST", f"/api/v1/knowledge/sources/{source_id}/tombstone",
-            request=request, json={},
+            "POST", "/api/v1/knowledge/sources/tombstone",
+            request=request, json={"source_id": source_id},
         )
         # Remove the source from every vector collection, not only Knowledge.
         collections = (await internal.request(
@@ -489,8 +489,8 @@ def create_app(
         for collection in collections:
             await internal.request(
                 "POST",
-                f"/api/v1/vector/collections/{collection['name']}/sources/{source_id}/tombstone",
-                request=request, json={},
+                f"/api/v1/vector/collections/{collection['name']}/sources/tombstone",
+                request=request, json={"source_id": source_id},
             )
 
     app.state.store = document_store
@@ -680,9 +680,10 @@ def create_app(
             raise HTTPException(status_code=404, detail="unknown record")
         return {"ok": True, "record": record}
 
-    @app.post("/api/v1/knowledge/sources/{source_id}/tombstone", tags=["knowledge"])
-    async def knowledge_source_tombstone(source_id: str):
-        if not source_id or len(source_id) > 512:
+    @app.post("/api/v1/knowledge/sources/tombstone", tags=["knowledge"])
+    async def knowledge_source_tombstone(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
         await active_knowledge_store.tombstone(source_id)
         return {"ok": True, "source_id": source_id}
@@ -700,9 +701,10 @@ def create_app(
             json={"source_id": source_id, "revision_sequence": sequence},
         )
 
-    @app.post("/api/v1/documents/sources/{source_id}/tombstone", tags=["documents"])
-    async def documents_source_tombstone(source_id: str):
-        if not source_id or len(source_id) > 512:
+    @app.post("/api/v1/documents/sources/tombstone", tags=["documents"])
+    async def documents_source_tombstone(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
         await document_store.tombstone_source(source_id)
         return {"ok": True, "source_id": source_id}
@@ -919,10 +921,11 @@ def create_app(
         deleted = await active_vector_store.delete_superseded(name, url, digest)
         return {"ok": True, "deleted": deleted}
 
-    @app.post("/api/v1/vector/collections/{name}/sources/{source_id}/tombstone", tags=["vector"])
-    async def vector_source_tombstone(name: str, source_id: str):
+    @app.post("/api/v1/vector/collections/{name}/sources/tombstone", tags=["vector"])
+    async def vector_source_tombstone(name: str, payload: dict[str, Any]):
         _validate_vector_collection_name(name)
-        if not source_id or len(source_id) > 512:
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
         deleted = await active_vector_store.delete_superseded(name, source_id, "")
         return {"ok": True, "deleted": deleted}
