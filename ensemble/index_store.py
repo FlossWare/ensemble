@@ -150,10 +150,32 @@ class SqliteIndexStore:
             ))).mappings().first()
             if existing:
                 raise RuntimeError("an index generation rebuild is already in progress")
+            control = (await connection.execute(select(generation_control).where(
+                generation_control.c.singleton_id == 1
+            ))).mappings().one()
             await connection.execute(generations.insert().values(
                 generation_id=generation_id, state="building", checkpoints={},
                 verification={}, created_at=now, updated_at=now, activated_at=None,
             ))
+            pending = (await connection.execute(select(generation_changes).where(
+                generation_changes.c.generation_id == control["active_generation_id"],
+                generation_changes.c.acknowledged.is_(False),
+            ).order_by(generation_changes.c.change_id))).mappings().all()
+            if pending:
+                await connection.execute(generation_changes.insert(), [{
+                    "generation_id": generation_id,
+                    "source_id": item["source_id"],
+                    "high_sequence": item["high_sequence"],
+                    "revision_id": item["revision_id"],
+                    "profiles": item["profiles"],
+                    "tombstoned": item["tombstoned"],
+                    "acknowledged": False,
+                    "created_at": item["created_at"],
+                } for item in pending])
+                await connection.execute(generation_changes.delete().where(
+                    generation_changes.c.generation_id == control["active_generation_id"],
+                    generation_changes.c.acknowledged.is_(False),
+                ))
             row = (await connection.execute(select(generations).where(
                 generations.c.generation_id == generation_id
             ))).mappings().one()
@@ -434,6 +456,14 @@ class SqliteIndexStore:
                 generation_changes.c.tombstoned.is_(tombstoned),
                 generation_changes.c.acknowledged.is_(False),
             ).values(acknowledged=True))
+            await connection.execute(generation_changes.delete().where(
+                generation_changes.c.generation_id.in_(
+                    select(generations.c.generation_id).where(generations.c.state == "active")
+                ),
+                generation_changes.c.source_id == source_id,
+                generation_changes.c.high_sequence == sequence,
+                generation_changes.c.tombstoned.is_(tombstoned),
+            ))
         return int(result.rowcount or 0)
 
     async def generation_change_high_watermark(self, generation_id: str) -> int:
@@ -518,10 +548,12 @@ class SqliteIndexStore:
                 decision = "superseded"
             current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().one()
             if decision == "accepted":
-                building = (await connection.execute(select(generations.c.generation_id).where(generations.c.state == "building"))).scalar_one_or_none()
-                if building:
+                generation_ids = (await connection.execute(select(generations.c.generation_id).where(
+                    generations.c.state.in_(("active", "building"))
+                ))).scalars().all()
+                for target_generation_id in generation_ids:
                     await connection.execute(generation_changes.insert().values(
-                        generation_id=building, source_id=source_id, high_sequence=sequence,
+                        generation_id=target_generation_id, source_id=source_id, high_sequence=sequence,
                         revision_id=revision_id, profiles=profile_snapshot, tombstoned=False, acknowledged=False, created_at=now,
                     ))
         return {"decision": decision, "source": _as_source(current)}
@@ -552,10 +584,12 @@ class SqliteIndexStore:
                 decision = "superseded"
             current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().one()
             if decision == "tombstoned":
-                building = (await connection.execute(select(generations.c.generation_id).where(generations.c.state == "building"))).scalar_one_or_none()
-                if building:
+                generation_ids = (await connection.execute(select(generations.c.generation_id).where(
+                    generations.c.state.in_(("active", "building"))
+                ))).scalars().all()
+                for target_generation_id in generation_ids:
                     await connection.execute(generation_changes.insert().values(
-                        generation_id=building, source_id=source_id,
+                        generation_id=target_generation_id, source_id=source_id,
                         high_sequence=current["high_sequence"], revision_id=current["revision_id"],
                         profiles=current["profiles"], tombstoned=True, acknowledged=False, created_at=now,
                     ))
