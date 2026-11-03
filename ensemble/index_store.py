@@ -172,10 +172,6 @@ class SqliteIndexStore:
                     "acknowledged": False,
                     "created_at": item["created_at"],
                 } for item in pending])
-                await connection.execute(generation_changes.delete().where(
-                    generation_changes.c.generation_id == control["active_generation_id"],
-                    generation_changes.c.acknowledged.is_(False),
-                ))
             row = (await connection.execute(select(generations).where(
                 generations.c.generation_id == generation_id
             ))).mappings().one()
@@ -275,6 +271,9 @@ class SqliteIndexStore:
             await connection.execute(generation_write_fence.delete().where(
                 generation_write_fence.c.singleton_id == 1,
                 generation_write_fence.c.generation_id == generation_id,
+            ))
+            await connection.execute(generation_changes.delete().where(
+                generation_changes.c.generation_id.in_((expected_active_generation_id, generation_id))
             ))
             row = (await connection.execute(select(generation_control).where(
                 generation_control.c.singleton_id == 1
