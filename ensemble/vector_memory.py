@@ -63,3 +63,45 @@ class InMemoryVectorStore:
             })
         scored.sort(key=lambda item: (-item["score"], item["id"]))
         return scored[:top_k]
+
+
+    async def upsert_generation(
+        self, generation_id: str, name: str, model: str,
+        dimensions: int, items: list[dict[str, Any]],
+    ) -> int:
+        if not generation_id or len(generation_id) > 64:
+            raise ValueError("generation_id must contain 1-64 characters")
+        collection = self._collections.get(name)
+        if collection is None:
+            collection = {"model": model, "dimensions": dimensions, "records": {}}
+            self._collections[name] = collection
+        if collection["model"] != model or collection["dimensions"] != dimensions:
+            raise RuntimeError("vector collection model or dimension mismatch")
+        generation = collection.setdefault("generations", {}).setdefault(generation_id, {})
+        for item in items:
+            generation[item["id"]] = dict(item)
+        return len(items)
+
+    async def query_generation(
+        self, generation_id: str, name: str,
+        embedding: list[float], top_k: int,
+    ) -> list[dict[str, Any]]:
+        collection = self._collections.get(name, {})
+        generation = collection.get("generations", {}).get(generation_id, {})
+        scored = []
+        for record_id, item in generation.items():
+            if len(item["embedding"]) != len(embedding):
+                continue
+            score = sum(left * right for left, right in zip(item["embedding"], embedding))
+            scored.append({
+                "id": record_id, "document": item["document"],
+                "score": float(score), "metadata": item["metadata"],
+            })
+        scored.sort(key=lambda item: (-item["score"], item["id"]))
+        return scored[:max(0, top_k)]
+
+    async def delete_generation(self, generation_id: str) -> int:
+        removed = 0
+        for collection in self._collections.values():
+            removed += len(collection.get("generations", {}).pop(generation_id, {}))
+        return removed
