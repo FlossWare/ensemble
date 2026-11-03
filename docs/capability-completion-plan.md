@@ -90,6 +90,8 @@ Implement durable index rebuilds that can safely coexist with writes:
 
 **Bounded source enumeration implemented:** Index adapters now expose an ordered keyset cursor bounded by the source-ID upper key observed at the start of a pass. This avoids offset drift and gives a rebuild worker a finite key range. It is not a transactionally consistent snapshot: changes to existing source rows and inserts below the bound still require write-fence/reconciliation handling.
 
+**Generation-scoped Index state implemented:** migration 0020 stores each source's revision sequence, revision ID, profiles, and tombstone state independently in the shadow generation. Writes are monotonic, tombstones are irreversible within a generation, and generation state can be paged by keyset cursor.
+
 **Not yet implemented:** a durable rebuild worker that snapshots and populates document, lexical, and vector stores, write-fence coordination, concurrent-write reconciliation, automatic restart recovery, and atomic activation across retrieval data planes. Keep the rebuild API unavailable until those pieces exist.
 
 Do not ship a rebuild operation that can silently lose acknowledged writes or resurrect deleted content.
