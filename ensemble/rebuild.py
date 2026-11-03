@@ -197,3 +197,122 @@ class IndexGenerationBuilder:
             "cursor": next_cursor,
             "upper_bound": upper_bound,
         }
+
+
+    async def copy_vectors_page(
+        self, generation_id: str, *, page_size: int = 500,
+    ) -> dict[str, Any]:
+        if self.vector_store is None:
+            raise RuntimeError("vector store is required for the vector generation pass")
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
+            raise ValueError("page_size must be between 1 and 10000")
+
+        status = await self.index_store.generation_status()
+        generation = next(
+            (item for item in status["generations"] if item["generation_id"] == generation_id),
+            None,
+        )
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        checkpoints = generation.get("checkpoints") or {}
+        if (checkpoints.get("index") or {}).get("sealed") is not True:
+            raise RuntimeError("Index source copy must be sealed before vector copy")
+        if (checkpoints.get("documents") or {}).get("sealed") is not True:
+            raise RuntimeError("Document copy must be sealed before vector copy")
+
+        previous = checkpoints.get("vectors") or {}
+        if previous.get("sealed") is True:
+            value = previous.get("value") or {}
+            return {
+                "generation_id": generation_id, "status": "complete",
+                "page_count": 0,
+                "copied_record_count": value.get("copied_record_count", 0),
+                "skipped_tombstone_count": value.get("skipped_tombstone_count", 0),
+                "collection_index": value.get("collection_index", 0),
+            }
+
+        value = previous.get("value") or {}
+        if value:
+            collections = value["collections"]
+            collection_index = int(value.get("collection_index", 0))
+            cursor = value.get("cursor")
+            copied_record_count = int(value.get("copied_record_count", 0))
+            skipped_tombstone_count = int(value.get("skipped_tombstone_count", 0))
+        else:
+            collections = []
+            for collection in await self.vector_store.list_collections():
+                collections.append({
+                    "name": collection["name"],
+                    "model": collection["model"],
+                    "dimensions": collection["dimensions"],
+                    "upper_bound": await self.vector_store.record_key_upper_bound(collection["name"]),
+                })
+            collection_index = 0
+            cursor = None
+            copied_record_count = 0
+            skipped_tombstone_count = 0
+
+        page_count = 0
+        if collection_index < len(collections):
+            collection = collections[collection_index]
+            page = await self.vector_store.list_records_after(
+                collection["name"], cursor, collection["upper_bound"], page_size,
+            )
+            to_copy = []
+            for item in page:
+                metadata = item.get("metadata") or {}
+                source_id = metadata.get("source_id") or metadata.get("url")
+                if not isinstance(source_id, str) or not source_id:
+                    raise RuntimeError(
+                        f"vector record {item['id']} in {collection['name']} has no source identity"
+                    )
+                source = await self.index_store.get_generation_source(
+                    generation_id, source_id,
+                )
+                if source is None:
+                    raise RuntimeError(
+                        f"vector record {item['id']} references source {source_id} missing from generation Index"
+                    )
+                if source["tombstoned"]:
+                    skipped_tombstone_count += 1
+                    continue
+                to_copy.append(item)
+            if to_copy:
+                await self.vector_store.upsert_generation(
+                    generation_id, collection["name"], collection["model"],
+                    collection["dimensions"], to_copy,
+                )
+                copied_record_count += len(to_copy)
+            page_count = len(page)
+            next_cursor = page[-1]["id"] if page else cursor
+            collection_complete = (
+                collection["upper_bound"] is None
+                or next_cursor == collection["upper_bound"]
+                or len(page) < page_size
+            )
+            if collection_complete:
+                collection_index += 1
+                cursor = None
+            else:
+                cursor = next_cursor
+
+        complete = collection_index >= len(collections)
+        checkpoint = {
+            "collections": collections,
+            "collection_index": collection_index,
+            "cursor": cursor,
+            "copied_record_count": copied_record_count,
+            "skipped_tombstone_count": skipped_tombstone_count,
+        }
+        await self.index_store.record_generation_checkpoint(
+            generation_id, "vectors", checkpoint, sealed=complete,
+        )
+        return {
+            "generation_id": generation_id,
+            "status": "complete" if complete else "in_progress",
+            "page_count": page_count,
+            "copied_record_count": copied_record_count,
+            "skipped_tombstone_count": skipped_tombstone_count,
+            "collection_index": collection_index,
+            "collection_count": len(collections),
+        }
