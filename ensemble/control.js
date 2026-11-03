@@ -1,3 +1,36 @@
+const partitionTokenInput=document.getElementById("partition-token");
+const partitionIdInput=document.getElementById("partition-id");
+const partitionSessionStatus=document.getElementById("partition-session-status");
+try{
+ partitionTokenInput.value=sessionStorage.getItem("ensemble.partition.token")||"";
+ partitionIdInput.value=sessionStorage.getItem("ensemble.partition.id")||"";
+ if(partitionTokenInput.value)partitionSessionStatus.textContent="Credentials loaded for this tab.";
+}catch(error){partitionSessionStatus.textContent="Session storage is unavailable; credentials will remain in the fields only.";}
+document.getElementById("connect-partition").addEventListener("click",()=>{
+ try{
+  sessionStorage.setItem("ensemble.partition.token",partitionTokenInput.value.trim());
+  sessionStorage.setItem("ensemble.partition.id",partitionIdInput.value.trim());
+  partitionSessionStatus.textContent="Credentials saved for this tab. Protected requests will use this partition.";
+ }catch(error){partitionSessionStatus.textContent="Could not save credentials in session storage; the fields remain active.";}
+});
+document.getElementById("clear-partition").addEventListener("click",()=>{
+ partitionTokenInput.value="";partitionIdInput.value="";
+ try{sessionStorage.removeItem("ensemble.partition.token");sessionStorage.removeItem("ensemble.partition.id");}catch(error){}
+ partitionSessionStatus.textContent="Credentials cleared. Local default mode will be used.";
+});
+const nativeFetch=window.fetch.bind(window);
+window.fetch=(input,options={})=>{
+ const url=typeof input==="string"?input:(input&&input.url)||"";
+ if(url.startsWith("/api/v1/")){
+  const headers=new Headers(options.headers||(input instanceof Request?input.headers:undefined));
+  const token=(partitionTokenInput.value||"").trim();
+  const partition=(partitionIdInput.value||"").trim();
+  if(token)headers.set("Authorization","Bearer "+token);
+  if(partition)headers.set("X-Ensemble-Partition",partition);
+  options={...options,headers};
+ }
+ return nativeFetch(input,options);
+};
 const form=document.getElementById("scrape-form");
 const uri=document.getElementById("uri");
 const status=document.getElementById("status");
