@@ -65,8 +65,10 @@ Each capability group can be assigned an independent REST base URL. The initial 
 - `ENSEMBLE_RERANKING_REST_URL`
 - `ENSEMBLE_EMBEDDINGS_REST_URL`
 - `ENSEMBLE_VECTOR_REST_URL`
+- `ENSEMBLE_INDEX_REST_URL`
+- `ENSEMBLE_DOCUMENTS_REST_URL`
 
-When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. Context Assembly dispatches to Search, Memory, Intent, and Entity REST endpoints. Hybrid Search dispatches base retrieval to Search, intent classification and entity extraction to their capabilities, Graph query/traversal to Graph, reranking to Reranking, and its search-ledger write to Memory through REST. Knowledge-scoped Hybrid Search dispatches embedding and vector queries through their REST contracts. Hybrid Search invokes the Search capability through `POST /api/v1/search/retrieve`. Search retains ownership of its retrieval algorithm and persistence rather than exposing its internal store implementation to Hybrid. Setting `ENSEMBLE_SEARCH_REST_URL` moves Search behind a separate REST server without changing the Hybrid contract. Remaining direct store access inside Search is capability-owned implementation, not cross-capability composition. Only call paths explicitly migrated to the internal REST client satisfy the boundary.
+When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. Context Assembly dispatches to Search, Memory, Intent, and Entity REST endpoints. Hybrid Search dispatches base retrieval to Search, intent classification and entity extraction to their capabilities, Graph query/traversal to Graph, reranking to Reranking, and its search-ledger write to Memory through REST. Knowledge-scoped Hybrid Search dispatches embedding and vector queries through their REST contracts. Document ingestion dispatches revision registration to Index, document/chunk storage to Documents, entity extraction to Entities, and graph association to Graph through REST. Hybrid Search invokes the Search capability through `POST /api/v1/search/retrieve`. Search retains ownership of its retrieval algorithm and persistence rather than exposing its internal store implementation to Hybrid. Setting `ENSEMBLE_SEARCH_REST_URL` moves Search behind a separate REST server without changing the Hybrid contract. Remaining direct store access inside Search is capability-owned implementation, not cross-capability composition. Only call paths explicitly migrated to the internal REST client satisfy the boundary.
 
 ## 7. Initial implemented endpoints
 
@@ -75,6 +77,7 @@ When a key is unset, requests for that capability use the co-located ASGI transp
 | GET | /health | Liveness |
 | GET | /ready | Application readiness and persistence configuration |
 | POST | /api/v1/ingest/documents | Register or replace a document revision, chunk it, optionally embed it, and durably store it |
+| POST | /api/v1/documents | Documents capability resource used by the ingestion orchestrator to store and chunk a validated document |
 | POST | /api/v1/ingest/files | Upload a bounded supported file (currently PDF), extract text and ingest it through the shared document pipeline |
 | POST | /api/v1/ingest/urls/preview, /api/v1/ingest/urls | Preview or ingest a public HTTP(S) HTML/plain-text page |
 | POST | /api/v1/ingest/transcripts | Parse caller-supplied JSONL transcript slices and return a UTF-8 byte checkpoint |
