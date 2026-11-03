@@ -193,3 +193,20 @@ Consistency boundary:
 - This is an idempotent bounded key-range copy, not a transactionally consistent snapshot.
 - Existing-source updates and inserts below the upper bound can race with the pass and must be reconciled before cutover.
 - Document/chunk/vector population, Memory/Knowledge passes, writer fences, and crash-safe cutover remain outstanding.
+
+
+## Resumable document/chunk generation copy pass
+
+Implemented:
+- `IndexGenerationBuilder.copy_documents_page` copies current active documents and chunks into a building generation in bounded pages.
+- The pass refuses to start until the generation's Index source-state checkpoint is sealed.
+- Active source revisions are copied into generation-scoped document/chunk tables; tombstoned sources are tombstoned in shadow document and vector stores.
+- The Documents checkpoint records the upper key, cursor, source/document/chunk/tombstone counts, and completion state.
+- Repeated calls resume from the durable cursor; completed passes return without rewriting data.
+- SQLite integration tests cover document copy, tombstone propagation, checkpoint sealing, and the Index-before-Documents dependency.
+
+Still outstanding:
+- Shadow vector population for non-tombstoned documents.
+- Memory and Knowledge snapshot/copy passes.
+- Write fences and concurrent-write reconciliation.
+- Crash recovery across a complete multi-store rebuild and atomic activation.
