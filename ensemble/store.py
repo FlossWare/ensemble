@@ -149,12 +149,13 @@ class InMemoryDocumentStore:
 
     async def reclaim_source(self, source_id: str) -> int:
         keys = [key for key in self._documents if key[0] == source_id]
-        document_ids = {self._documents[key].id for key in keys}
-        for key in keys:
+        selected = keys[:500]
+        document_ids = {self._documents[key].id for key in selected}
+        for key in selected:
             del self._documents[key]
         for document_id in document_ids:
             self._chunks.pop(document_id, None)
-        return len(keys)
+        return 501 if len(keys) > 500 else len(selected)
 
     async def all_chunks(self) -> list[IndexedChunk]:
         latest: dict[str, Document] = {}
@@ -421,11 +422,14 @@ class SqlDocumentStore:
             )
             document_ids = (await connection.execute(
                 select(self.documents.c.id).where(self.documents.c.source_id == source_id)
+                .order_by(self.documents.c.id).limit(501)
             )).scalars().all()
+            more = len(document_ids) > 500
+            document_ids = document_ids[:500]
             if document_ids:
                 await connection.execute(delete(self.chunks).where(self.chunks.c.document_id.in_(document_ids)))
                 await connection.execute(delete(self.documents).where(self.documents.c.id.in_(document_ids)))
-        return len(document_ids)
+        return 501 if more else len(document_ids)
 
     async def all_chunks(self) -> list[IndexedChunk]:
         statement = (
