@@ -198,6 +198,44 @@ class SqliteGenerationStore:
             ],
         }
 
+    async def acquire_fence(self, generation_id: str, watermark: int) -> None:
+        """Persist the cutover fence marker after the caller has stopped admitting writes."""
+        if watermark < 0:
+            raise ValueError("fence watermark must be non-negative")
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            candidate = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().first()
+            if candidate is None:
+                raise KeyError(generation_id)
+            if candidate["state"] != "reconciling":
+                raise ValueError("a generation must be reconciling before the cutover fence")
+            if watermark < (candidate["applied_watermark"] or 0):
+                raise ValueError("fence watermark cannot precede the applied watermark")
+            current = (await connection.execute(select(control).where(
+                control.c.control_id == 1
+            ))).mappings().first()
+            if current and current["fenced_generation_id"] not in {None, generation_id}:
+                raise ValueError("another generation currently owns the cutover fence")
+            if current is None:
+                await connection.execute(insert(control).values(
+                    control_id=1, active_generation_id=None,
+                    fenced_generation_id=generation_id, fence_watermark=watermark,
+                    updated_at=now,
+                ))
+            else:
+                await connection.execute(update(control).where(
+                    control.c.control_id == 1,
+                ).values(
+                    fenced_generation_id=generation_id,
+                    fence_watermark=watermark, updated_at=now,
+                ))
+            await connection.execute(update(generations).where(
+                generations.c.generation_id == generation_id,
+                generations.c.state == "reconciling",
+            ).values(state="fenced", updated_at=now))
+
     async def activate(self, generation_id: str, *, expected_active_generation_id: str | None) -> dict[str, Any]:
         """Atomically compare-and-swap the active pointer and retire its predecessor."""
         now = datetime.now(timezone.utc)
@@ -212,6 +250,19 @@ class SqliteGenerationStore:
             current = (await connection.execute(select(control).where(
                 control.c.control_id == 1
             ))).mappings().first()
+            if current is None or current["fenced_generation_id"] != generation_id:
+                raise ValueError("generation must own the cutover fence before activation")
+            if current["fence_watermark"] != candidate["applied_watermark"]:
+                raise ValueError("candidate is not reconciled through the cutover fence watermark")
+            verification = (await connection.execute(select(checkpoints).where(
+                checkpoints.c.generation_id == generation_id,
+                checkpoints.c.phase == "verification",
+            ))).mappings().first()
+            if (
+                verification is None or not verification["sealed"]
+                or verification["watermark"] != current["fence_watermark"]
+            ):
+                raise ValueError("candidate verification must be sealed at the fence watermark")
             actual_active = current["active_generation_id"] if current else None
             if actual_active != expected_active_generation_id:
                 raise ValueError("active generation changed; candidate must be revalidated")
