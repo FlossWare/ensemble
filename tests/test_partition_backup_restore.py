@@ -29,7 +29,12 @@ def _run_as_root(command: list[str], env: dict[str, str]) -> None:
         invocation = ["sudo", "env", *(f"{key}={value}" for key, value in env.items()), *command]
     else:
         pytest.skip("backup/restore integration test requires root or passwordless sudo")
-    subprocess.run(invocation, check=True, capture_output=True, text=True)
+    completed = subprocess.run(invocation, check=False, capture_output=True, text=True)
+    if completed.returncode:
+        pytest.fail(
+            f"command failed ({completed.returncode}): {' '.join(command)}\\n"
+            f"stdout:\\n{completed.stdout}\\nstderr:\\n{completed.stderr}"
+        )
 
 
 def test_partition_backup_and_restore_round_trip(tmp_path):
