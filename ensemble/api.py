@@ -14,6 +14,7 @@ from uuid import uuid4
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.openapi.utils import get_openapi
 from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chunk as chunk_text, describe_profiles as describe_chunk_profiles
 from .embeddings import EmbeddingProvider, MAX_BODY_BYTES as MAX_EMBED_BODY_BYTES, configured_embedding_provider, validate_embedding_request
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
@@ -253,6 +254,25 @@ def create_app(
         lifespan=lifespan,
     )
     app.middleware("http")(partition_scope_middleware)
+
+    def openapi_with_partition_auth():
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title, version=app.version,
+            description=app.description, routes=app.routes,
+        )
+        schemes = schema.setdefault("components", {}).setdefault("securitySchemes", {})
+        schemes["BearerAuth"] = {"type": "http", "scheme": "bearer", "bearerFormat": "opaque"}
+        for path, methods in schema.get("paths", {}).items():
+            if path.startswith("/api/v1/"):
+                for operation in methods.values():
+                    if isinstance(operation, dict) and "responses" in operation:
+                        operation["security"] = [{"BearerAuth": []}]
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = openapi_with_partition_auth
     documents = DocumentService(document_store, Chunker(), embeddings, active_vector_store)
     search = SearchService(document_store, embeddings, active_reranker, active_vector_store)
 
