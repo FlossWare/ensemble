@@ -176,3 +176,19 @@ Still outstanding:
 - Rebuild orchestration to copy the active Index source set and its tombstones into a building generation.
 - Snapshot consistency and concurrent-write reconciliation.
 - Write fences, durable job recovery, and coordinated activation across all stores.
+
+
+## Resumable Index source-copy pass
+
+Implemented:
+- `IndexGenerationBuilder` copies source state from the active Index into a building generation in bounded pages.
+- The source key upper bound, last processed key, source count, and tombstone count are persisted in the Index generation checkpoint.
+- A new builder instance resumes from the durable checkpoint after process replacement.
+- Tombstones are copied into the generation source-state table and remain irreversible.
+- Completion seals the Index checkpoint; subsequent calls return complete without repeating work.
+- Tests cover page progression, resume, tombstone propagation, and exclusion of keys beyond the captured upper bound.
+
+Consistency boundary:
+- This is an idempotent bounded key-range copy, not a transactionally consistent snapshot.
+- Existing-source updates and inserts below the upper bound can race with the pass and must be reconciled before cutover.
+- Document/chunk/vector population, Memory/Knowledge passes, writer fences, and crash-safe cutover remain outstanding.
