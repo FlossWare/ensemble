@@ -8,6 +8,9 @@ class InMemoryIndexStore:
     def __init__(self):
         self._sources: dict[str, dict[str, Any]] = {}
         self._generation_sources: dict[str, dict[str, dict[str, Any]]] = {}
+        self._generation_changes: dict[str, list[dict[str, Any]]] = {}
+        self._change_sequence = 0
+        self._write_fence_generation: str | None = None
         now = datetime.now(timezone.utc).isoformat()
         self._generations = {
             "generation-0001": {
@@ -26,6 +29,9 @@ class InMemoryIndexStore:
         return None
 
     async def record_revision(self, source_id: str, sequence: int, revision_id: str, profiles: dict[str, Any]) -> dict[str, Any]:
+        if self._write_fence_generation is not None:
+            current = self._sources.get(source_id)
+            return {"decision": "fenced", "source": dict(current) if current else None}
         current = self._sources.get(source_id)
         snapshot = dict(sorted(profiles.items()))
         if current is None:
