@@ -1844,10 +1844,19 @@ def create_app(
             await document_store.check_ready()
         except Exception as exc:
             raise HTTPException(status_code=503, detail="hybrid retrieval persistence unavailable") from exc
+        embedding_available = bool(embeddings.available)
         return {
             "ok": True, "ready": True,
-            "embedding_available": embeddings.available,
-            "degraded_mode": "lexical fallback",
+            "status": "ok" if embedding_available else "partial",
+            "channels": {
+                "lexical": {"status": "ready", "available": True},
+                "vector": {
+                    "status": "ready" if embedding_available else "unavailable",
+                    "available": embedding_available,
+                },
+            },
+            "embedding_available": embedding_available,
+            "degraded_mode": None if embedding_available else "lexical fallback",
         }
 
     @app.post("/api/v1/search/hybrid", tags=["search"])
