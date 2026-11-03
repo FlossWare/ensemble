@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -100,6 +101,19 @@ def _is_public_path(path: str) -> bool:
     return path in {"/health", "/ready", "/openapi.json", "/docs", "/redoc", "/control", "/control.js"}
 
 
+def _is_loopback_client(request: Request) -> bool:
+    client = request.client
+    if client is None:
+        return False
+    host = client.host.casefold()
+    if host in {"testclient", "localhost"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 async def partition_scope_middleware(request: Request, call_next):
     scope = RequestScope(correlation_id=request.headers.get("x-correlation-id"))
     if request.url.path.startswith("/api/v1/") and not _is_public_path(request.url.path):
@@ -132,6 +146,8 @@ async def partition_scope_middleware(request: Request, call_next):
         else:
             if os.getenv("ENSEMBLE_AUTH_REQUIRED", "0").strip() == "1":
                 return _problem(503, "Authentication unavailable", "Authentication is required but no partition token map is configured.", "partition_auth_unconfigured")
+            if not _is_loopback_client(request):
+                return _problem(503, "Authentication required", "Remote API access requires configured partition credentials.", "remote_auth_required")
             requested = request.headers.get("x-ensemble-partition")
             if requested not in (None, "default"):
                 return _problem(403, "Partition access denied", "Unauthenticated local mode can access only the default partition.", "partition_forbidden")
