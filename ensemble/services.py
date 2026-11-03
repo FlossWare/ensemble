@@ -238,7 +238,7 @@ class SearchService:
                         "document_candidate_count": 0,
                         "error": "query embedding or vector search failed",
                     }
-                    degraded.append("vector")
+                    degraded.append("embeddings")
 
         lexical_ranks = _rank(lexical_scores)
         vector_ranks = _rank(vector_scores)
