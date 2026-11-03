@@ -390,30 +390,37 @@ class IndexGenerationBuilder:
         if generation is None or generation["state"] != "building":
             raise RuntimeError("generation is not in building state")
         checkpoints = generation.get("checkpoints") or {}
-        if (checkpoints.get("index") or {}).get("sealed") is not True:
-            raise RuntimeError("Index source copy must be sealed before final write fencing")
-        checkpoint = checkpoints.get("index_reconciliation") or {}
-        value = checkpoint.get("value") or {}
-        cursor = int(value.get("cursor", 0))
+        base_capabilities = ("index", "documents", "vectors", "memory", "knowledge")
+        reconciliation_capabilities = (
+            "index_reconciliation", "documents_reconciliation", "vectors_reconciliation",
+            "memory_reconciliation", "knowledge_reconciliation",
+        )
+        for capability in base_capabilities:
+            if (checkpoints.get(capability) or {}).get("sealed") is not True:
+                raise RuntimeError(f"{capability} source copy must be sealed before final write fencing")
         high_watermark = await self.index_store.generation_change_high_watermark(generation_id)
-        if cursor != high_watermark:
-            raise RuntimeError("generation change journal advanced; reconcile before fencing")
+        reconciliation_values = {}
+        for capability in reconciliation_capabilities:
+            checkpoint = checkpoints.get(capability) or {}
+            value = checkpoint.get("value") or {}
+            cursor = int(value.get("cursor", 0))
+            if cursor != high_watermark:
+                raise RuntimeError(f"{capability} is not caught up to the generation change journal")
+            reconciliation_values[capability] = value
         fence = await self.index_store.acquire_generation_write_fence(
             generation_id, through_change_id=high_watermark,
         )
         try:
-            await self.index_store.record_generation_checkpoint(
-                generation_id, "index_reconciliation",
-                {"cursor": high_watermark, "change_count": int(value.get("change_count", 0)),
-                 "observed_high_watermark": high_watermark},
-                sealed=True,
-            )
+            for capability, value in reconciliation_values.items():
+                await self.index_store.record_generation_checkpoint(
+                    generation_id, capability,
+                    {**value, "cursor": high_watermark, "observed_high_watermark": high_watermark},
+                    sealed=True,
+                )
         except Exception:
             await self.index_store.release_generation_write_fence(generation_id)
             raise
         return fence
-
-
 
     async def reconcile_document_changes_page(
         self, generation_id: str, *, page_size: int = 250,
