@@ -148,42 +148,97 @@ class SearchService:
     ) -> dict:
         if not query.strip():
             raise ValueError("query is required")
-        indexed = await self.store.all_chunks()
-        if not indexed:
-            return {
-                "ok": True, "results": [], "degraded": [],
-                "retrieval": "lexical", "reranked": False,
-            }
 
-        lexical_matches = await self.store.lexical_search(query, limit=min(2000, max(200, limit * 4)))
-        lexical_scores = {
-            item.chunk.id: score for item, score in lexical_matches
-        }
+        indexed = await self.store.all_chunks()
+        lexical_scores: dict = {}
         vector_scores: dict = {}
         degraded: list[str] = []
-        if include_vector and self.embeddings.available:
-            try:
-                query_vector = (await self.embeddings.embed([query], mode="query"))[0]
-                if self.vector_store is not None:
-                    vector_hits = await self.vector_store.query("transcript_text", query_vector, 200)
-                    known_ids = {str(item.chunk.id): item.chunk.id for item in indexed}
-                    vector_scores = {
-                        known_ids[hit["id"]]: float(hit["score"])
-                        for hit in vector_hits if hit["id"] in known_ids and float(hit["score"]) > 0
+        channels = {
+            "lexical": {"status": "not_run", "available": False, "candidate_count": 0},
+            "vector": {"status": "disabled", "available": False, "candidate_count": 0,
+                       "collection_candidate_count": 0, "document_candidate_count": 0},
+        }
+
+        # Keep channels independent: one failing must not suppress the other.
+        try:
+            lexical_matches = await self.store.lexical_search(
+                query, limit=min(2000, max(200, limit * 4))
+            )
+            lexical_scores = {item.chunk.id: score for item, score in lexical_matches}
+            channels["lexical"] = {
+                "status": "ok", "available": True,
+                "candidate_count": len(lexical_scores),
+            }
+        except Exception:
+            channels["lexical"] = {
+                "status": "unavailable", "available": False,
+                "candidate_count": 0, "error": "lexical search failed",
+            }
+            degraded.append("lexical")
+
+        if include_vector:
+            if not self.embeddings.available:
+                channels["vector"] = {
+                    "status": "unavailable", "available": False,
+                    "candidate_count": 0, "collection_candidate_count": 0,
+                    "document_candidate_count": 0, "error": "embedding provider unavailable",
+                }
+                degraded.append("vector")
+            else:
+                collection_error = False
+                try:
+                    embedded = await self.embeddings.embed([query], mode="query")
+                    if not isinstance(embedded, list) or len(embedded) != 1:
+                        raise RuntimeError("embedding provider returned an invalid query vector")
+                    query_vector = embedded[0]
+                    if not isinstance(query_vector, (list, tuple)) or not query_vector:
+                        raise RuntimeError("embedding provider returned an empty query vector")
+                    if any(not math.isfinite(float(value)) for value in query_vector):
+                        raise RuntimeError("embedding provider returned a non-finite query vector")
+
+                    collection_scores: dict = {}
+                    if self.vector_store is not None:
+                        try:
+                            vector_hits = await self.vector_store.query("transcript_text", query_vector, 200)
+                            known_ids = {str(item.chunk.id): item.chunk.id for item in indexed}
+                            collection_scores = {
+                                known_ids[hit["id"]]: float(hit["score"])
+                                for hit in vector_hits
+                                if hit.get("id") in known_ids
+                                and math.isfinite(float(hit.get("score", 0.0)))
+                                and float(hit.get("score", 0.0)) > 0
+                            }
+                        except Exception:
+                            collection_error = True
+
+                    document_scores: dict = {}
+                    for item in indexed:
+                        if item.chunk.embedding:
+                            score = _cosine(query_vector, item.chunk.embedding)
+                            if score > 0:
+                                document_scores[item.chunk.id] = score
+                    vector_scores = dict(collection_scores)
+                    for identifier, score in document_scores.items():
+                        vector_scores[identifier] = max(vector_scores.get(identifier, 0.0), score)
+
+                    vector_status = "partial" if collection_error else "ok"
+                    channels["vector"] = {
+                        "status": vector_status, "available": True,
+                        "candidate_count": len(vector_scores),
+                        "collection_candidate_count": len(collection_scores),
+                        "document_candidate_count": len(document_scores),
                     }
-                # Keep document chunks outside the transcript collection in the
-                # vector candidate set as well; the collection is one source, not
-                # a replacement for the document-store vector channel.
-                for item in indexed:
-                    if item.chunk.embedding:
-                        score = _cosine(query_vector, item.chunk.embedding)
-                        if score > 0:
-                            vector_scores[item.chunk.id] = max(
-                                vector_scores.get(item.chunk.id, 0.0), score
-                            )
-            except Exception:
-                # Preserve lexical results when the embedding dependency is degraded.
-                degraded.append("embeddings")
+                    if collection_error:
+                        channels["vector"]["error"] = "vector collection query failed; document vectors remain available"
+                        degraded.append("vector_collection")
+                except Exception:
+                    channels["vector"] = {
+                        "status": "unavailable", "available": False,
+                        "candidate_count": 0, "collection_candidate_count": 0,
+                        "document_candidate_count": 0,
+                        "error": "query embedding or vector search failed",
+                    }
+                    degraded.append("vector")
 
         lexical_ranks = _rank(lexical_scores)
         vector_ranks = _rank(vector_scores)
@@ -249,11 +304,30 @@ class SearchService:
                     reranked = True
                 except Exception:
                     degraded.append("reranking")
+
+        operational_channels = sum(
+            1 for channel in channels.values()
+            if channel["status"] in {"ok", "partial"}
+        )
+        status = (
+            "unavailable" if operational_channels == 0
+            else "partial" if degraded else "ok"
+        )
+        if vector_scores:
+            retrieval = "hybrid"
+        elif channels["lexical"]["available"]:
+            retrieval = "lexical"
+        elif channels["vector"]["available"]:
+            retrieval = "vector"
+        else:
+            retrieval = "unavailable"
         return {
-            "ok": True,
+            "ok": operational_channels > 0,
+            "status": status,
             "results": results,
-            "degraded": degraded,
-            "retrieval": "hybrid" if vector_scores else "lexical",
+            "degraded": sorted(set(degraded)),
+            "channels": channels,
+            "retrieval": retrieval,
             "reranked": reranked,
         }
 
