@@ -160,6 +160,14 @@ class SqliteIndexStore:
             raise ValueError("activation requires acknowledged-write and tombstone verification")
         now = datetime.now(timezone.utc)
         async with self.engine.begin() as connection:
+            current_control = (await connection.execute(select(generation_control).where(
+                generation_control.c.singleton_id == 1
+            ))).mappings().one()
+            if (
+                current_control["active_generation_id"] != expected_active_generation_id
+                or current_control["epoch"] != expected_epoch
+            ):
+                raise RuntimeError("active generation changed; refresh status before cutover")
             target = (await connection.execute(select(generations).where(
                 generations.c.generation_id == generation_id
             ))).mappings().first()
