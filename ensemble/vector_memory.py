@@ -130,10 +130,11 @@ class InMemoryVectorStore:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
             raise ValueError("limit must be between 1 and 10000")
         collection = self._collections.get(name, {})
+        active_records = collection.get("records", {})
         matches = [
             {"id": record_id, "embedding": item["embedding"],
              "document": item["document"], "metadata": item["metadata"]}
-            for record_id, item in collection.items()
+            for record_id, item in active_records.items()
             if item.get("metadata", {}).get("source_id") == source_id
             or item.get("metadata", {}).get("url") == source_id
         ]
