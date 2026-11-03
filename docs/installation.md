@@ -79,3 +79,14 @@ The client sends `Authorization: Bearer <token>`. If its token authorizes multip
 The existing database remains the `default` partition. Named partitions are created as separate SQLite databases under `<database-directory>/partitions/` and are migrated automatically on first use. Back up the entire persistence root, including the `partitions` directory. Do not move or rename individual partition database files.
 
 If the token map is configured, API requests without valid credentials are rejected. The health/readiness endpoints remain public. The Control Center's authenticated-session workflow is being completed separately; use authenticated REST clients for protected operations until that work is finished.
+
+## Partition-aware backup and restore
+
+Use the repository scripts rather than copying a live SQLite file. They stop the systemd service when it is active, checkpoint and integrity-check every database, and include the entire persistence root (the default database plus every named partition):
+
+```bash
+sudo bash scripts/backup-persistence.sh /path/to/backups/ensemble.tar.gz
+sudo bash scripts/restore-persistence.sh /path/to/backups/ensemble.tar.gz
+```
+
+The backup script prints a SHA-256 checksum. The restore script validates archive paths, checks SQLite integrity and partition identity markers before replacing anything, and retains the previous persistence root as a rollback directory. If using a custom persistence root or service name, set `ENSEMBLE_PERSISTENCE_ROOT` and `ENSEMBLE_SERVICE_NAME` for the command. Keep backups outside the persistence root.
