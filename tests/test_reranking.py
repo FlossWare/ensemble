@@ -81,3 +81,67 @@ def test_reranking_rest_reports_missing_provider():
             json={"query": "search relevance", "documents": ["candidate"]},
         )
         assert response.status_code == 503
+
+
+from uuid import uuid4
+
+from ensemble.models import SearchHit
+from ensemble.reranking import RerankingDecorator
+
+
+class AsyncRankingProvider:
+    available = True
+
+    def status(self):
+        return {"provider": "test-http"}
+
+    async def score(self, query, documents):
+        return [float(index) for index, _ in enumerate(documents)]
+
+
+def _hit(text):
+    return SearchHit(
+        document_id=uuid4(), source_id="source", revision=1,
+        title=text, chunk_id=uuid4(), chunk_ordinal=0, text=text,
+        lexical_score=1.0, vector_score=0.0, fusion_score=1.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_reranking_decorator_wraps_retriever_and_preserves_candidate_identity():
+    original = [_hit("first"), _hit("second")]
+
+    async def retrieve(query, limit=10, *, rerank=None):
+        return {
+            "ok": True, "status": "ok", "results": list(original),
+            "degraded": [], "reranked": False,
+        }
+
+    decorated = RerankingDecorator(AsyncRankingProvider())(retrieve)
+    result = await decorated("query", rerank=True)
+
+    assert result["ranking"]["status"] == "reranked"
+    assert result["ranking"]["provider"] == "test-http"
+    assert result["reranked"] is True
+    assert [hit.text for hit in result["results"]] == ["second", "first"]
+    assert {hit.chunk_id for hit in result["results"]} == {hit.chunk_id for hit in original}
+
+
+@pytest.mark.asyncio
+async def test_reranking_decorator_falls_back_without_changing_baseline():
+    original = [_hit("first"), _hit("second")]
+
+    async def retrieve(query, limit=10, *, rerank=None):
+        return {
+            "ok": True, "status": "ok", "results": list(original),
+            "degraded": [], "reranked": False,
+        }
+
+    decorated = RerankingDecorator(None)(retrieve)
+    result = await decorated("query", rerank=True)
+
+    assert result["ranking"]["status"] == "fallback"
+    assert result["ranking"]["reason"] == "provider_unavailable"
+    assert result["reranked"] is False
+    assert [hit.chunk_id for hit in result["results"]] == [hit.chunk_id for hit in original]
+    assert "reranking" in result["degraded"]
