@@ -135,13 +135,13 @@ class InMemoryIndexStore:
         required = {"acknowledged_writes_verified", "tombstones_verified"}
         if not isinstance(verification, dict) or not all(verification.get(key) is True for key in required):
             raise ValueError("activation requires acknowledged-write and tombstone verification")
+        if self._active_generation_id != expected_active_generation_id or self._generation_epoch != expected_epoch:
+            raise RuntimeError("active generation changed; refresh status before cutover")
         target = self._generations.get(generation_id)
         if target is None or target["state"] != "building":
             raise RuntimeError("target generation is not building")
         if not all(target["checkpoints"].get(name, {}).get("sealed") is True for name in ("index", "memory", "knowledge")):
             raise RuntimeError("index, memory, and knowledge checkpoints must all be sealed")
-        if self._active_generation_id != expected_active_generation_id or self._generation_epoch != expected_epoch:
-            raise RuntimeError("active generation changed; refresh status before cutover")
         now = datetime.now(timezone.utc).isoformat()
         self._generations[self._active_generation_id]["state"] = "retired"
         self._generations[self._active_generation_id]["updated_at"] = now
