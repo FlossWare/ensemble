@@ -1083,3 +1083,48 @@ def test_ingestion_routes_use_only_the_canonical_namespace():
 
     assert expected <= paths.keys()
     assert obsolete.isdisjoint(paths)
+
+
+def test_context_assembly_composes_search_and_analysis_over_internal_rest(tmp_path):
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/ingest/documents", json={
+            "source_id": "context-rest-source",
+            "revision": 1,
+            "title": "REST capability composition",
+            "content": "Ensemble context assembly must call retrieval through REST contracts.",
+        })
+        assert ingested.status_code == 201
+
+        response = client.post("/api/v1/context/assemble", json={
+            "query": "retrieval through REST contracts",
+            "include_memory": False,
+            "include_search": True,
+            "limit": 5,
+            "max_tokens": 500,
+        })
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ok"] is True
+        assert "retrieval through REST contracts" in result["context"]
+        assert result["sources"][0]["source_id"] == "context-rest-source"
+        assert result["intent"] is not None
+        assert isinstance(result["entities"], list)
+
+
+def test_context_assembly_works_without_search_or_memory_dependencies(tmp_path):
+    with _client(tmp_path) as client:
+        response = client.post("/api/v1/context/assemble", json={
+            "query": "classify this request",
+            "include_memory": False,
+            "include_search": False,
+            "max_tokens": 100,
+        })
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ok"] is True
+        assert result["context"] == ""
+        assert result["sources"] == []
+        assert result["intent"] is not None
+        assert result["degraded"] == []
