@@ -350,7 +350,7 @@ def create_app(
                 detail="source revision rejected: " + decision["decision"],
             )
         result = await internal.request(
-            "POST", "/api/v1/documents", request=request,
+            "POST", "/api/v1/documents/records", request=request,
             json={
                 "document": document.model_dump(mode="json"),
                 "embed": embed,
@@ -676,7 +676,7 @@ def create_app(
             await tombstone_indexed_source(source_id)
         return {"ok": True, "decision": decision["decision"], "source_id": source_id}
 
-    @app.post("/api/v1/documents", tags=["documents"])
+    @app.post("/api/v1/documents/records", tags=["documents"])
     async def documents_ingest(payload: dict[str, Any]):
         try:
             document = DocumentIn.model_validate(payload.get("document", {}))
