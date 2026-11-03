@@ -49,6 +49,7 @@ class VectorStore(Protocol):
     async def upsert(self, name: str, model: str, dimensions: int, items: list[dict[str, Any]]) -> int: ...
     async def update_metadata(self, name: str, items: list[dict[str, Any]]) -> int: ...
     async def delete_superseded(self, name: str, url: str, keep_sha256: str) -> int: ...
+    async def tombstone_source(self, source_id: str) -> int: ...
     async def reclaim_source(self, source_id: str) -> int: ...
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
     async def upsert_generation(self, generation_id: str, name: str, model: str, dimensions: int, items: list[dict[str, Any]]) -> int: ...
@@ -206,6 +207,24 @@ class SqliteVectorStore:
                 ))
         return len(stale)
 
+    async def tombstone_source(self, source_id: str) -> int:
+        async with self.engine.begin() as connection:
+            rows = (await connection.execute(
+                select(records.c.collection_name, records.c.record_id, records.c.metadata)
+            )).mappings().all()
+            changed = 0
+            for row in rows:
+                metadata = dict(row["metadata"] or {})
+                if metadata.get("source_id") == source_id or metadata.get("url") == source_id:
+                    if not metadata.get("_tombstoned"):
+                        metadata["_tombstoned"] = True
+                        await connection.execute(records.update().where(
+                            records.c.collection_name == row["collection_name"],
+                            records.c.record_id == row["record_id"],
+                        ).values(metadata=metadata))
+                        changed += 1
+        return changed
+
     async def reclaim_source(self, source_id: str) -> int:
         async with self.engine.begin() as connection:
             source_match = records.c.metadata["source_id"].as_string() == source_id
@@ -299,6 +318,8 @@ class SqliteVectorStore:
             )).mappings().all()
         scored = []
         for row in rows:
+            if (row["metadata"] or {}).get("_tombstoned"):
+                continue
             if len(row["embedding"]) != len(embedding):
                 continue
             score = sum(left * right for left, right in zip(row["embedding"], embedding))
