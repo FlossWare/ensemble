@@ -84,7 +84,7 @@ Implemented:
 - Monotonically increasing active-generation epoch for compare-and-swap cutover.
 - Database constraint allowing at most one generation in the building state.
 - Independent sealed checkpoints for Index, Memory, and Knowledge.
-- Cutover guard requiring all three checkpoints sealed plus explicit acknowledged-write and tombstone verification.
+- Cutover guard requiring all five checkpoints sealed plus explicit acknowledged-write and tombstone verification.
 - Atomic active-pointer update and active/retired state transition in one SQLite transaction.
 - In-memory adapter with matching lifecycle and cutover rules.
 
