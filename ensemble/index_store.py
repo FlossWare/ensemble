@@ -261,6 +261,10 @@ class SqliteIndexStore:
             ))
             if changed.rowcount != 1:
                 raise RuntimeError("only a building generation can be aborted")
+            await connection.execute(generation_write_fence.delete().where(
+                generation_write_fence.c.singleton_id == 1,
+                generation_write_fence.c.generation_id == generation_id,
+            ))
             row = (await connection.execute(select(generations).where(
                 generations.c.generation_id == generation_id
             ))).mappings().one()
