@@ -330,7 +330,10 @@ class IndexGenerationBuilder:
         )
         if generation is None or generation["state"] != "building":
             raise RuntimeError("generation is not in building state")
-        previous = (generation.get("checkpoints") or {}).get("index_reconciliation") or {}
+        checkpoints = generation.get("checkpoints") or {}
+        if (checkpoints.get("index") or {}).get("sealed") is not True:
+            raise RuntimeError("Index source copy must be sealed before journal reconciliation")
+        previous = checkpoints.get("index_reconciliation") or {}
         if previous.get("sealed") is True:
             value = previous.get("value") or {}
             return {
@@ -380,7 +383,10 @@ class IndexGenerationBuilder:
         )
         if generation is None or generation["state"] != "building":
             raise RuntimeError("generation is not in building state")
-        checkpoint = (generation.get("checkpoints") or {}).get("index_reconciliation") or {}
+        checkpoints = generation.get("checkpoints") or {}
+        if (checkpoints.get("index") or {}).get("sealed") is not True:
+            raise RuntimeError("Index source copy must be sealed before final write fencing")
+        checkpoint = checkpoints.get("index_reconciliation") or {}
         value = checkpoint.get("value") or {}
         cursor = int(value.get("cursor", 0))
         high_watermark = await self.index_store.generation_change_high_watermark(generation_id)
