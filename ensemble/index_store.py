@@ -50,6 +50,8 @@ class IndexStore(Protocol):
     async def record_tombstone(self, source_id: str, sequence: int) -> dict[str, Any]: ...
     async def get_source(self, source_id: str) -> dict[str, Any] | None: ...
     async def list_sources(self, limit: int) -> list[dict[str, Any]]: ...
+    async def source_snapshot_upper_bound(self) -> str | None: ...
+    async def list_sources_after(self, cursor: str | None, upper_bound: str | None, limit: int) -> list[dict[str, Any]]: ...
     async def generation_status(self) -> dict[str, Any]: ...
     async def create_generation(self, generation_id: str) -> dict[str, Any]: ...
     async def record_generation_checkpoint(self, generation_id: str, capability: str, checkpoint: dict[str, Any], sealed: bool = False) -> dict[str, Any]: ...
@@ -284,4 +286,23 @@ class SqliteIndexStore:
     async def list_sources(self, limit: int) -> list[dict[str, Any]]:
         async with self.engine.connect() as connection:
             rows = (await connection.execute(select(sources).order_by(sources.c.source_id).limit(limit))).mappings().all()
+        return [_as_source(row) for row in rows]
+
+    async def source_snapshot_upper_bound(self) -> str | None:
+        async with self.engine.connect() as connection:
+            return await connection.scalar(select(__import__("sqlalchemy").func.max(sources.c.source_id)))
+
+    async def list_sources_after(
+        self, cursor: str | None, upper_bound: str | None, limit: int,
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        if upper_bound is None:
+            return []
+        statement = select(sources).where(sources.c.source_id <= upper_bound)
+        if cursor is not None:
+            statement = statement.where(sources.c.source_id > cursor)
+        statement = statement.order_by(sources.c.source_id).limit(limit)
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(statement)).mappings().all()
         return [_as_source(row) for row in rows]
