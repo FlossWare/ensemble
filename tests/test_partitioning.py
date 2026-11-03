@@ -44,7 +44,7 @@ def test_partition_token_authorizes_only_assigned_partitions(monkeypatch):
 
     client = TestClient(app)
     assert client.get("/api/v1/scope").status_code == 401
-    allowed = client.get("/api/v1/scope", headers={"Authorization": f"Bearer {credential}", "X-Ensemble-Partition": "alpha"})
+    allowed = client.get("/api/v1/scope", headers={"Authorization": f"Bearer {credential}", "X-Ensemble-Partition": "alpha", "X-Correlation-ID": "trace-123"})
     assert allowed.status_code == 200
     assert allowed.json() == {"subject": "integration-test", "partition": "alpha"}
     assert allowed.headers["x-correlation-id"] == "trace-123"
