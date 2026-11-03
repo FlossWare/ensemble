@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, delete, select
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, delete, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -192,9 +192,8 @@ class SqliteVectorStore:
             raise ValueError("generation_id must contain 1-64 characters")
         async with self.engine.begin() as connection:
             generation = await connection.scalar(
-                select(__import__("sqlalchemy").func.count()).select_from(
-                    __import__("sqlalchemy").table("ensemble_index_generations")
-                ).where(__import__("sqlalchemy").column("generation_id") == generation_id)
+                text("SELECT COUNT(*) FROM ensemble_index_generations WHERE generation_id = :generation_id"),
+                {"generation_id": generation_id},
             )
             if not generation:
                 raise ValueError("unknown index generation")
