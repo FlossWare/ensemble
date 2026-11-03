@@ -454,6 +454,9 @@ def create_app(
         # bounded, retryable background work.
         await document_store.tombstone_source(source_id)
         await active_knowledge_store.tombstone(source_id)
+        # Raw Vector queries must hide the record immediately too; physical
+        # row removal remains deferred to the reclamation worker.
+        await active_vector_store.tombstone_source(source_id)
         await active_reclamation_store.enqueue(source_id)
 
     app.state.store = document_store
