@@ -608,6 +608,9 @@ class SqlDocumentStore:
                     generation_documents.c.generation_id == generation_id
                 )
             )
+            await connection.execute(delete(generation_chunks).where(
+                generation_chunks.c.generation_id == generation_id
+            ))
             await connection.execute(delete(generation_documents).where(
                 generation_documents.c.generation_id == generation_id
             ))
