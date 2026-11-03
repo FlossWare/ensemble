@@ -1127,10 +1127,15 @@ def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verifi
                 "generation-0002", "generation-0001", 1,
                 {"acknowledged_writes_verified": True, "tombstones_verified": False},
             )
+        await store.record_generation_checkpoint(
+            "generation-0002", "index_reconciliation", {"cursor": 0}, sealed=True,
+        )
+        await store.acquire_generation_write_fence("generation-0002", through_change_id=0)
 
         cutover = await store.activate_generation(
             "generation-0002", "generation-0001", 1,
-            {"acknowledged_writes_verified": True, "tombstones_verified": True},
+            {"acknowledged_writes_verified": True, "tombstones_verified": True,
+             "reconciled_through_change_id": 0},
         )
         assert cutover == {"active_generation_id": "generation-0002", "epoch": 2}
         status = await store.generation_status()
@@ -1155,13 +1160,15 @@ def test_in_memory_generation_registry_enforces_single_build_and_cutover():
         await store.create_generation("generation-0002")
         with pytest.raises(RuntimeError, match="already in progress"):
             await store.create_generation("generation-0003")
-        for capability in ("index", "documents", "vectors", "memory", "knowledge"):
+        for capability in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation"):
             await store.record_generation_checkpoint(
-                "generation-0002", capability, {"cursor": "done"}, sealed=True,
+                "generation-0002", capability, {"cursor": "done" if capability != "index_reconciliation" else 0}, sealed=True,
             )
+        await store.acquire_generation_write_fence("generation-0002", through_change_id=0)
         result = await store.activate_generation(
             "generation-0002", "generation-0001", 1,
-            {"acknowledged_writes_verified": True, "tombstones_verified": True},
+            {"acknowledged_writes_verified": True, "tombstones_verified": True,
+             "reconciled_through_change_id": 0},
         )
         assert result["active_generation_id"] == "generation-0002"
         assert result["epoch"] == 2
