@@ -2003,6 +2003,11 @@ def create_app(
                 "POST", "/api/v1/search/retrieve", request=request,
                 json=search_request.model_dump(mode="json"),
             )
+            # HTTP JSON decoding returns dictionaries; restore the typed
+            # SearchHit contract before Hybrid applies graph/rerank/ledger logic.
+            result["results"] = [
+                SearchHit.model_validate(hit) for hit in result.get("results", [])
+            ]
 
             try:
                 intent = await internal.request(
