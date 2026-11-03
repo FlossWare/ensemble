@@ -34,7 +34,7 @@ class ControlCenterClient:
         return payload
 
     def snapshot(self) -> ServiceSnapshot:
-        """Fetch service health, readiness, and redacted runtime summary."""
+        """Fetch service health, readiness, and runtime summary."""
         health = self._get("/health")
         readiness = self._get("/ready")
         configuration: dict[str, Any] | None
