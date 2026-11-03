@@ -76,6 +76,18 @@ class InMemoryVectorStore:
             del collection["records"][record_id]
         return len(stale)
 
+    async def reclaim_source(self, source_id: str) -> int:
+        removed = 0
+        for collection in self._collections.values():
+            records = collection.get("records", {})
+            stale = [record_id for record_id, item in records.items()
+                     if item.get("metadata", {}).get("source_id") == source_id
+                     or item.get("metadata", {}).get("url") == source_id]
+            for record_id in stale:
+                del records[record_id]
+            removed += len(stale)
+        return removed
+
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]:
         collection = self._collections.get(name, {"records": {}})
         scored = []
