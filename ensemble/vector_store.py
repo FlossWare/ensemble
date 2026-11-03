@@ -208,21 +208,22 @@ class SqliteVectorStore:
 
     async def reclaim_source(self, source_id: str) -> int:
         async with self.engine.begin() as connection:
+            source_match = records.c.metadata["source_id"].as_string() == source_id
+            url_match = records.c.metadata["url"].as_string() == source_id
             rows = (await connection.execute(
-                select(records.c.collection_name, records.c.record_id, records.c.metadata)
-            )).mappings().all()
-            stale = [
-                (row["collection_name"], row["record_id"])
-                for row in rows
-                if (row["metadata"] or {}).get("source_id") == source_id
-                or (row["metadata"] or {}).get("url") == source_id
-            ]
+                select(records.c.collection_name, records.c.record_id)
+                .where(source_match | url_match)
+                .order_by(records.c.collection_name, records.c.record_id)
+                .limit(501)
+            )).all()
+            more = len(rows) > 500
+            stale = rows[:500]
             for collection_name, record_id in stale:
                 await connection.execute(delete(records).where(
                     records.c.collection_name == collection_name,
                     records.c.record_id == record_id,
                 ))
-        return len(stale)
+        return 501 if more else len(stale)
 
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]:
         async with self.engine.connect() as connection:
