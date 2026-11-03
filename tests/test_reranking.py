@@ -83,6 +83,7 @@ def test_reranking_rest_reports_missing_provider():
         assert response.status_code == 503
 
 
+import asyncio
 from uuid import uuid4
 
 from ensemble.models import SearchHit
@@ -107,8 +108,7 @@ def _hit(text):
     )
 
 
-@pytest.mark.asyncio
-async def test_reranking_decorator_wraps_retriever_and_preserves_candidate_identity():
+def test_reranking_decorator_wraps_retriever_and_preserves_candidate_identity():
     original = [_hit("first"), _hit("second")]
 
     async def retrieve(query, limit=10, *, rerank=None):
@@ -118,7 +118,7 @@ async def test_reranking_decorator_wraps_retriever_and_preserves_candidate_ident
         }
 
     decorated = RerankingDecorator(AsyncRankingProvider())(retrieve)
-    result = await decorated("query", rerank=True)
+    result = asyncio.run(decorated("query", rerank=True))
 
     assert result["ranking"]["status"] == "reranked"
     assert result["ranking"]["provider"] == "test-http"
@@ -127,8 +127,7 @@ async def test_reranking_decorator_wraps_retriever_and_preserves_candidate_ident
     assert {hit.chunk_id for hit in result["results"]} == {hit.chunk_id for hit in original}
 
 
-@pytest.mark.asyncio
-async def test_reranking_decorator_falls_back_without_changing_baseline():
+def test_reranking_decorator_falls_back_without_changing_baseline():
     original = [_hit("first"), _hit("second")]
 
     async def retrieve(query, limit=10, *, rerank=None):
@@ -138,7 +137,7 @@ async def test_reranking_decorator_falls_back_without_changing_baseline():
         }
 
     decorated = RerankingDecorator(None)(retrieve)
-    result = await decorated("query", rerank=True)
+    result = asyncio.run(decorated("query", rerank=True))
 
     assert result["ranking"]["status"] == "fallback"
     assert result["ranking"]["reason"] == "provider_unavailable"
