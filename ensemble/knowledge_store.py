@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, MetaData, String, Table, Text, select
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -31,7 +31,7 @@ knowledge_records = Table(
 knowledge_generation_records = Table(
     "ensemble_knowledge_generation_records",
     knowledge_metadata,
-    Column("generation_id", String(64), primary_key=True),
+    Column("generation_id", String(64), ForeignKey("ensemble_index_generations.generation_id", ondelete="CASCADE"), primary_key=True),
     Column("source_id", String(512), primary_key=True),
     Column("revision_sequence", Integer, nullable=False),
     Column("revision_id", String(512), nullable=False),
@@ -67,7 +67,7 @@ class SqliteKnowledgeStore:
     async def initialize(self) -> None:
         async with self.engine.connect() as connection:
             names = await connection.run_sync(lambda conn: __import__("sqlalchemy").inspect(conn).get_table_names())
-        if "ensemble_knowledge_records" not in names:
+        if not {"ensemble_knowledge_records", "ensemble_knowledge_generation_records"}.issubset(names):
             raise RuntimeError("knowledge schema is not initialized; run 'alembic upgrade head'")
 
     async def close(self) -> None:
@@ -139,9 +139,8 @@ class SqliteKnowledgeStore:
         }
         async with self.engine.begin() as connection:
             exists = await connection.scalar(
-                select(__import__("sqlalchemy").func.count()).select_from(
-                    __import__("sqlalchemy").table("ensemble_index_generations")
-                ).where(__import__("sqlalchemy").column("generation_id") == generation_id)
+                text("SELECT COUNT(*) FROM ensemble_index_generations WHERE generation_id = :generation_id"),
+                {"generation_id": generation_id},
             )
             if not exists:
                 raise ValueError("unknown index generation")
