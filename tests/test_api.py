@@ -1763,6 +1763,7 @@ def test_generation_change_reconciliation_is_resumable_and_fenced():
     store = InMemoryIndexStore()
 
     async def exercise():
+        await store.record_revision("source-prebuild", 1, "revision-prebuild", {"chunking": "window-v1"})
         await store.create_generation("generation-shadow")
         await store.record_generation_checkpoint(
             "generation-shadow", "index", {"cursor": "snapshot-complete"}, sealed=True,
@@ -1772,18 +1773,19 @@ def test_generation_change_reconciliation_is_resumable_and_fenced():
         await store.record_tombstone("source-a", 2)
 
         builder = IndexGenerationBuilder(store)
-        waiting = await builder.reconcile_index_changes_page("generation-shadow", page_size=2)
+        waiting = await builder.reconcile_index_changes_page("generation-shadow", page_size=3)
         assert waiting["status"] == "waiting_for_ack"
         assert waiting["page_count"] == 0
+        await store.acknowledge_generation_change("source-prebuild", 1, tombstoned=False)
         await store.acknowledge_generation_change("source-a", 1, tombstoned=False)
         await store.acknowledge_generation_change("source-b", 1, tombstoned=False)
         await store.acknowledge_generation_change("source-a", 2, tombstoned=True)
-        first = await builder.reconcile_index_changes_page("generation-shadow", page_size=2)
+        first = await builder.reconcile_index_changes_page("generation-shadow", page_size=3)
         assert first["status"] == "in_progress"
         resumed_builder = IndexGenerationBuilder(store)
-        second = await resumed_builder.reconcile_index_changes_page("generation-shadow", page_size=2)
+        second = await resumed_builder.reconcile_index_changes_page("generation-shadow", page_size=3)
         assert second["status"] == "caught_up"
-        assert second["change_count"] == 3
+        assert second["change_count"] == 4
 
         source_a = await store.get_generation_source("generation-shadow", "source-a")
         source_b = await store.get_generation_source("generation-shadow", "source-b")
