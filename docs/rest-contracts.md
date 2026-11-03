@@ -64,7 +64,7 @@ Each capability group can be assigned an independent REST base URL. The initial 
 - `ENSEMBLE_GRAPH_REST_URL`
 - `ENSEMBLE_RERANKING_REST_URL`
 
-When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. Context Assembly dispatches to Search, Memory, Intent, and Entity REST endpoints. Hybrid Search dispatches intent classification, entity extraction, Graph query/traversal, reranking, and its search-ledger write through their REST contracts. The core retrieval engine and graph-expanded source material still have direct persistence/service dependencies; those are explicit remaining migration work. Only call paths explicitly migrated to the internal REST client satisfy the boundary.
+When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. Context Assembly dispatches to Search, Memory, Intent, and Entity REST endpoints. Hybrid Search dispatches intent classification, entity extraction, Graph query/traversal, reranking, and its search-ledger write through their REST contracts. Hybrid Search invokes the Search capability through `POST /api/v1/search/retrieve`. Search retains ownership of its retrieval algorithm and persistence rather than exposing its internal store implementation to Hybrid. Setting `ENSEMBLE_SEARCH_REST_URL` moves Search behind a separate REST server without changing the Hybrid contract. Remaining direct store access inside Search is capability-owned implementation, not cross-capability composition. Only call paths explicitly migrated to the internal REST client satisfy the boundary.
 
 ## 7. Initial implemented endpoints
 
@@ -82,6 +82,7 @@ When a key is unset, requests for that capability use the co-located ASGI transp
 | POST | /api/v1/search | Default retrieval using lexical and configured vector channels |
 | GET | /api/v1/search/lexical/health, /api/v1/search/lexical/ready | Lexical retrieval capability status |
 | POST | /api/v1/search/lexical | Explicit lexical-only retrieval strategy |
+| POST | /api/v1/search/retrieve | Execute Search-owned lexical/vector retrieval and return ranked candidates without reranking |
 | POST | /api/v1/lexical/documents | Lexical document/session ingestion convenience; placement remains under audit |
 | GET | /api/v1/search/hybrid/health, /api/v1/search/hybrid/ready | Hybrid retrieval capability status |
 | POST | /api/v1/search/hybrid | Unified hybrid retrieval |
@@ -197,7 +198,7 @@ Security-sensitive decorators are defense in depth. Enforcement also belongs at 
 
 ## 11. Search API conventions
 
-Search paths are capability-first. `POST /api/v1/search` is the default retrieval contract; `POST /api/v1/search/lexical` requests lexical-only retrieval; `POST /api/v1/search/hybrid` requests the full Hybrid orchestration contract. The Knowledge-scoped Hybrid operation is `POST /api/v1/search/hybrid/knowledge`. The default route returns standard result records; the lexical route explicitly disables vector retrieval and deduplicates identical chunk text; the Hybrid route adds retrieval diagnostics, intent enrichment, and related-session context. The scope segment is present because Knowledge-only retrieval is a distinct caller-facing operation. Do not expose channel implementation details such as FTS5, SQLite, vector collection names, or model providers in search paths. Other strategies or scopes should be added only when a real consumer requirement exists.
+Search paths are capability-first. `POST /api/v1/search` is the default retrieval contract; `POST /api/v1/search/lexical` requests lexical-only retrieval; `POST /api/v1/search/retrieve` is the internal Search capability contract used by Hybrid; `POST /api/v1/search/hybrid` requests the full Hybrid orchestration contract. The Knowledge-scoped Hybrid operation is `POST /api/v1/search/hybrid/knowledge`. The default route returns standard result records; the lexical route explicitly disables vector retrieval and deduplicates identical chunk text; the Hybrid route adds retrieval diagnostics, intent enrichment, and related-session context. The scope segment is present because Knowledge-only retrieval is a distinct caller-facing operation. Do not expose channel implementation details such as FTS5, SQLite, vector collection names, or model providers in search paths. Other strategies or scopes should be added only when a real consumer requirement exists.
 
 ## 12. Ingestion API conventions
 
