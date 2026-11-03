@@ -215,6 +215,18 @@ class SqliteIndexStore:
             checkpoints = target["checkpoints"] or {}
             if not all(checkpoints.get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation")):
                 raise RuntimeError("index, documents, vectors, memory, knowledge, and index reconciliation checkpoints must all be sealed")
+            fence = (await connection.execute(select(generation_write_fence).where(
+                generation_write_fence.c.singleton_id == 1,
+                generation_write_fence.c.generation_id == generation_id,
+            ))).mappings().first()
+            if fence is None:
+                raise RuntimeError("Index write fence must be held during generation activation")
+            from sqlalchemy import func
+            high = int(await connection.scalar(select(func.max(generation_changes.c.change_id)).where(
+                generation_changes.c.generation_id == generation_id
+            )) or 0)
+            if verification.get("reconciled_through_change_id") != high:
+                raise RuntimeError("generation change journal has not been fully reconciled")
             changed = await connection.execute(generation_control.update().where(
                 generation_control.c.singleton_id == 1,
                 generation_control.c.active_generation_id == expected_active_generation_id,
