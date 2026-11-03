@@ -1181,16 +1181,17 @@ def test_in_memory_generation_registry_enforces_single_build_and_cutover():
         assert [item["tombstoned"] for item in journal] == [False, True]
         assert await store.acknowledge_generation_change("source-a", 1, tombstoned=False) == 1
         assert await store.acknowledge_generation_change("source-a", 2, tombstoned=True) == 1
+        high_watermark = await store.generation_change_high_watermark("generation-0002")
         for capability in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation"):
             await store.record_generation_checkpoint(
-                "generation-0002", capability, {"cursor": "done" if capability != "index_reconciliation" else 2}, sealed=True,
+                "generation-0002", capability, {"cursor": "done" if capability != "index_reconciliation" else high_watermark}, sealed=True,
             )
-        await store.acquire_generation_write_fence("generation-0002", through_change_id=2)
+        await store.acquire_generation_write_fence("generation-0002", through_change_id=high_watermark)
         assert (await store.record_revision("source-b", 1, "revision-b", {"chunking": "window-v1"}))["decision"] == "fenced"
         result = await store.activate_generation(
             "generation-0002", "generation-0001", 1,
             {"acknowledged_writes_verified": True, "tombstones_verified": True,
-             "reconciled_through_change_id": 2},
+             "reconciled_through_change_id": high_watermark},
         )
         assert result["active_generation_id"] == "generation-0002"
         assert result["epoch"] == 2
