@@ -250,7 +250,8 @@ def create_app(
     )
     documents = DocumentService(document_store, Chunker(), embeddings, active_vector_store)
     search = SearchService(document_store, embeddings, active_reranker, active_vector_store)
-    ranking_decorator = RerankingDecorator(configured_ranking_provider(active_reranker))
+    ranking_provider = configured_ranking_provider(active_reranker)
+    ranking_decorator = RerankingDecorator(ranking_provider)
 
     async def index_document_entities(source_id: str, revision: int, content: str, *, origin: str, locator: str) -> int:
         """Associate exact extracted entities with a durable source revision."""
