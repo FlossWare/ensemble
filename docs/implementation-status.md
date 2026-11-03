@@ -87,6 +87,6 @@ Implemented in the current partition-isolation branch:
 - Unauthenticated local mode is restricted to the default partition. Non-loopback listeners require a configured partition token map.
 - Internal REST calls propagate the authenticated partition and credential. The Control Center now has tab-scoped credential and partition fields.
 
-Verification on the latest successful partition CI run: **165 passed, 1 skipped**. This includes end-to-end ingestion/retrieval isolation, Memory/Knowledge/Graph/Vector separation, token allow-list checks, physical database separation for duplicate source IDs, and non-loopback listener authentication configuration.
+Verification on the latest successful partition CI run: **166 passed, 1 skipped**. This includes end-to-end ingestion/retrieval isolation, Memory/Knowledge/Graph/Vector separation, token allow-list checks, physical database separation for duplicate source IDs, remote-request rejection in local mode, and non-loopback listener authentication configuration.
 
 Still required before partition isolation is review-ready: broader adversarial coverage across all capability types and destructive operations; backup/restore verification for the complete partition directory; key rotation/revocation and credential administration; rate limiting and audit/diagnostic coverage; and a security review of the Control Center and remote capability trust boundary. In-memory adapters remain test-only and are rejected when partition credentials are configured.
