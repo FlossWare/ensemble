@@ -1760,6 +1760,9 @@ def test_generation_change_reconciliation_is_resumable_and_fenced():
 
     async def exercise():
         await store.create_generation("generation-shadow")
+        await store.record_generation_checkpoint(
+            "generation-shadow", "index", {"cursor": "snapshot-complete"}, sealed=True,
+        )
         await store.record_revision("source-a", 1, "revision-a", {"chunking": "window-v1"})
         await store.record_revision("source-b", 1, "revision-b", {"chunking": "window-v1"})
         await store.record_tombstone("source-a", 2)
