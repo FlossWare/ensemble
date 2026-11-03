@@ -16,16 +16,21 @@ PARENT="$(dirname "$ROOT")"
 NAME="$(basename "$ROOT")"
 SERVICE="${ENSEMBLE_SERVICE_NAME:-ensemble}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$PARENT"
 STAGE="$(mktemp -d "$PARENT/.${NAME}-restore.XXXXXX")"
 OLD="$ROOT.pre-restore-$STAMP"
 WAS_ACTIVE=0
 SWAPPED=0
 
 cleanup() {
-  if [[ "$SWAPPED" -eq 1 && -d "$OLD" && ! -e "$ROOT" ]]; then
-    mv "$OLD" "$ROOT"
+  if [[ "$SWAPPED" -eq 1 ]]; then
+    rm -rf "$ROOT"
+    if [[ -d "$OLD" ]]; then mv "$OLD" "$ROOT"; fi
   fi
   rm -rf "$STAGE"
+  if [[ "$WAS_ACTIVE" -eq 1 ]]; then
+    systemctl start "$SERVICE" || true
+  fi
 }
 trap cleanup EXIT
 
