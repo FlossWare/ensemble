@@ -316,3 +316,88 @@ class IndexGenerationBuilder:
             "collection_index": collection_index,
             "collection_count": len(collections),
         }
+
+
+    async def reconcile_index_changes_page(
+        self, generation_id: str, *, page_size: int = 500,
+    ) -> dict[str, Any]:
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
+            raise ValueError("page_size must be between 1 and 10000")
+        status = await self.index_store.generation_status()
+        generation = next(
+            (item for item in status["generations"] if item["generation_id"] == generation_id),
+            None,
+        )
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        previous = (generation.get("checkpoints") or {}).get("index_reconciliation") or {}
+        if previous.get("sealed") is True:
+            value = previous.get("value") or {}
+            return {
+                "generation_id": generation_id, "status": "complete",
+                "page_count": 0, "change_count": value.get("change_count", 0),
+                "cursor": value.get("cursor", 0),
+            }
+        value = previous.get("value") or {}
+        cursor = int(value.get("cursor", 0))
+        change_count = int(value.get("change_count", 0))
+        page = await self.index_store.list_generation_changes_after(
+            generation_id, cursor, page_size,
+        )
+        for change in page:
+            await self.index_store.put_generation_source(generation_id, {
+                "source_id": change["source_id"],
+                "high_sequence": change["high_sequence"],
+                "revision_id": change["revision_id"],
+                "profiles": change["profiles"],
+                "tombstoned": change["tombstoned"],
+                "updated_at": change["created_at"],
+            })
+        next_cursor = page[-1]["change_id"] if page else cursor
+        change_count += len(page)
+        high_watermark = await self.index_store.generation_change_high_watermark(generation_id)
+        caught_up = next_cursor == high_watermark and len(page) < page_size
+        checkpoint = {
+            "cursor": next_cursor,
+            "change_count": change_count,
+            "observed_high_watermark": high_watermark,
+        }
+        await self.index_store.record_generation_checkpoint(
+            generation_id, "index_reconciliation", checkpoint, sealed=False,
+        )
+        return {
+            "generation_id": generation_id,
+            "status": "caught_up" if caught_up else "in_progress",
+            "page_count": len(page), "change_count": change_count,
+            "cursor": next_cursor, "high_watermark": high_watermark,
+        }
+
+    async def fence_reconciled_generation(self, generation_id: str) -> dict[str, Any]:
+        status = await self.index_store.generation_status()
+        generation = next(
+            (item for item in status["generations"] if item["generation_id"] == generation_id),
+            None,
+        )
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        checkpoint = (generation.get("checkpoints") or {}).get("index_reconciliation") or {}
+        value = checkpoint.get("value") or {}
+        cursor = int(value.get("cursor", 0))
+        high_watermark = await self.index_store.generation_change_high_watermark(generation_id)
+        if cursor != high_watermark:
+            raise RuntimeError("generation change journal advanced; reconcile before fencing")
+        fence = await self.index_store.acquire_generation_write_fence(
+            generation_id, through_change_id=high_watermark,
+        )
+        try:
+            await self.index_store.record_generation_checkpoint(
+                generation_id, "index_reconciliation",
+                {"cursor": high_watermark, "change_count": int(value.get("change_count", 0)),
+                 "observed_high_watermark": high_watermark},
+                sealed=True,
+            )
+        except Exception:
+            await self.index_store.release_generation_write_fence(generation_id)
+            raise
+        return fence
+
