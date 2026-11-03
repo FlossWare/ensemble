@@ -183,7 +183,7 @@ class SearchService:
                     "candidate_count": 0, "collection_candidate_count": 0,
                     "document_candidate_count": 0, "error": "embedding provider unavailable",
                 }
-                degraded.append("vector")
+                degraded.append("embeddings")
             else:
                 collection_error = False
                 try:
