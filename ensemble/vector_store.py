@@ -54,6 +54,8 @@ class VectorStore(Protocol):
     async def query_generation(self, generation_id: str, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int: ...
     async def delete_generation(self, generation_id: str) -> int: ...
+    async def record_key_upper_bound(self, name: str) -> str | None: ...
+    async def list_records_after(self, name: str, cursor: str | None, upper_bound: str | None, limit: int) -> list[dict[str, Any]]: ...
 
 
 class SqliteVectorStore:
@@ -89,6 +91,40 @@ class SqliteVectorStore:
                 )
                 result.append({"name": row["name"], "model": row["model"], "dimensions": row["dimensions"], "count": count})
             return result
+
+
+    async def record_key_upper_bound(self, name: str) -> str | None:
+        async with self.engine.connect() as connection:
+            return await connection.scalar(
+                select(__import__("sqlalchemy").func.max(records.c.record_id)).where(
+                    records.c.collection_name == name
+                )
+            )
+
+    async def list_records_after(
+        self, name: str, cursor: str | None,
+        upper_bound: str | None, limit: int,
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        if upper_bound is None:
+            return []
+        statement = select(
+            records.c.record_id, records.c.embedding,
+            records.c.document, records.c.metadata,
+        ).where(
+            records.c.collection_name == name,
+            records.c.record_id <= upper_bound,
+        )
+        if cursor is not None:
+            statement = statement.where(records.c.record_id > cursor)
+        statement = statement.order_by(records.c.record_id).limit(limit)
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(statement)).mappings().all()
+        return [{
+            "id": row["record_id"], "embedding": row["embedding"],
+            "document": row["document"], "metadata": row["metadata"],
+        } for row in rows]
 
     async def existing(self, name: str, ids: list[str]) -> list[str]:
         if not ids:
