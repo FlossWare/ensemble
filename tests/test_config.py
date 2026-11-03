@@ -25,12 +25,21 @@ def test_host_and_port_are_configurable_and_validated(tmp_path, monkeypatch):
     monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
     monkeypatch.setenv("ENSEMBLE_HOST", "0.0.0.0")
     monkeypatch.setenv("ENSEMBLE_PORT", "9123")
+    monkeypatch.setenv("ENSEMBLE_PARTITION_TOKENS", '{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"subject":"test-client","partitions":["test"]}}')
     settings = settings_from_env()
     assert settings.host == "0.0.0.0"
     assert settings.port == 9123
 
     monkeypatch.setenv("ENSEMBLE_PORT", "70000")
     with pytest.raises(ValueError, match="ENSEMBLE_PORT"):
+        settings_from_env()
+
+
+def test_non_loopback_listener_requires_partition_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
+    monkeypatch.setenv("ENSEMBLE_HOST", "0.0.0.0")
+    monkeypatch.delenv("ENSEMBLE_PARTITION_TOKENS", raising=False)
+    with pytest.raises(ValueError, match="ENSEMBLE_PARTITION_TOKENS"):
         settings_from_env()
 
 
