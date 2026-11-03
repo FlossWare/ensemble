@@ -16,6 +16,7 @@ from sqlalchemy.engine import make_url
 from .tokenization import tokenize
 
 from .models import Chunk, Document
+from .partitioning import PartitionedAsyncEngine
 
 
 metadata = MetaData()
@@ -142,10 +143,7 @@ class SqlDocumentStore:
         if url.database not in (None, "", ":memory:"):
             Path(url.database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
 
-        self.engine: AsyncEngine = create_async_engine(
-            self.database_url,
-            pool_pre_ping=True,
-        )
+        self.engine = PartitionedAsyncEngine(self.database_url, pool_pre_ping=True)
         self.metadata = metadata
         self.documents = documents
         self.chunks = chunks
