@@ -128,3 +128,21 @@ Still outstanding:
 - A durable rebuild worker that snapshots and populates document, lexical, and vector stores.
 - Write-fence coordination, concurrent-write reconciliation, and crash recovery.
 - Atomic activation across all retrieval data planes.
+
+
+## Shadow generation source tombstones
+
+Implemented:
+- Versioned SQLite migration 0019 for per-generation source tombstones.
+- Idempotent shadow-source tombstone creation.
+- Shadow document enumeration excludes tombstoned sources.
+- Shadow document upserts reject sources already tombstoned in that generation, preventing delayed writes from resurrecting them.
+- Shadow vector records can be removed by source identity across collections.
+- In-memory document and vector adapters mirror tombstone behavior.
+- Tests cover repeated tombstones, anti-resurrection, vector cleanup, and isolation from active records.
+
+Still outstanding:
+- Durable rebuild worker and bounded snapshot/cursor protocol.
+- Propagation of authoritative source state and tombstones into the building generation.
+- Writer fences and acknowledged-write reconciliation.
+- Restart recovery and atomic cutover across all retrieval stores.
