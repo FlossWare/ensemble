@@ -1806,6 +1806,15 @@ def test_generation_change_reconciliation_is_resumable_and_fenced():
         assert source_a["high_sequence"] == 2
         assert source_b["tombstoned"] is False
 
+        for capability in ("documents", "vectors", "memory", "knowledge"):
+            await store.record_generation_checkpoint(
+                "generation-shadow", capability, {"cursor": "snapshot-complete"}, sealed=True,
+            )
+        for capability in ("documents_reconciliation", "vectors_reconciliation",
+                           "memory_reconciliation", "knowledge_reconciliation"):
+            await store.record_generation_checkpoint(
+                "generation-shadow", capability, {"cursor": second["high_watermark"]}, sealed=False,
+            )
         await resumed_builder.fence_reconciled_generation("generation-shadow")
         blocked = await store.record_revision("source-c", 1, "revision-c", {"chunking": "window-v1"})
         assert blocked["decision"] == "fenced"
