@@ -9,6 +9,7 @@ import pytest
 
 def _write_partition_database(path: Path, partition_id: str, value: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
     with sqlite3.connect(path) as connection:
         connection.execute(
             "CREATE TABLE ensemble_partition_metadata (partition_id TEXT PRIMARY KEY)"
