@@ -187,3 +187,14 @@ These are implemented slices, not a declaration that the platform is production-
 5. Finish Control Center usability and real execution diagnostics, while keeping all operations REST-backed.
 6. Complete operational readiness: backup/restore, migrations/upgrade, observability, rate limits, authentication/authorization, and partition enforcement.
 7. Verify the local embedding/reranking runtime matrix and decide when exact vector scans require a local ANN implementation.
+
+### Deferred physical reclamation
+
+Source deletion is now split into two phases:
+
+1. **Logical deletion:** the authoritative Index tombstone is committed, and active document and Knowledge views are hidden synchronously.
+2. **Physical reclamation:** a durable SQLite queue schedules bounded, retryable removal of active document/chunk/FTS, Knowledge, and vector materializations.
+
+The worker processes at most 500 document or vector records per source per pass, persists attempts and backoff, and recovers stale running jobs after restart. The authoritative Index tombstone and generation tombstone evidence are deliberately retained so delayed writes and shadow rebuilds cannot resurrect deleted content.
+
+Memory-source cleanup, Graph lineage cleanup, generation retirement, and privacy erasure are separate lifecycle concerns and remain open.
