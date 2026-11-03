@@ -1958,6 +1958,13 @@ def create_app(
                 )
             except Exception:
                 pass
+            if graph_expansion.get("candidate_sources"):
+                result["ok"] = True
+                if result["status"] == "unavailable":
+                    result["status"] = "partial"
+            if result["degraded"] and result["status"] == "ok":
+                result["status"] = "partial"
+            result["degraded"] = sorted(set(result["degraded"]))
             return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
