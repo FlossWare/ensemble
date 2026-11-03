@@ -35,6 +35,7 @@ from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailab
 from .scraping import ScrapeError, preview_uri
 from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
 from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpointStore, InMemoryTranscriptCheckpointStore
+from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryReclamationStore
 from .file_ingestion import extract_pdf, PDFExtractionError, MAX_PDF_BYTES
 from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
 from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
@@ -215,6 +216,30 @@ def create_app(
         InMemoryTranscriptCheckpointStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteTranscriptCheckpointStore(database_url)
     )
+    active_reclamation_store = (
+        InMemoryReclamationStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteReclamationStore(database_url)
+    )
+
+    async def reclaim_due_sources() -> int:
+        jobs = await active_reclamation_store.claim_due(100)
+        for job in jobs:
+            source_id = job["source_id"]
+            try:
+                # The authoritative Index tombstone is retained. Only active
+                # materialized data is reclaimed; generation tombstones remain.
+                await document_store.reclaim_source(source_id)
+                await active_knowledge_store.reclaim_source(source_id)
+                await active_vector_store.reclaim_source(source_id)
+                await active_reclamation_store.complete(source_id)
+            except Exception as exc:
+                await active_reclamation_store.retry(source_id, f"{type(exc).__name__}: {exc}")
+        return len(jobs)
+
+    async def reclamation_worker() -> None:
+        while True:
+            processed = await reclaim_due_sources()
+            await asyncio.sleep(1 if processed else 15)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -230,9 +255,19 @@ def create_app(
             await active_thompson_store.initialize()
             await active_learning_store.initialize()
             await active_transcript_store.initialize()
-            yield
+            await active_reclamation_store.initialize()
+            worker_task = asyncio.create_task(reclamation_worker())
+            try:
+                yield
+            finally:
+                worker_task.cancel()
+                try:
+                    await worker_task
+                except asyncio.CancelledError:
+                    pass
+                await active_reclamation_store.close()
+                await active_transcript_store.close()
         finally:
-            await active_transcript_store.close()
             await active_learning_store.close()
             await active_thompson_store.close()
             await active_ga_store.close()
@@ -401,15 +436,11 @@ def create_app(
             }
 
     async def tombstone_indexed_source(source_id: str) -> None:
+        # Visibility changes synchronously; physical deletion is durable,
+        # bounded, retryable background work.
         await document_store.tombstone_source(source_id)
         await active_knowledge_store.tombstone(source_id)
-        # Source records may have been written through different ingestion
-        # capabilities and vector collections. Remove them all, not just
-        # Knowledge's collection.
-        for collection in await active_vector_store.list_collections():
-            await active_vector_store.delete_superseded(
-                collection["name"], source_id, ""
-            )
+        await active_reclamation_store.enqueue(source_id)
 
     app.state.store = document_store
     app.state.embedding_provider = embeddings
@@ -609,6 +640,10 @@ def create_app(
             await tombstone_indexed_source(source_id)
         return {"ok": True, "decision": decision["decision"], "source_id": source_id}
 
+    @app.get("/api/v1/index/reclamation", tags=["index"])
+    async def index_reclamation_status():
+        return {"ok": True, "jobs": await active_reclamation_store.status()}
+
     @app.get("/api/v1/index/health", tags=["index"])
     async def index_health():
         return {"ok": True, "service": "index"}
@@ -648,9 +683,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         result = await active_index_store.record_tombstone(source_id, sequence)
         if result["decision"] == "tombstoned":
-            await document_store.tombstone_source(source_id)
-            await active_knowledge_store.tombstone(source_id)
-            await active_vector_store.delete_superseded("knowledge_chunks", source_id, "")
+            await tombstone_indexed_source(source_id)
         return {"ok": True, **result}
 
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
