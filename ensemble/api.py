@@ -665,6 +665,15 @@ def create_app(
         sequence = payload.get("revision_sequence")
         if not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        current = await active_index_store.get_source(source_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="unknown source")
+        if current.get("purged"):
+            raise HTTPException(status_code=409, detail="permanently purged sources cannot be restored")
+        if not current.get("tombstoned"):
+            raise HTTPException(status_code=409, detail="source is not soft-deleted")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= current["high_sequence"]:
+            raise HTTPException(status_code=400, detail="revision_sequence must exceed the current source sequence")
         try:
             await document_store.restore_source(source_id)
             await active_knowledge_store.restore(source_id)
