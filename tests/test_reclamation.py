@@ -82,6 +82,30 @@ def test_reclamation_physically_removes_active_source_data_but_not_index_tombsto
         # Raw Vector queries also consult the authoritative Index tombstone.
         assert await vectors.query("test", [1.0, 0.0], 10) == []
 
+        # Soft deletion is reversible because physical data is still present.
+        restored = await index.restore_source("source-1", 3)
+        assert restored["tombstoned"] is False
+        await documents.restore_source("source-1")
+        await knowledge.restore("source-1")
+        assert len(await documents.all_chunks()) == 1
+        assert (await knowledge.get("source-1"))["content"] == "source content"
+        assert len(await vectors.query("test", [1.0, 0.0], 10)) == 1
+
+        # A later deletion hides it again; permanent purge is a separate action.
+        await index.record_tombstone("source-1", 4)
+        await documents.tombstone_source("source-1")
+        await knowledge.tombstone("source-1")
+        assert await documents.all_chunks() == []
+        assert await knowledge.get("source-1") is None
+        assert await vectors.query("test", [1.0, 0.0], 10) == []
+
+        await index.mark_purged("source-1")
+        try:
+            await index.restore_source("source-1", 5)
+            raise AssertionError("permanently purged source was restored")
+        except RuntimeError:
+            pass
+
         assert await documents.reclaim_source("source-1") == 1
         assert await knowledge.reclaim_source("source-1") == 1
         assert await vectors.reclaim_source("source-1") == 1
