@@ -5,6 +5,8 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 
+from .partitioning import current_request_scope
+
 
 class InternalRestClient:
     """Dispatch capability calls through Ensemble's HTTP contracts.
@@ -28,14 +30,20 @@ class InternalRestClient:
 
     @staticmethod
     def _forwarded_headers(request: Request | None) -> dict[str, str]:
-        if request is None:
-            return {}
+        scope = current_request_scope()
         names = ("authorization", "x-ensemble-partition", "x-correlation-id")
-        return {
+        headers = {
             name: value
             for name in names
-            if (value := request.headers.get(name)) is not None
+            if request is not None and (value := request.headers.get(name)) is not None
         }
+        if "authorization" not in headers and scope.authorization:
+            headers["authorization"] = scope.authorization
+        if "x-ensemble-partition" not in headers and scope.partition_id != "default":
+            headers["x-ensemble-partition"] = scope.partition_id
+        if "x-correlation-id" not in headers and scope.correlation_id:
+            headers["x-correlation-id"] = scope.correlation_id
+        return headers
 
     async def request(
         self,
