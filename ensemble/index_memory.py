@@ -290,13 +290,13 @@ class InMemoryIndexStore:
         target = self._generations.get(generation_id)
         if target is None or target["state"] != "building":
             raise RuntimeError("target generation is not building")
+        if not all(target["checkpoints"].get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation")):
+            raise RuntimeError("index, documents, vectors, memory, knowledge, and index reconciliation checkpoints must all be sealed")
         if self._write_fence_generation != generation_id:
             raise RuntimeError("Index write fence must be held during generation activation")
         high = await self.generation_change_high_watermark(generation_id)
         if verification.get("reconciled_through_change_id") != high:
             raise RuntimeError("generation change journal has not been fully reconciled")
-        if not all(target["checkpoints"].get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation")):
-            raise RuntimeError("index, documents, vectors, memory, knowledge, and index reconciliation checkpoints must all be sealed")
         now = datetime.now(timezone.utc).isoformat()
         self._generations[self._active_generation_id]["state"] = "retired"
         self._generations[self._active_generation_id]["updated_at"] = now
