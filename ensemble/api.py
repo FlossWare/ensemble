@@ -545,6 +545,8 @@ def create_app(
         if not isinstance(profiles, dict) or not profiles:
             raise HTTPException(status_code=400, detail="profiles must be a non-empty object")
         decision = await active_index_store.record_revision(source_id, sequence, revision_id, profiles)
+        if decision["decision"] == "fenced":
+            raise HTTPException(status_code=503, detail="Index writes are temporarily fenced for generation cutover", headers={"Retry-After": "1"})
         if decision["decision"] not in {"accepted", "duplicate"}:
             return {"ok": True, "decision": decision["decision"], "source_id": source_id, "stored": False}
         chunk_profile = profiles.get("chunking", "window-v1")
@@ -606,6 +608,8 @@ def create_app(
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         decision = await active_index_store.record_tombstone(source_id, sequence)
+        if decision["decision"] == "fenced":
+            raise HTTPException(status_code=503, detail="Index writes are temporarily fenced for generation cutover", headers={"Retry-After": "1"})
         if decision["decision"] == "tombstoned":
             await tombstone_indexed_source(source_id)
         return {"ok": True, "decision": decision["decision"], "source_id": source_id}
