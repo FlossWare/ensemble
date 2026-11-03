@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import json
 
-import pytest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -61,29 +60,31 @@ def test_local_mode_cannot_select_another_partition(monkeypatch):
     assert response.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_partitioned_index_uses_separate_sqlite_databases(tmp_path):
-    base = f"sqlite+aiosqlite:///{tmp_path / 'ensemble.db'}"
-    await asyncio.to_thread(_ensure_partition_schema, base, "default")
-    store = SqliteIndexStore(base)
-    try:
-        token = set_request_scope(RequestScope(partition_id="default"))
-        await store.record_revision("same-source", 1, "default-revision", {})
-        reset_request_scope(token)
+def test_partitioned_index_uses_separate_sqlite_databases(tmp_path):
+    async def exercise():
+        base = f"sqlite+aiosqlite:///{tmp_path / 'ensemble.db'}"
+        await asyncio.to_thread(_ensure_partition_schema, base, "default")
+        store = SqliteIndexStore(base)
+        try:
+            token = set_request_scope(RequestScope(partition_id="default"))
+            await store.record_revision("same-source", 1, "default-revision", {})
+            reset_request_scope(token)
 
-        token = set_request_scope(RequestScope(partition_id="workspace-a"))
-        await store.record_revision("same-source", 1, "workspace-a-revision", {})
-        assert (await store.get_source("same-source"))["revision_id"] == "workspace-a-revision"
-        reset_request_scope(token)
+            token = set_request_scope(RequestScope(partition_id="workspace-a"))
+            await store.record_revision("same-source", 1, "workspace-a-revision", {})
+            assert (await store.get_source("same-source"))["revision_id"] == "workspace-a-revision"
+            reset_request_scope(token)
 
-        token = set_request_scope(RequestScope(partition_id="workspace-b"))
-        assert await store.get_source("same-source") is None
-        await store.record_revision("same-source", 1, "workspace-b-revision", {})
-        assert (await store.get_source("same-source"))["revision_id"] == "workspace-b-revision"
-        reset_request_scope(token)
+            token = set_request_scope(RequestScope(partition_id="workspace-b"))
+            assert await store.get_source("same-source") is None
+            await store.record_revision("same-source", 1, "workspace-b-revision", {})
+            assert (await store.get_source("same-source"))["revision_id"] == "workspace-b-revision"
+            reset_request_scope(token)
 
-        token = set_request_scope(RequestScope(partition_id="default"))
-        assert (await store.get_source("same-source"))["revision_id"] == "default-revision"
-        reset_request_scope(token)
-    finally:
-        await store.close()
+            token = set_request_scope(RequestScope(partition_id="default"))
+            assert (await store.get_source("same-source"))["revision_id"] == "default-revision"
+            reset_request_scope(token)
+        finally:
+            await store.close()
+
+    asyncio.run(exercise())
