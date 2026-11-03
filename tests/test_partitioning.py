@@ -135,6 +135,9 @@ def test_document_ingestion_and_retrieval_do_not_cross_partitions(tmp_path, monk
     app = create_app(database_url=base)
 
     with TestClient(app) as client:
+        schema = client.get("/openapi.json").json()
+        assert schema["components"]["securitySchemes"]["BearerAuth"]["scheme"] == "bearer"
+        assert schema["paths"]["/api/v1/search"]["post"]["security"] == [{"BearerAuth": []}]
         alpha_headers = {
             "Authorization": f"Bearer {alpha_token}",
             "X-Ensemble-Partition": "alpha",
