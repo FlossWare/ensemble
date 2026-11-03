@@ -209,6 +209,7 @@ class InMemoryIndexStore:
         if not isinstance(tombstoned, bool):
             raise ValueError("tombstoned must be a boolean")
         acknowledged = 0
+        active_deleted = 0
         for generation in self._generations.values():
             if generation["state"] == "building":
                 for change in self._generation_changes.get(generation["generation_id"], []):
@@ -217,12 +218,15 @@ class InMemoryIndexStore:
                         change["acknowledged"] = True
                         acknowledged += 1
             elif generation["state"] == "active":
-                self._generation_changes[generation["generation_id"]] = [
-                    change for change in self._generation_changes.get(generation["generation_id"], [])
+                previous = self._generation_changes.get(generation["generation_id"], [])
+                remaining = [
+                    change for change in previous
                     if not (change["source_id"] == source_id and change["high_sequence"] == sequence
                             and change["tombstoned"] is tombstoned)
                 ]
-        return acknowledged
+                active_deleted += len(previous) - len(remaining)
+                self._generation_changes[generation["generation_id"]] = remaining
+        return max(acknowledged, active_deleted)
 
     async def generation_change_high_watermark(self, generation_id: str) -> int:
         changes = self._generation_changes.get(generation_id, [])
