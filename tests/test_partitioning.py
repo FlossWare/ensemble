@@ -6,6 +6,7 @@ import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from ensemble.api import create_app
 from ensemble.index_store import SqliteIndexStore
 from ensemble.partitioning import (
     RequestScope, _ensure_partition_schema, partition_database_url,
@@ -88,3 +89,77 @@ def test_partitioned_index_uses_separate_sqlite_databases(tmp_path):
             await store.close()
 
     asyncio.run(exercise())
+
+
+def test_document_ingestion_and_retrieval_do_not_cross_partitions(tmp_path, monkeypatch):
+    alpha_token = "alpha-integration-token"
+    beta_token = "beta-integration-token"
+    token_map = {
+        hashlib.sha256(alpha_token.encode()).hexdigest(): {
+            "subject": "alpha-client", "partitions": ["alpha"]
+        },
+        hashlib.sha256(beta_token.encode()).hexdigest(): {
+            "subject": "beta-client", "partitions": ["beta"]
+        },
+    }
+    monkeypatch.setenv("ENSEMBLE_PARTITION_TOKENS", json.dumps(token_map))
+    monkeypatch.setenv("ENSEMBLE_AUTH_REQUIRED", "1")
+    base = f"sqlite+aiosqlite:///{tmp_path / 'ensemble.db'}"
+    asyncio.run(asyncio.to_thread(_ensure_partition_schema, base, "default"))
+    app = create_app(database_url=base)
+
+    with TestClient(app) as client:
+        alpha_headers = {
+            "Authorization": f"Bearer {alpha_token}",
+            "X-Ensemble-Partition": "alpha",
+        }
+        beta_headers = {
+            "Authorization": f"Bearer {beta_token}",
+            "X-Ensemble-Partition": "beta",
+        }
+        alpha_ingest = client.post(
+            "/api/v1/ingest/documents",
+            headers=alpha_headers,
+            json={
+                "source_id": "shared-source",
+                "revision": 1,
+                "title": "Alpha document",
+                "content": "alpha-only partition secret phrase",
+            },
+        )
+        beta_ingest = client.post(
+            "/api/v1/ingest/documents",
+            headers=beta_headers,
+            json={
+                "source_id": "shared-source",
+                "revision": 1,
+                "title": "Beta document",
+                "content": "beta-only partition secret phrase",
+            },
+        )
+        assert alpha_ingest.status_code == 201, alpha_ingest.text
+        assert beta_ingest.status_code == 201, beta_ingest.text
+
+        alpha_search = client.post(
+            "/api/v1/search",
+            headers=alpha_headers,
+            json={"query": "alpha-only partition secret phrase", "limit": 10},
+        )
+        beta_search = client.post(
+            "/api/v1/search",
+            headers=beta_headers,
+            json={"query": "beta-only partition secret phrase", "limit": 10},
+        )
+        assert alpha_search.status_code == 200, alpha_search.text
+        assert beta_search.status_code == 200, beta_search.text
+        assert any("alpha-only" in item["text"] for item in alpha_search.json())
+        assert not any("beta-only" in item["text"] for item in alpha_search.json())
+        assert any("beta-only" in item["text"] for item in beta_search.json())
+        assert not any("alpha-only" in item["text"] for item in beta_search.json())
+
+        denied = client.post(
+            "/api/v1/search",
+            headers={**alpha_headers, "X-Ensemble-Partition": "beta"},
+            json={"query": "beta-only", "limit": 10},
+        )
+        assert denied.status_code == 403
