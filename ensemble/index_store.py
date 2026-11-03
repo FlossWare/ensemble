@@ -53,6 +53,23 @@ generation_control = Table(
     Column("epoch", Integer, nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
+generation_changes = Table(
+    "ensemble_index_generation_changes", index_metadata,
+    Column("change_id", Integer, primary_key=True, autoincrement=True),
+    Column("generation_id", String(64), nullable=False),
+    Column("source_id", String(512), nullable=False),
+    Column("high_sequence", Integer, nullable=False),
+    Column("revision_id", String(512), nullable=False),
+    Column("profiles", JSON, nullable=False),
+    Column("tombstoned", Boolean, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+generation_write_fence = Table(
+    "ensemble_index_generation_write_fence", index_metadata,
+    Column("singleton_id", Integer, primary_key=True),
+    Column("generation_id", String(64), nullable=False),
+    Column("acquired_at", DateTime(timezone=True), nullable=False),
+)
 
 
 class IndexStore(Protocol):
@@ -72,6 +89,10 @@ class IndexStore(Protocol):
     async def record_generation_checkpoint(self, generation_id: str, capability: str, checkpoint: dict[str, Any], sealed: bool = False) -> dict[str, Any]: ...
     async def activate_generation(self, generation_id: str, expected_active_generation_id: str, expected_epoch: int, verification: dict[str, Any]) -> dict[str, Any]: ...
     async def abort_generation(self, generation_id: str, reason: str) -> dict[str, Any]: ...
+    async def list_generation_changes_after(self, generation_id: str, after_change_id: int, limit: int) -> list[dict[str, Any]]: ...
+    async def generation_change_high_watermark(self, generation_id: str) -> int: ...
+    async def acquire_generation_write_fence(self, generation_id: str, through_change_id: int) -> dict[str, Any]: ...
+    async def release_generation_write_fence(self, generation_id: str) -> bool: ...
 
 
 def _as_source(row: Any) -> dict[str, Any]:
@@ -213,6 +234,10 @@ class SqliteIndexStore:
             ).values(
                 state="active", verification=verification,
                 activated_at=now, updated_at=now,
+            ))
+            await connection.execute(generation_write_fence.delete().where(
+                generation_write_fence.c.singleton_id == 1,
+                generation_write_fence.c.generation_id == generation_id,
             ))
             row = (await connection.execute(select(generation_control).where(
                 generation_control.c.singleton_id == 1
@@ -359,8 +384,69 @@ class SqliteIndexStore:
             "updated_at": row["updated_at"].isoformat(),
         } for row in rows]
 
+    async def list_generation_changes_after(self, generation_id: str, after_change_id: int, limit: int) -> list[dict[str, Any]]:
+        if isinstance(after_change_id, bool) or not isinstance(after_change_id, int) or after_change_id < 0:
+            raise ValueError("after_change_id must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(
+                select(generation_changes).where(
+                    generation_changes.c.generation_id == generation_id,
+                    generation_changes.c.change_id > after_change_id,
+                ).order_by(generation_changes.c.change_id).limit(limit)
+            )).mappings().all()
+        return [dict(row) for row in rows]
+
+    async def generation_change_high_watermark(self, generation_id: str) -> int:
+        from sqlalchemy import func
+        async with self.engine.connect() as connection:
+            value = await connection.scalar(select(func.max(generation_changes.c.change_id)).where(
+                generation_changes.c.generation_id == generation_id
+            ))
+        return int(value or 0)
+
+    async def acquire_generation_write_fence(self, generation_id: str, through_change_id: int) -> dict[str, Any]:
+        if isinstance(through_change_id, bool) or not isinstance(through_change_id, int) or through_change_id < 0:
+            raise ValueError("through_change_id must be a non-negative integer")
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            generation = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().first()
+            if generation is None or generation["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            existing = (await connection.execute(select(generation_write_fence).where(
+                generation_write_fence.c.singleton_id == 1
+            ))).mappings().first()
+            if existing and existing["generation_id"] != generation_id:
+                raise RuntimeError("another generation owns the Index write fence")
+            from sqlalchemy import func
+            high = int(await connection.scalar(select(func.max(generation_changes.c.change_id)).where(
+                generation_changes.c.generation_id == generation_id
+            )) or 0)
+            if high != through_change_id:
+                raise RuntimeError("generation change journal advanced; reconcile before acquiring the write fence")
+            if existing is None:
+                await connection.execute(generation_write_fence.insert().values(
+                    singleton_id=1, generation_id=generation_id, acquired_at=now,
+                ))
+        return {"generation_id": generation_id, "through_change_id": high, "acquired_at": now.isoformat()}
+
+    async def release_generation_write_fence(self, generation_id: str) -> bool:
+        async with self.engine.begin() as connection:
+            result = await connection.execute(generation_write_fence.delete().where(
+                generation_write_fence.c.singleton_id == 1,
+                generation_write_fence.c.generation_id == generation_id,
+            ))
+        return result.rowcount == 1
+
     async def record_revision(self, source_id: str, sequence: int, revision_id: str, profiles: dict[str, Any]) -> dict[str, Any]:
         async with self.engine.begin() as connection:
+            fence = (await connection.execute(select(generation_write_fence).where(generation_write_fence.c.singleton_id == 1))).mappings().first()
+            if fence is not None:
+                current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
+                return {"decision": "fenced", "source": _as_source(current) if current else None}
             row = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
             now = datetime.now(timezone.utc)
             profile_snapshot = dict(sorted(profiles.items()))
@@ -387,10 +473,21 @@ class SqliteIndexStore:
             else:
                 decision = "superseded"
             current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().one()
+            if decision == "accepted":
+                building = (await connection.execute(select(generations.c.generation_id).where(generations.c.state == "building"))).scalar_one_or_none()
+                if building:
+                    await connection.execute(generation_changes.insert().values(
+                        generation_id=building, source_id=source_id, high_sequence=sequence,
+                        revision_id=revision_id, profiles=profile_snapshot, tombstoned=False, created_at=now,
+                    ))
         return {"decision": decision, "source": _as_source(current)}
 
     async def record_tombstone(self, source_id: str, sequence: int) -> dict[str, Any]:
         async with self.engine.begin() as connection:
+            fence = (await connection.execute(select(generation_write_fence).where(generation_write_fence.c.singleton_id == 1))).mappings().first()
+            if fence is not None:
+                current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
+                return {"decision": "fenced", "source": _as_source(current) if current else None}
             row = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
             now = datetime.now(timezone.utc)
             if row is None:
@@ -410,6 +507,14 @@ class SqliteIndexStore:
             else:
                 decision = "superseded"
             current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().one()
+            if decision == "tombstoned":
+                building = (await connection.execute(select(generations.c.generation_id).where(generations.c.state == "building"))).scalar_one_or_none()
+                if building:
+                    await connection.execute(generation_changes.insert().values(
+                        generation_id=building, source_id=source_id,
+                        high_sequence=current["high_sequence"], revision_id=current["revision_id"],
+                        profiles=current["profiles"], tombstoned=True, created_at=now,
+                    ))
         return {"decision": decision, "source": _as_source(current)}
 
     async def get_source(self, source_id: str) -> dict[str, Any] | None:
