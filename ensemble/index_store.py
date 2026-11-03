@@ -455,7 +455,7 @@ class SqliteIndexStore:
                 generation_changes.c.tombstoned.is_(tombstoned),
                 generation_changes.c.acknowledged.is_(False),
             ).values(acknowledged=True))
-            await connection.execute(generation_changes.delete().where(
+            active_deleted = await connection.execute(generation_changes.delete().where(
                 generation_changes.c.generation_id.in_(
                     select(generations.c.generation_id).where(generations.c.state == "active")
                 ),
@@ -463,7 +463,7 @@ class SqliteIndexStore:
                 generation_changes.c.high_sequence == sequence,
                 generation_changes.c.tombstoned.is_(tombstoned),
             ))
-        return int(result.rowcount or 0)
+        return max(int(result.rowcount or 0), int(active_deleted.rowcount or 0))
 
     async def generation_change_high_watermark(self, generation_id: str) -> int:
         from sqlalchemy import func
