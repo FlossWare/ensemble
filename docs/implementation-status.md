@@ -228,17 +228,16 @@ Still outstanding:
 - Memory and Knowledge snapshot/copy passes.
 - Write fences, acknowledged-write verification, crash recovery, and atomic cutover across all stores.
 
-## Deferred source reclamation
+## Reversible source deletion and deferred permanent purge
 
 Implemented on `feature/deferred-source-reclamation`:
 
-- Source deletion first records the authoritative, irreversible Index tombstone and immediately hides the source from document, Knowledge, and active/shadow Vector query results.
-- Physical cleanup is enqueued in SQLite and processed by a single in-process background worker.
-- Cleanup removes active document/chunk and FTS rows, Knowledge payloads, and source-attributed records from every active vector collection.
-- Physical cleanup is bounded to 500 document or vector records per source per pass. Additional pages are retried rather than processed as one unbounded request.
-- Queue state, attempts, retry availability, last error, and completion timestamps survive restart. Stale running jobs become eligible again after five minutes.
-- Failures use bounded exponential backoff. Cleanup is idempotent and safe to resume after partial completion.
-- The Index tombstone and generation-scoped tombstone evidence are retained; physical cleanup never deletes those protections.
-- `GET /api/v1/index/reclamation` reports pending, running, retry, and completed work.
+- Ordinary deletion is a **soft delete**. The authoritative Index source state is marked deleted immediately; document, Knowledge, Vector, and Graph retrieval stop returning it.
+- Original document/chunk, Knowledge, and Vector materializations are retained, so restoration does not require re-ingestion or reconstruction.
+- `POST /api/v1/index/sources/{source_id}/restore` restores a soft-deleted source using a new, higher revision sequence. The Index is reactivated only after the retained materializations are ready.
+- Permanent deletion is a separate, explicit operation: `POST /api/v1/index/sources/{source_id}/purge`.
+- Permanent purge first marks the source irreversibly purged, then enqueues bounded physical cleanup in SQLite. The worker removes document/chunk/FTS, Knowledge, and source-attributed Vector records with retry/backoff and restart recovery.
+- The Index source record and purge marker remain as a compact anti-resurrection guard. Purged sources cannot be restored or re-ingested.
+- `GET /api/v1/index/reclamation` reports pending, running, retry, and completed purge jobs.
 
-Not included in this lifecycle yet: physical reclamation of Memory imports or Graph lineage, generation retirement/garbage collection, and privacy-driven erasure workflows that must remove retained tombstone evidence. Those need explicit semantics rather than silently weakening the anti-resurrection guarantee.
+Retention expiry is not automatic yet. A retention policy should be configurable before any scheduled purge is enabled. Memory imports, Graph lineage, retired generation materializations, and privacy erasure remain separate cleanup work.
