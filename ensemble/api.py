@@ -298,8 +298,9 @@ def create_app(
         )
         if decision["decision"] not in {"accepted", "duplicate"}:
             raise HTTPException(
-                status_code=409,
+                status_code=503 if decision["decision"] == "fenced" else 409,
                 detail="source revision rejected: " + decision["decision"],
+                headers={"Retry-After": "1"} if decision["decision"] == "fenced" else None,
             )
         result = await documents.ingest(
             request, embed=embed, vector_collection=vector_collection
@@ -636,6 +637,8 @@ def create_app(
         if not isinstance(profiles, dict) or not profiles:
             raise HTTPException(status_code=400, detail="profiles must be a non-empty object")
         result = await active_index_store.record_revision(source_id, sequence, revision_id, profiles)
+        if result["decision"] == "fenced":
+            raise HTTPException(status_code=503, detail="Index writes are temporarily fenced for generation cutover", headers={"Retry-After": "1"})
         return {"ok": True, **result}
 
     @app.post("/api/v1/index/tombstones", tags=["index"])
@@ -647,6 +650,8 @@ def create_app(
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         result = await active_index_store.record_tombstone(source_id, sequence)
+        if result["decision"] == "fenced":
+            raise HTTPException(status_code=503, detail="Index writes are temporarily fenced for generation cutover", headers={"Retry-After": "1"})
         if result["decision"] == "tombstoned":
             await document_store.tombstone_source(source_id)
             await active_knowledge_store.tombstone(source_id)
