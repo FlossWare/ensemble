@@ -192,7 +192,7 @@ def test_http_ranking_provider_rejects_non_finite_scores():
     provider = HttpRankingProvider(
         "https://ranking.example",
         transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, content=b\'{"scores":[NaN]}\', headers={"content-type": "application/json"})
+            lambda request: httpx.Response(200, json={"scores": ["nan"]})
         ),
     )
     with pytest.raises(ValueError, match="finite"):
