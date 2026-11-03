@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, delete, select, text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, delete, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -28,6 +28,12 @@ records = Table(
     Column("embedding", JSON, nullable=False),
     Column("document", Text, nullable=False),
     Column("metadata", JSON, nullable=False),
+)
+index_sources = Table(
+    "ensemble_index_sources",
+    vector_metadata,
+    Column("source_id", String(512), primary_key=True),
+    Column("tombstoned", Boolean, nullable=False),
 )
 generation_records = Table(
     "ensemble_vector_generation_records",
@@ -208,22 +214,9 @@ class SqliteVectorStore:
         return len(stale)
 
     async def tombstone_source(self, source_id: str) -> int:
-        async with self.engine.begin() as connection:
-            rows = (await connection.execute(
-                select(records.c.collection_name, records.c.record_id, records.c.metadata)
-            )).mappings().all()
-            changed = 0
-            for row in rows:
-                metadata = dict(row["metadata"] or {})
-                if metadata.get("source_id") == source_id or metadata.get("url") == source_id:
-                    if not metadata.get("_tombstoned"):
-                        metadata["_tombstoned"] = True
-                        await connection.execute(records.update().where(
-                            records.c.collection_name == row["collection_name"],
-                            records.c.record_id == row["record_id"],
-                        ).values(metadata=metadata))
-                        changed += 1
-        return changed
+        # Index is authoritative. Query-time filtering below observes its
+        # committed tombstone without rewriting every vector row synchronously.
+        return 0
 
     async def reclaim_source(self, source_id: str) -> int:
         async with self.engine.begin() as connection:
@@ -250,8 +243,15 @@ class SqliteVectorStore:
                 select(records.c.record_id, records.c.embedding, records.c.document, records.c.metadata)
                 .where(records.c.collection_name == name)
             )).mappings().all()
+            tombstoned = set((await connection.execute(
+                select(index_sources.c.source_id).where(index_sources.c.tombstoned.is_(True))
+            )).scalars().all())
         scored = []
         for row in rows:
+            metadata = row["metadata"] or {}
+            source_id = metadata.get("source_id") or metadata.get("url")
+            if source_id in tombstoned or metadata.get("_tombstoned"):
+                continue
             score = sum(left * right for left, right in zip(row["embedding"], embedding))
             scored.append({
                 "id": row["record_id"], "document": row["document"],
@@ -316,9 +316,14 @@ class SqliteVectorStore:
                     generation_records.c.collection_name == name,
                 )
             )).mappings().all()
+            tombstoned = set((await connection.execute(
+                select(index_sources.c.source_id).where(index_sources.c.tombstoned.is_(True))
+            )).scalars().all())
         scored = []
         for row in rows:
-            if (row["metadata"] or {}).get("_tombstoned"):
+            metadata = row["metadata"] or {}
+            source_id = metadata.get("source_id") or metadata.get("url")
+            if source_id in tombstoned or metadata.get("_tombstoned"):
                 continue
             if len(row["embedding"]) != len(embedding):
                 continue
