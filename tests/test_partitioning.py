@@ -5,6 +5,7 @@ import json
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import httpx
 
 from ensemble.api import create_app
 from ensemble.graph_store import SqliteGraphStore
@@ -61,8 +62,29 @@ def test_local_mode_cannot_select_another_partition(monkeypatch):
         from ensemble.partitioning import current_request_scope
         return {"partition": current_request_scope().partition_id}
 
-    response = TestClient(app).get("/api/v1/scope", headers={"X-Ensemble-Partition": "untrusted"})
+    client = TestClient(app)
+    assert client.get("/api/v1/scope").status_code == 200
+    response = client.get("/api/v1/scope", headers={"X-Ensemble-Partition": "untrusted"})
     assert response.status_code == 403
+
+
+def test_remote_api_requires_credentials_in_local_mode(monkeypatch):
+    monkeypatch.delenv("ENSEMBLE_PARTITION_TOKENS", raising=False)
+    monkeypatch.setenv("ENSEMBLE_AUTH_REQUIRED", "0")
+    app = FastAPI()
+    app.middleware("http")(partition_scope_middleware)
+
+    @app.get("/api/v1/scope")
+    async def scope():
+        return {"ok": True}
+
+    async def request_remote():
+        transport = httpx.ASGITransport(app=app, client=("203.0.113.25", 4567))
+        async with httpx.AsyncClient(transport=transport, base_url="http://ensemble") as client:
+            return await client.get("/api/v1/scope")
+
+    response = asyncio.run(request_remote())
+    assert response.status_code == 503
 
 
 def test_partitioned_index_uses_separate_sqlite_databases(tmp_path):
