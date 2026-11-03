@@ -322,4 +322,6 @@ class InMemoryIndexStore:
             state="failed", verification={"failure": reason},
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
+        if self._write_fence_generation == generation_id:
+            self._write_fence_generation = None
         return dict(value)
