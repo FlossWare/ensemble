@@ -31,7 +31,7 @@ These items are implemented foundations, not claims that every operational requi
 
 ### 1. Complete hybrid retrieval
 
-- Retrieve from the shared document/chunk index populated by Knowledge, transcripts, and documents; independent lexical/vector channel diagnostics and candidate counts are now implemented. External ranking fallback remains.
+- Retrieve from the shared document/chunk index populated by Knowledge, transcripts, and documents; independent lexical/vector channel diagnostics and candidate counts are now implemented. An optional ranking-provider adapter behind a reusable reranking decorator remains.
 - Preserve source identity, revision, scope, and provenance through candidate fusion and reranking.
 - Define deterministic fusion, deduplication, and stable tie-breaking.
 - Make partial-success and degraded-dependency behavior explicit. Search responses now distinguish healthy, partial, and unavailable retrieval, preserve a healthy channel when its peer fails, and report vector collection failures separately from usable document-chunk vectors.
