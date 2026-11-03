@@ -192,7 +192,7 @@ class SqliteIndexStore:
                 raise RuntimeError("target generation is not building")
             checkpoints = target["checkpoints"] or {}
             if not all(checkpoints.get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge")):
-                raise RuntimeError("index, memory, and knowledge checkpoints must all be sealed")
+                raise RuntimeError("index, documents, vectors, memory, and knowledge checkpoints must all be sealed")
             changed = await connection.execute(generation_control.update().where(
                 generation_control.c.singleton_id == 1,
                 generation_control.c.active_generation_id == expected_active_generation_id,
