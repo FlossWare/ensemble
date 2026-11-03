@@ -284,8 +284,6 @@ class SqliteIndexStore:
                     profiles=profiles, tombstoned=tombstoned, updated_at=now,
                 ))
                 decision = "accepted"
-            elif row["purged"]:
-                decision = "purged"
             elif row["tombstoned"]:
                 decision = "tombstoned"
             elif tombstoned:
@@ -375,6 +373,8 @@ class SqliteIndexStore:
                     profiles=profile_snapshot, tombstoned=False, updated_at=now,
                 ))
                 decision = "accepted"
+            elif row["purged"]:
+                decision = "purged"
             elif row["tombstoned"]:
                 decision = "tombstoned"
             elif sequence > row["high_sequence"]:
