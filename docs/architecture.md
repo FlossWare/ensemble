@@ -120,3 +120,8 @@ Do not create a separate phase or framework for a concern that belongs inside th
 - Internal capability calls use the same REST contracts as external calls.
 - MCP can be disabled without reducing the REST capability surface.
 - Data deletion, restoration, and permanent purge cannot leave stale derived data visible or allow deleted data to be resurrected.
+
+
+## 12. Test Harness
+
+Ensemble includes a Test Harness contract for synthetic injection, deterministic replay, and controlled fault scenarios through the canonical REST API. It is disabled by default and restricted to a dedicated test deployment and database until end-to-end partition enforcement exists. The harness must use existing ingestion and deletion contracts, retain per-operation outcomes, and never write directly to persistence tables. See [Test Harness](test-harness.md) for its lifecycle, route family, safety requirements, and implementation sequence.
