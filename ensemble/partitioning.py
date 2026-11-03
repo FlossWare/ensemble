@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 _PARTITION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MIGRATION_LOCKS: dict[str, threading.Lock] = {}
 _MIGRATION_LOCKS_GUARD = threading.Lock()
+_MIGRATED_DATABASES: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -171,10 +172,11 @@ def _ensure_partition_schema(database_url: str, partition_id: str) -> None:
     with _MIGRATION_LOCKS_GUARD:
         lock = _MIGRATION_LOCKS.setdefault(key, threading.Lock())
     with lock:
-        ini = Path(__file__).resolve().parents[1] / "alembic.ini"
-        config = Config(str(ini))
-        config.attributes["database_url"] = database_url
-        command.upgrade(config, "head")
+        if key not in _MIGRATED_DATABASES:
+            ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+            config = Config(str(ini))
+            config.attributes["database_url"] = database_url
+            command.upgrade(config, "head")
         connection = sqlite3.connect(key)
         try:
             row = connection.execute(
@@ -196,6 +198,7 @@ def _ensure_partition_schema(database_url: str, partition_id: str) -> None:
                 raise RuntimeError("partition database identity does not match its requested scope")
         finally:
             connection.close()
+        _MIGRATED_DATABASES.add(key)
 
 
 class _PartitionedEngineContext:
