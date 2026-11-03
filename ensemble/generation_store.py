@@ -6,7 +6,9 @@ from typing import Any
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, MetaData, String, Table, insert, select, update
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from .partitioning import PartitionedAsyncEngine
 
 
 metadata = MetaData()
@@ -64,7 +66,7 @@ class SqliteGenerationStore:
         )
         if make_url(self.database_url).get_backend_name() != "sqlite":
             raise ValueError("Ensemble generation metadata supports SQLite only")
-        self.engine: AsyncEngine = create_async_engine(self.database_url, pool_pre_ping=True)
+        self.engine = PartitionedAsyncEngine(self.database_url, pool_pre_ping=True)
 
     async def initialize(self) -> None:
         async with self.engine.connect() as connection:
