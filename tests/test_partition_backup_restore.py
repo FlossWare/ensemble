@@ -1,6 +1,7 @@
 import os
 import shutil
 import sqlite3
+import tarfile
 import subprocess
 from pathlib import Path
 
@@ -77,3 +78,43 @@ def test_partition_backup_and_restore_round_trip(tmp_path):
     rollback = list(tmp_path.glob("ensemble-data.pre-restore-*"))
     assert len(rollback) == 1
     assert (rollback[0] / "ensemble.db").is_file()
+
+
+def test_restore_rejects_symlink_traversal_before_extraction(tmp_path):
+    repository = Path(__file__).resolve().parents[1]
+    root = tmp_path / "ensemble-data"
+    root.mkdir()
+    sentinel = root / "keep.txt"
+    sentinel.write_text("existing persistence must remain untouched")
+    outside = tmp_path / "outside"
+    archive = tmp_path / "malicious.tar.gz"
+
+    with tarfile.open(archive, "w:gz") as bundle:
+        link = tarfile.TarInfo("ensemble-data/escape")
+        link.type = tarfile.SYMTYPE
+        link.linkname = str(outside)
+        bundle.addfile(link)
+
+        payload = b"this must never be extracted"
+        child = tarfile.TarInfo("ensemble-data/escape/created.txt")
+        child.size = len(payload)
+        import io
+        bundle.addfile(child, io.BytesIO(payload))
+
+    env = {
+        "ENSEMBLE_PERSISTENCE_ROOT": str(root),
+        "ENSEMBLE_SERVICE_NAME": "ensemble-test",
+    }
+    command = ["bash", str(repository / "scripts/restore-persistence.sh"), str(archive), str(root)]
+    if os.geteuid() == 0:
+        invocation = ["env", *(f"{key}={value}" for key, value in env.items()), *command]
+    elif shutil.which("sudo"):
+        invocation = ["sudo", "env", *(f"{key}={value}" for key, value in env.items()), *command]
+    else:
+        pytest.skip("restore security test requires root or passwordless sudo")
+    completed = subprocess.run(invocation, check=False, capture_output=True, text=True)
+
+    assert completed.returncode != 0
+    assert "unsupported link or special entry" in completed.stderr
+    assert sentinel.read_text() == "existing persistence must remain untouched"
+    assert not outside.exists()
