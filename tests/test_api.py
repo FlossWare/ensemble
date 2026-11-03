@@ -1650,3 +1650,85 @@ def test_document_generation_builder_requires_sealed_index_pass():
             await builder.copy_documents_page("shadow")
 
     asyncio.run(exercise())
+
+
+def test_vector_generation_builder_copies_live_records_and_skips_tombstones(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'vector-builder.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    index_store = SqliteIndexStore(database_url)
+    document_store = SqlDocumentStore(database_url)
+    vector_store = SqliteVectorStore(database_url)
+
+    async def exercise():
+        await index_store.initialize()
+        await document_store.initialize()
+        await vector_store.initialize()
+        await index_store.record_revision("source-live", 1, "r1", {})
+        await index_store.record_tombstone("source-deleted", 2)
+        live_document = Document("source-live", 1, "Live", "live document")
+        await document_store.save(
+            live_document, [Chunk(live_document.id, 0, live_document.content, [1.0, 0.0])],
+        )
+        await vector_store.upsert("knowledge", "test-model", 2, [
+            {
+                "id": "a-deleted", "embedding": [0.0, 1.0],
+                "document": "deleted vector", "metadata": {"source_id": "source-deleted"},
+            },
+            {
+                "id": "z-live", "embedding": [1.0, 0.0],
+                "document": "live vector", "metadata": {"source_id": "source-live"},
+            },
+        ])
+        await index_store.create_generation("generation-shadow")
+        builder = IndexGenerationBuilder(index_store, document_store, vector_store)
+        await builder.copy_index_sources("generation-shadow", page_size=10)
+        await builder.copy_documents_page("generation-shadow", page_size=10)
+
+        first = await builder.copy_vectors_page("generation-shadow", page_size=1)
+        assert first["status"] == "in_progress"
+        assert first["skipped_tombstone_count"] == 1
+        second = await builder.copy_vectors_page("generation-shadow", page_size=1)
+        assert second["status"] == "complete"
+        assert second["copied_record_count"] == 1
+        assert second["skipped_tombstone_count"] == 1
+
+        shadow = await vector_store.query_generation(
+            "generation-shadow", "knowledge", [1.0, 0.0], 10,
+        )
+        assert [item["id"] for item in shadow] == ["z-live"]
+        active = await vector_store.query("knowledge", [1.0, 0.0], 10)
+        assert {item["id"] for item in active} == {"a-deleted", "z-live"}
+        status = await index_store.generation_status()
+        generation = next(item for item in status["generations"] if item["generation_id"] == "generation-shadow")
+        assert generation["checkpoints"]["vectors"]["sealed"] is True
+        await vector_store.close()
+        await document_store.close()
+        await index_store.close()
+
+    asyncio.run(exercise())
+
+
+def test_vector_generation_builder_rejects_unattributed_records():
+    index_store = InMemoryIndexStore()
+    document_store = InMemoryDocumentStore()
+    vector_store = InMemoryVectorStore()
+    builder = IndexGenerationBuilder(index_store, document_store, vector_store)
+
+    async def exercise():
+        await index_store.create_generation("shadow")
+        await index_store.record_generation_checkpoint(
+            "shadow", "index", {"source_upper_bound": None, "cursor": None}, sealed=True,
+        )
+        await index_store.record_generation_checkpoint(
+            "shadow", "documents", {"source_upper_bound": None, "cursor": None}, sealed=True,
+        )
+        await vector_store.upsert("knowledge", "model", 2, [{
+            "id": "unattributed", "embedding": [1.0, 0.0],
+            "document": "unknown source", "metadata": {},
+        }])
+        with pytest.raises(RuntimeError, match="no source identity"):
+            await builder.copy_vectors_page("shadow")
+
+    asyncio.run(exercise())
