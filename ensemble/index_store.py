@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, MetaData, String, Table, select, update, insert, delete
+from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, MetaData, String, Table, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
 
@@ -75,7 +75,11 @@ class SqliteIndexStore:
     async def initialize(self) -> None:
         async with self.engine.connect() as connection:
             names = await connection.run_sync(lambda conn: __import__("sqlalchemy").inspect(conn).get_table_names())
-        if "ensemble_index_sources" not in names:
+        required = {
+            "ensemble_index_sources", "ensemble_index_generations",
+            "ensemble_index_generation_control",
+        }
+        if not required.issubset(names):
             raise RuntimeError("index schema is not initialized; run 'alembic upgrade head'")
 
     async def close(self) -> None:
