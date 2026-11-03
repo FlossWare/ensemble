@@ -34,17 +34,53 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if tar -tzf "$ARCHIVE" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
-  echo "Archive contains an unsafe path." >&2
-  exit 1
-fi
-TOP="$(tar -tzf "$ARCHIVE" | sed -n '1{s#/.*##;p;}')"
-if [[ "$TOP" != "$NAME" ]]; then
-  echo "Archive root '$TOP' does not match target directory '$NAME'." >&2
-  exit 1
-fi
+# Validate every archive member before extraction. In particular, reject links:
+# a symlink or hard link can redirect a later archive member outside STAGE even
+# when every member name appears to be a harmless relative path.
+python - "$ARCHIVE" "$NAME" <<'PY'
+import sys
+import tarfile
+from pathlib import PurePosixPath
 
-mkdir -p "$PARENT"
+archive_path, expected_root = sys.argv[1:]
+seen = set()
+with tarfile.open(archive_path, "r:gz") as archive:
+    members = archive.getmembers()
+    if not members:
+        raise SystemExit("Archive is empty")
+    for member in members:
+        name = member.name
+        if not name or name.startswith("/") or "\\" in name:
+            raise SystemExit(f"Archive contains an unsafe path: {name!r}")
+        parts = name.rstrip("/").split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            raise SystemExit(f"Archive contains an unsafe path: {name!r}")
+        if parts[0] != expected_root:
+            raise SystemExit(
+                f"Archive root {parts[0]!r} does not match target directory {expected_root!r}"
+            )
+        if not (member.isdir() or member.isfile()):
+            raise SystemExit(f"Archive contains an unsupported link or special entry: {name!r}")
+        if member.mode & 0o7000:
+            raise SystemExit(f"Archive contains unsafe special permission bits: {name!r}")
+        normalized = str(PurePosixPath(*parts))
+        if normalized in seen:
+            raise SystemExit(f"Archive contains a duplicate path: {name!r}")
+        seen.add(normalized)
+    for member in members:
+        parts = PurePosixPath(member.name.rstrip("/")).parts
+        for index in range(1, len(parts)):
+            ancestor = str(PurePosixPath(*parts[:index]))
+            if ancestor in seen:
+                ancestor_member = next(
+                    item for item in members
+                    if str(PurePosixPath(item.name.rstrip("/"))) == ancestor
+                )
+                if not ancestor_member.isdir():
+                    raise SystemExit(f"Archive places a child beneath a non-directory: {member.name!r}")
+print(f"Validated {len(members)} archive entries.")
+PY
+
 tar --no-same-owner -xzf "$ARCHIVE" -C "$STAGE"
 RESTORED="$STAGE/$NAME"
 if [[ ! -d "$RESTORED" ]]; then
