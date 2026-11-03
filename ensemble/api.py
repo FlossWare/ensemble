@@ -2134,14 +2134,28 @@ def create_app(
             raise HTTPException(status_code=502, detail="hybrid search failed") from exc
 
     @app.post("/api/v1/search/hybrid/knowledge", tags=["search"])
-    async def hybrid_knowledge_search(request: SearchIn):
-        if not embeddings.available:
-            raise HTTPException(status_code=503, detail="knowledge search requires an available embedding provider")
+    async def hybrid_knowledge_search(search_request: SearchIn, request: Request):
+        internal = InternalRestClient(app, {
+            "embeddings": os.getenv("ENSEMBLE_EMBEDDINGS_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+        })
         try:
-            vector = (await embeddings.embed([request.query], mode="query"))[0]
-            results = await active_vector_store.query("knowledge_chunks", vector, request.limit)
+            embedded = await internal.request(
+                "POST", "/api/v1/embeddings/embed", request=request,
+                json={"texts": [search_request.query], "mode": "query"},
+            )
+            vectors = embedded.get("embeddings", [])
+            if len(vectors) != 1:
+                raise RuntimeError("embedding capability returned an invalid result")
+            vector = vectors[0]
+            response = await internal.request(
+                "POST", "/api/v1/vector/collections/knowledge_chunks/query",
+                request=request,
+                json={"embedding": vector, "top_k": search_request.limit,
+                      "dimensions": embedded.get("dimensions")},
+            )
             return {
-                "ok": True, "results": results, "degraded": [],
+                "ok": True, "results": response.get("results", []), "degraded": [],
                 "retrieval": "knowledge-only",
             }
         except Exception as exc:
