@@ -27,6 +27,7 @@ A generation has one of these states:
 - `verifying`: all stores are checked against the final operation watermark and candidate invariants.
 - `ready`: candidate is verified and eligible for activation.
 - `active`: candidate is the sole active generation.
+- `retired`: a previously active generation retained for rollback/retention until cleanup is safe.
 - `failed`: build cannot safely continue; active generation remains unchanged.
 - `aborted`: operator cancelled the build; active generation remains unchanged.
 
