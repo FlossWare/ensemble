@@ -1799,3 +1799,34 @@ def test_generation_change_reconciliation_is_resumable_and_fenced():
         assert accepted["decision"] == "accepted"
 
     asyncio.run(exercise())
+
+
+def test_index_change_acknowledgement_rest_contract(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-ack.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    store = SqliteIndexStore(database_url)
+
+    async def prepare():
+        await store.initialize()
+        await store.create_generation("generation-ack")
+        await store.record_revision("source-ack", 1, "revision-ack", {"chunking": "window-v1"})
+
+    asyncio.run(prepare())
+    with TestClient(create_app(database_url=database_url)) as client:
+        response = client.post("/api/v1/index/changes/acknowledge", json={
+            "source_id": "source-ack",
+            "revision_sequence": 1,
+            "tombstoned": False,
+        })
+        assert response.status_code == 200
+        assert response.json()["acknowledged"] == 1
+
+    async def verify():
+        changes = await store.list_generation_changes_after("generation-ack", 0, 10)
+        assert len(changes) == 1
+        assert changes[0]["acknowledged"] is True
+        await store.close()
+
+    asyncio.run(verify())
