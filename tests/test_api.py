@@ -1753,3 +1753,36 @@ def test_vector_generation_builder_rejects_unattributed_records():
             await builder.copy_vectors_page("shadow")
 
     asyncio.run(exercise())
+
+
+def test_generation_change_reconciliation_is_resumable_and_fenced():
+    store = InMemoryIndexStore()
+
+    async def exercise():
+        await store.create_generation("generation-shadow")
+        await store.record_revision("source-a", 1, "revision-a", {"chunking": "window-v1"})
+        await store.record_revision("source-b", 1, "revision-b", {"chunking": "window-v1"})
+        await store.record_tombstone("source-a", 2)
+
+        builder = IndexGenerationBuilder(store)
+        first = await builder.reconcile_index_changes_page("generation-shadow", page_size=2)
+        assert first["status"] == "in_progress"
+        resumed_builder = IndexGenerationBuilder(store)
+        second = await resumed_builder.reconcile_index_changes_page("generation-shadow", page_size=2)
+        assert second["status"] == "caught_up"
+        assert second["change_count"] == 3
+
+        source_a = await store.get_generation_source("generation-shadow", "source-a")
+        source_b = await store.get_generation_source("generation-shadow", "source-b")
+        assert source_a["tombstoned"] is True
+        assert source_a["high_sequence"] == 2
+        assert source_b["tombstoned"] is False
+
+        await resumed_builder.fence_reconciled_generation("generation-shadow")
+        blocked = await store.record_revision("source-c", 1, "revision-c", {"chunking": "window-v1"})
+        assert blocked["decision"] == "fenced"
+        assert await store.release_generation_write_fence("generation-shadow") is True
+        accepted = await store.record_revision("source-c", 1, "revision-c", {"chunking": "window-v1"})
+        assert accepted["decision"] == "accepted"
+
+    asyncio.run(exercise())
