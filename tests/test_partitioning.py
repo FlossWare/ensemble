@@ -257,3 +257,45 @@ def test_memory_knowledge_graph_and_vector_stores_are_partition_isolated(tmp_pat
                 await store.close()
 
     asyncio.run(exercise())
+
+
+def test_tombstones_and_replayed_revisions_are_partition_local(tmp_path):
+    async def exercise():
+        base = f"sqlite+aiosqlite:///{tmp_path / 'tombstones.db'}"
+        await asyncio.to_thread(_ensure_partition_schema, base, "default")
+        store = SqliteIndexStore(base)
+        try:
+            token = set_request_scope(RequestScope(partition_id="workspace-a"))
+            try:
+                first = await store.record_revision("shared-source", 1, "alpha-r1", {})
+                assert first["decision"] == "accepted"
+                deleted = await store.record_tombstone("shared-source", 2)
+                assert deleted["decision"] == "tombstoned"
+
+                replay = await store.record_revision("shared-source", 1, "alpha-r1", {})
+                late = await store.record_revision("shared-source", 3, "alpha-r3", {})
+                assert replay["decision"] == "tombstoned"
+                assert late["decision"] == "tombstoned"
+                assert (await store.get_source("shared-source"))["tombstoned"] is True
+            finally:
+                reset_request_scope(token)
+
+            token = set_request_scope(RequestScope(partition_id="workspace-b"))
+            try:
+                independent = await store.record_revision("shared-source", 1, "beta-r1", {})
+                assert independent["decision"] == "accepted"
+                source = await store.get_source("shared-source")
+                assert source["revision_id"] == "beta-r1"
+                assert source["tombstoned"] is False
+            finally:
+                reset_request_scope(token)
+
+            token = set_request_scope(RequestScope(partition_id="default"))
+            try:
+                assert await store.get_source("shared-source") is None
+            finally:
+                reset_request_scope(token)
+        finally:
+            await store.close()
+
+    asyncio.run(exercise())
