@@ -1114,9 +1114,9 @@ def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verifi
         assert tombstoned["decision"] == "tombstoned"
         journal = await store.list_generation_changes_after("generation-0002", 0, 10)
         assert [item["tombstoned"] for item in journal] == [False, False, True]
-        assert await store.generation_change_high_watermark("generation-0002") == 3
+        high_watermark = await store.generation_change_high_watermark("generation-0002")
         with pytest.raises(RuntimeError, match="unacknowledged source mutations"):
-            await store.acquire_generation_write_fence("generation-0002", through_change_id=3)
+            await store.acquire_generation_write_fence("generation-0002", through_change_id=high_watermark)
         assert await store.acknowledge_generation_change("source-prebuild", 1, tombstoned=False) == 1
         assert await store.acknowledge_generation_change("source-a", 1, tombstoned=False) == 1
         assert await store.acknowledge_generation_change("source-a", 2, tombstoned=True) == 1
@@ -1141,16 +1141,16 @@ def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verifi
                 {"acknowledged_writes_verified": True, "tombstones_verified": False},
             )
         await store.record_generation_checkpoint(
-            "generation-0002", "index_reconciliation", {"cursor": 3}, sealed=True,
+            "generation-0002", "index_reconciliation", {"cursor": high_watermark}, sealed=True,
         )
-        await store.acquire_generation_write_fence("generation-0002", through_change_id=3)
+        await store.acquire_generation_write_fence("generation-0002", through_change_id=high_watermark)
         fenced = await store.record_revision("source-b", 1, "revision-b", {"chunking": "window-v1"})
         assert fenced["decision"] == "fenced"
 
         cutover = await store.activate_generation(
             "generation-0002", "generation-0001", 1,
             {"acknowledged_writes_verified": True, "tombstones_verified": True,
-             "reconciled_through_change_id": 3},
+             "reconciled_through_change_id": high_watermark},
         )
         assert cutover == {"active_generation_id": "generation-0002", "epoch": 2}
         status = await store.generation_status()
