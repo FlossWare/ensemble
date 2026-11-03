@@ -51,6 +51,19 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 - Make long-running work explicit rather than holding requests open indefinitely.
 - Expose health/readiness separately from business operations.
 
+## 6. Internal capability dispatch
+
+Capability-to-capability calls use the same versioned REST contracts as external consumers, including when capabilities are co-located in the initial application. The initial implementation uses an ASGI-local HTTP transport; this preserves HTTP routing, request validation, and JSON serialization without introducing another process or listener.
+
+Each capability group can be assigned an independent REST base URL. The initial configuration keys are:
+
+- `ENSEMBLE_SEARCH_REST_URL`
+- `ENSEMBLE_MEMORY_REST_URL`
+- `ENSEMBLE_INTENT_REST_URL`
+- `ENSEMBLE_ENTITIES_REST_URL`
+
+When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. This is an incremental implementation: only call paths explicitly migrated to the internal REST client satisfy the boundary. Direct store/service calls elsewhere remain migration work and must not be described as REST-composed.
+
 ## 7. Initial implemented endpoints
 
 | Method | Path | Purpose |
@@ -117,7 +130,7 @@ The current document and search implementation remains an initial vertical slice
 
 ## 8. Required capability endpoint groups
 
-The POC parity inventory in docs/poc-parity.md defines the complete capability baseline. All 13 POC capabilities are required in Ensemble; these endpoint groups are not optional candidates. The exact resource paths and schemas will be specified in versioned contract documents before implementation.
+The required capability surface is defined by Ensemble's own product scope, architecture, and capability completion plan. Historical prototypes may provide evidence about useful behavior, but they do not define Ensemble's product boundaries, internal design, or completion criteria.
 
 | Capability group | Required operations |
 |---|---|
