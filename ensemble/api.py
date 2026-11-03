@@ -1974,6 +1974,18 @@ def create_app(
             "degraded_mode": "lexical fallback",
         }
 
+    @app.post("/api/v1/search/retrieve", tags=["search"])
+    async def search_retrieve(search_request: SearchIn):
+        """Execute the Search capability's lexical/vector retrieval contract."""
+        try:
+            return await search.search_with_status(
+                search_request.query, search_request.limit, rerank=False
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="search retrieval failed") from exc
+
     @app.post("/api/v1/search/hybrid", tags=["search"])
     async def hybrid_search(search_request: SearchIn, request: Request):
         internal = InternalRestClient(app, {
@@ -1982,12 +1994,14 @@ def create_app(
             "intent": os.getenv("ENSEMBLE_INTENT_REST_URL"),
             "reranking": os.getenv("ENSEMBLE_RERANKING_REST_URL"),
             "memory": os.getenv("ENSEMBLE_MEMORY_REST_URL"),
+            "search": os.getenv("ENSEMBLE_SEARCH_REST_URL"),
         })
         try:
-            # Search remains the owning retrieval implementation. Enrichment,
-            # graph access, reranking, and the audit ledger use their REST contracts.
-            result = await search.search_with_status(
-                search_request.query, search_request.limit, rerank=False
+            # All capability composition crosses the versioned REST contracts.
+            # Search owns its retrieval algorithm and persistence implementation.
+            result = await internal.request(
+                "POST", "/api/v1/search/retrieve", request=request,
+                json=search_request.model_dump(mode="json"),
             )
 
             try:
