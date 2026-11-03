@@ -84,7 +84,9 @@ Implement durable index rebuilds that can safely coexist with writes:
 
 **Vector shadow storage implemented:** migration 0017 adds generation-scoped vector records keyed by collection, generation, and record ID. The SQLite and in-memory adapters can write, query, and delete a shadow generation without changing active-generation vector query results. This is isolated storage only; it does not yet copy active vectors, coordinate writes, or activate a generation.
 
-**Not yet implemented:** shadow document/chunk and lexical storage, a rebuild worker to populate all shadow stores, write-fence acquisition and propagation into each writer, acknowledged-write reconciliation, automatic restart recovery, and end-to-end atomic cutover of actual retrieval data. Keep the rebuild API unavailable until those pieces exist.
+**Document shadow storage implemented:** migration 0018 adds generation-scoped document and chunk records, preserving source/revision identity and selecting the newest revision within each generation. SQLite and in-memory adapters expose generation-scoped chunk enumeration and lexical candidate search. Active document/chunk and FTS5 paths remain unchanged.
+
+**Not yet implemented:** source tombstone propagation into shadow generations, a rebuild worker to populate all shadow stores, write-fence acquisition and propagation into each writer, acknowledged-write reconciliation, automatic restart recovery, and end-to-end atomic cutover of actual retrieval data. Keep the rebuild API unavailable until those pieces exist.
 
 Do not ship a rebuild operation that can silently lose acknowledged writes or resurrect deleted content.
 
