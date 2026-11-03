@@ -187,7 +187,7 @@ class RerankingDecorator:
             if (
                 not isinstance(scores, list)
                 or len(scores) != len(candidates)
-                or any(isinstance(score, bool) or not math.isfinite(float(score)) for score in scores)
+                or any(isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score) for score in scores)
             ):
                 raise RuntimeError("ranking provider returned invalid or misaligned scores")
             scored = [
@@ -300,12 +300,11 @@ class HttpRankingProvider:
             raise ValueError("ranking response score count does not match candidate count")
         normalized = []
         for score in scores:
-            if isinstance(score, bool):
+            if isinstance(score, bool) or not isinstance(score, (int, float)):
                 raise ValueError("ranking scores must be finite numbers")
-            value = float(score)
-            if not math.isfinite(value):
+            if not math.isfinite(score):
                 raise ValueError("ranking scores must be finite numbers")
-            normalized.append(value)
+            normalized.append(float(score))
         return normalized
 
 
