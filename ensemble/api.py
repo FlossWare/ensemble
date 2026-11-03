@@ -466,15 +466,31 @@ def create_app(
                 "matched_entities": graph_matches, "candidate_sources": 0, "degraded": True,
             }
 
-    async def tombstone_indexed_source(source_id: str) -> None:
-        await document_store.tombstone_source(source_id)
-        await active_knowledge_store.tombstone(source_id)
-        # Source records may have been written through different ingestion
-        # capabilities and vector collections. Remove them all, not just
-        # Knowledge's collection.
-        for collection in await active_vector_store.list_collections():
-            await active_vector_store.delete_superseded(
-                collection["name"], source_id, ""
+    async def tombstone_indexed_source(
+        source_id: str, request: Request | None = None,
+    ) -> None:
+        internal = InternalRestClient(app, {
+            "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+        })
+        await internal.request(
+            "POST", f"/api/v1/documents/sources/{source_id}/tombstone",
+            request=request, json={},
+        )
+        await internal.request(
+            "POST", f"/api/v1/knowledge/sources/{source_id}/tombstone",
+            request=request, json={},
+        )
+        # Remove the source from every vector collection, not only Knowledge.
+        collections = (await internal.request(
+            "GET", "/api/v1/vector/collections", request=request,
+        )).get("collections", [])
+        for collection in collections:
+            await internal.request(
+                "POST",
+                f"/api/v1/vector/collections/{collection['name']}/sources/{source_id}/tombstone",
+                request=request, json={},
             )
 
     app.state.store = document_store
@@ -664,17 +680,32 @@ def create_app(
             raise HTTPException(status_code=404, detail="unknown record")
         return {"ok": True, "record": record}
 
+    @app.post("/api/v1/knowledge/sources/{source_id}/tombstone", tags=["knowledge"])
+    async def knowledge_source_tombstone(source_id: str):
+        if not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        await active_knowledge_store.tombstone(source_id)
+        return {"ok": True, "source_id": source_id}
+
     @app.post("/api/v1/knowledge/records/{source_id}/tombstone", tags=["knowledge"])
-    async def knowledge_tombstone(source_id: str, payload: dict[str, Any]):
+    async def knowledge_tombstone(source_id: str, payload: dict[str, Any], request: Request):
         sequence = payload.get("revision_sequence")
         if not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
-        decision = await active_index_store.record_tombstone(source_id, sequence)
-        if decision["decision"] == "tombstoned":
-            await tombstone_indexed_source(source_id)
-        return {"ok": True, "decision": decision["decision"], "source_id": source_id}
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        return await internal.request(
+            "POST", "/api/v1/index/tombstones", request=request,
+            json={"source_id": source_id, "revision_sequence": sequence},
+        )
+
+    @app.post("/api/v1/documents/sources/{source_id}/tombstone", tags=["documents"])
+    async def documents_source_tombstone(source_id: str):
+        if not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        await document_store.tombstone_source(source_id)
+        return {"ok": True, "source_id": source_id}
 
     @app.post("/api/v1/documents/records", tags=["documents"])
     async def documents_ingest(payload: dict[str, Any]):
@@ -721,7 +752,7 @@ def create_app(
         return {"ok": True, **result}
 
     @app.post("/api/v1/index/tombstones", tags=["index"])
-    async def index_tombstone(payload: dict[str, Any]):
+    async def index_tombstone(payload: dict[str, Any], request: Request):
         source_id = payload.get("source_id")
         sequence = payload.get("revision_sequence")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
@@ -730,9 +761,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         result = await active_index_store.record_tombstone(source_id, sequence)
         if result["decision"] == "tombstoned":
-            await document_store.tombstone_source(source_id)
-            await active_knowledge_store.tombstone(source_id)
-            await active_vector_store.delete_superseded("knowledge_chunks", source_id, "")
+            await tombstone_indexed_source(source_id, request)
         return {"ok": True, **result}
 
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
@@ -888,6 +917,14 @@ def create_app(
         if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             raise HTTPException(status_code=400, detail="keep_sha256 must be a lowercase hex SHA-256")
         deleted = await active_vector_store.delete_superseded(name, url, digest)
+        return {"ok": True, "deleted": deleted}
+
+    @app.post("/api/v1/vector/collections/{name}/sources/{source_id}/tombstone", tags=["vector"])
+    async def vector_source_tombstone(name: str, source_id: str):
+        _validate_vector_collection_name(name)
+        if not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        deleted = await active_vector_store.delete_superseded(name, source_id, "")
         return {"ok": True, "deleted": deleted}
 
     @app.post("/api/v1/vector/collections/{name}/query", tags=["vector"])
