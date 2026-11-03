@@ -177,6 +177,8 @@ def create_app(
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
     document_store = store or SqlDocumentStore(database_url)
+    if isinstance(document_store, InMemoryDocumentStore) and os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip():
+        raise ValueError("partition authentication requires durable SQLite-backed stores; in-memory adapters are test-only")
     embeddings = embedding_provider or configured_embedding_provider()
     active_reranker = reranker or configured_reranker()
     active_vector_store = vector_store or (
