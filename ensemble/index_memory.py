@@ -7,6 +7,7 @@ from typing import Any
 class InMemoryIndexStore:
     def __init__(self):
         self._sources: dict[str, dict[str, Any]] = {}
+        self._generation_sources: dict[str, dict[str, dict[str, Any]]] = {}
         now = datetime.now(timezone.utc).isoformat()
         self._generations = {
             "generation-0001": {
@@ -90,6 +91,76 @@ class InMemoryIndexStore:
         ][:limit]
         return [dict(self._sources[key]) for key in keys]
 
+
+
+    async def put_generation_source(self, generation_id: str, source: dict[str, Any]) -> dict[str, Any]:
+        required = {"source_id", "high_sequence", "revision_id", "profiles", "tombstoned"}
+        if not isinstance(source, dict) or not required.issubset(source):
+            raise ValueError("source state is incomplete")
+        if not isinstance(source["source_id"], str) or not source["source_id"] or len(source["source_id"]) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        sequence = source["high_sequence"]
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("high_sequence must be a positive integer")
+        if not isinstance(source["revision_id"], str) or not source["revision_id"] or len(source["revision_id"]) > 512:
+            raise ValueError("revision_id must contain 1-512 characters")
+        import json
+        profiles = dict(sorted(source["profiles"].items()))
+        try:
+            json.dumps(profiles, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("profiles must contain finite JSON values") from exc
+        generation = self._generations.get(generation_id)
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        source_id = source["source_id"]
+        records = self._generation_sources.setdefault(generation_id, {})
+        current = records.get(source_id)
+        now = datetime.now(timezone.utc).isoformat()
+        tombstoned = bool(source["tombstoned"])
+        if current is None:
+            current = {
+                "source_id": source_id, "high_sequence": sequence,
+                "revision_id": source["revision_id"], "profiles": profiles,
+                "tombstoned": tombstoned, "updated_at": now,
+            }
+            records[source_id] = current
+            decision = "accepted"
+        elif current["tombstoned"]:
+            decision = "tombstoned"
+        elif tombstoned:
+            current.update(high_sequence=max(sequence, current["high_sequence"]), tombstoned=True, updated_at=now)
+            decision = "tombstoned"
+        elif sequence > current["high_sequence"]:
+            current.update(
+                high_sequence=sequence, revision_id=source["revision_id"],
+                profiles=profiles, updated_at=now,
+            )
+            decision = "accepted"
+        elif sequence == current["high_sequence"]:
+            decision = "duplicate" if current["revision_id"] == source["revision_id"] and current["profiles"] == profiles else "conflict"
+        else:
+            decision = "superseded"
+        return {"decision": decision, "source": dict(current)}
+
+    async def get_generation_source(self, generation_id: str, source_id: str) -> dict[str, Any] | None:
+        value = self._generation_sources.get(generation_id, {}).get(source_id)
+        return dict(value) if value else None
+
+    async def list_generation_sources_after(
+        self, generation_id: str, cursor: str | None,
+        upper_bound: str | None, limit: int,
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        if upper_bound is None:
+            return []
+        records = self._generation_sources.get(generation_id, {})
+        keys = [
+            key for key in sorted(records)
+            if key <= upper_bound and (cursor is None or key > cursor)
+        ][:limit]
+        return [dict(records[key]) for key in keys]
 
     async def generation_status(self) -> dict[str, Any]:
         return {
