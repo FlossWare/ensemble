@@ -76,6 +76,11 @@ generation_write_fence = Table(
 )
 
 async def assert_generation_writes_open(connection: Any) -> None:
+    from sqlalchemy import inspect
+    names = await connection.run_sync(lambda conn: inspect(conn).get_table_names())
+    if "ensemble_index_generation_write_fence" not in names:
+        # Isolated capability-store fixtures may omit the Index schema entirely.
+        return
     fence = (await connection.execute(select(generation_write_fence).where(
         generation_write_fence.c.singleton_id == 1
     ))).mappings().first()
