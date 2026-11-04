@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 
 from alembic import command
 from alembic.config import Config
@@ -34,6 +35,30 @@ def test_source_reclamation_queue_is_durable_and_idempotent(tmp_path):
         }
         # A completed reclamation is not re-enqueued by a repeated tombstone.
         assert (await queue.enqueue("source-1"))["state"] == "complete"
+
+        await queue.enqueue("source-2")
+        claimed = await queue.claim_due(10)
+        assert [job["source_id"] for job in claimed] == ["source-2"]
+        await queue.retry("source-2", "transient store failure")
+        assert (await queue.status())["retry"] == 1
+
+        # Make the retry due, then simulate a worker crash after it claims the job.
+        with sqlite3.connect(tmp_path / "reclamation.db") as connection:
+            connection.execute(
+                "UPDATE ensemble_source_reclamation_jobs SET available_at = ? WHERE source_id = ?",
+                ("2000-01-01 00:00:00", "source-2"),
+            )
+        retried = await queue.claim_due(10)
+        assert retried[0]["attempts"] == 2
+        with sqlite3.connect(tmp_path / "reclamation.db") as connection:
+            connection.execute(
+                "UPDATE ensemble_source_reclamation_jobs SET updated_at = ? WHERE source_id = ?",
+                ("2000-01-01 00:00:00", "source-2"),
+            )
+        recovered = await queue.claim_due(10)
+        assert recovered[0]["attempts"] == 3
+        await queue.complete("source-2")
+        assert (await queue.status())["complete"] == 2
         await queue.close()
 
     asyncio.run(exercise())
