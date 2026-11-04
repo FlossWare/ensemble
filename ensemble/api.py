@@ -1290,7 +1290,17 @@ def create_app(
         import math
         if any(not math.isfinite(value) for value in vector):
             raise HTTPException(status_code=400, detail="embedding values must be finite")
-        return {"ok": True, "results": await active_vector_store.query(name, vector, top_k)}
+        requested_generation = payload.get("generation_id")
+        if requested_generation is not None:
+            active_generation = await active_generation_id()
+            if requested_generation != active_generation:
+                raise HTTPException(status_code=409, detail="generation_id is not the active verified generation")
+            results = await active_vector_store.query_generation(
+                requested_generation, name, vector, top_k,
+            )
+        else:
+            results = await active_vector_store.query(name, vector, top_k)
+        return {"ok": True, "results": results}
 
     @app.get("/api/v1/chunking/health", tags=["chunking"])
     async def chunking_health():
@@ -2661,6 +2671,7 @@ def create_app(
                     "embedding": vectors[0],
                     "top_k": min(200, max(search_request.limit, search_request.limit * 4)),
                     "dimensions": embedded.get("dimensions"),
+                    "generation_id": await active_generation_id(),
                 },
             )
             candidates = response.get("results", [])
