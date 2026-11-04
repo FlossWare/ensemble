@@ -304,6 +304,22 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
         assert fail_closed.status_code == 200
         assert all(hit["source_id"] != "generation-source-1" for hit in fail_closed.json()["results"])
 
+        graph_source = client.post("/api/v1/graph/nodes", json={
+            "type": "source", "id": "purge-test-source-node",
+            "properties": {"source_id": "generation-source-1", "revision": 1},
+        })
+        graph_entity = client.post("/api/v1/graph/nodes", json={
+            "type": "entity", "id": "purge-test-shared-entity",
+            "properties": {"entity_type": "concept", "normalized": "shared"},
+        })
+        assert graph_source.status_code == graph_entity.status_code == 200
+        graph_edge = client.post("/api/v1/graph/edges", json={
+            "source": "purge-test-source-node", "target": "purge-test-shared-entity",
+            "type": "mentions", "id": "purge-test-source-edge",
+            "properties": {"source_id": "generation-source-1", "revision": 1},
+        })
+        assert graph_edge.status_code == 200
+
         tombstone = client.post("/api/v1/index/tombstones", json={
             "source_id": "generation-source-1", "revision_sequence": 2,
         })
@@ -335,6 +351,40 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
         source_state = client.get("/api/v1/index/sources/generation-source-1")
         assert source_state.status_code == 200
         assert source_state.json()["source"]["purged"] is True
+        with sqlite3.connect(tmp_path / "generation-api.db") as connection:
+            generation_documents = connection.execute(
+                "SELECT COUNT(*) FROM ensemble_document_generation_records "
+                "WHERE generation_id = ? AND source_id = ?",
+                ("generation-cutover-test", "generation-source-1"),
+            ).fetchone()[0]
+            generation_knowledge = connection.execute(
+                "SELECT COUNT(*) FROM ensemble_knowledge_generation_records "
+                "WHERE generation_id = ? AND source_id = ?",
+                ("generation-cutover-test", "generation-knowledge-source"),
+            ).fetchone()[0]
+            generation_vectors = connection.execute(
+                "SELECT COUNT(*) FROM ensemble_vector_generation_records "
+                "WHERE generation_id = ? AND json_extract(metadata, '$.source_id') = ?",
+                ("generation-cutover-test", "generation-vector-source"),
+            ).fetchone()[0]
+            graph_source_nodes = connection.execute(
+                "SELECT COUNT(*) FROM ensemble_graph_nodes "
+                "WHERE id = ?",
+                ("purge-test-source-node",),
+            ).fetchone()[0]
+            graph_source_edges = connection.execute(
+                "SELECT COUNT(*) FROM ensemble_graph_edges WHERE id = ?",
+                ("purge-test-source-edge",),
+            ).fetchone()[0]
+            shared_entity = connection.execute(
+                "SELECT COUNT(*) FROM ensemble_graph_nodes WHERE id = ?",
+                ("purge-test-shared-entity",),
+            ).fetchone()[0]
+        assert generation_documents == 0
+        assert generation_knowledge == 0
+        assert generation_vectors == 0
+        assert graph_source_nodes == graph_source_edges == 0
+        assert shared_entity == 1
 
         after_delete = client.post("/api/v1/search/retrieve", json={
             "query": "searchable content", "limit": 10, "rerank": False,
