@@ -111,6 +111,9 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
         activated = client.post("/api/v1/index/generations/generation-cutover-test/activate")
         assert activated.status_code == 200
         assert activated.json()["active_generation_id"] == "generation-cutover-test"
+        retried = client.post("/api/v1/index/generations/generation-cutover-test/activate")
+        assert retried.status_code == 200
+        assert retried.json()["already_active"] is True
 
         before = client.post("/api/v1/search/retrieve", json={
             "query": "searchable content", "limit": 10, "rerank": False,
