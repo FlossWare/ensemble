@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, delete, func, or_, select, text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, delete, func, or_, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -29,6 +29,17 @@ records = Table(
     Column("document", Text, nullable=False),
     Column("metadata", JSON, nullable=False),
 )
+index_sources = Table(
+    "ensemble_index_sources",
+    vector_metadata,
+    Column("source_id", String(512), primary_key=True),
+    Column("tombstoned", Boolean, nullable=False),
+)
+index_sources = Table(
+    "ensemble_index_sources", vector_metadata,
+    Column("source_id", String(512), primary_key=True),
+    Column("tombstoned", Boolean, nullable=False),
+)
 generation_records = Table(
     "ensemble_vector_generation_records",
     vector_metadata,
@@ -49,6 +60,9 @@ class VectorStore(Protocol):
     async def upsert(self, name: str, model: str, dimensions: int, items: list[dict[str, Any]]) -> int: ...
     async def update_metadata(self, name: str, items: list[dict[str, Any]]) -> int: ...
     async def delete_superseded(self, name: str, url: str, keep_sha256: str) -> int: ...
+    async def tombstone_source(self, source_id: str) -> int: ...
+    async def restore_source(self, source_id: str) -> int: ...
+    async def reclaim_source(self, source_id: str) -> int: ...
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
     async def upsert_generation(self, generation_id: str, name: str, model: str, dimensions: int, items: list[dict[str, Any]]) -> int: ...
     async def query_generation(self, generation_id: str, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
@@ -244,14 +258,49 @@ class SqliteVectorStore:
                 ))
         return len(stale)
 
+    async def tombstone_source(self, source_id: str) -> int:
+        # Index is authoritative. Query-time filtering below observes its
+        # committed tombstone without rewriting every vector row synchronously.
+        return 0
+
+    async def restore_source(self, source_id: str) -> int:
+        # SQLite vector queries consult the authoritative Index source state.
+        return 0
+
+    async def reclaim_source(self, source_id: str) -> int:
+        async with self.engine.begin() as connection:
+            source_match = records.c.metadata["source_id"].as_string() == source_id
+            url_match = records.c.metadata["url"].as_string() == source_id
+            rows = (await connection.execute(
+                select(records.c.collection_name, records.c.record_id)
+                .where(source_match | url_match)
+                .order_by(records.c.collection_name, records.c.record_id)
+                .limit(501)
+            )).all()
+            more = len(rows) > 500
+            stale = rows[:500]
+            for collection_name, record_id in stale:
+                await connection.execute(delete(records).where(
+                    records.c.collection_name == collection_name,
+                    records.c.record_id == record_id,
+                ))
+        return 501 if more else len(stale)
+
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]:
         async with self.engine.connect() as connection:
             rows = (await connection.execute(
                 select(records.c.record_id, records.c.embedding, records.c.document, records.c.metadata)
                 .where(records.c.collection_name == name)
             )).mappings().all()
+            tombstoned = set((await connection.execute(
+                select(index_sources.c.source_id).where(index_sources.c.tombstoned.is_(True))
+            )).scalars().all())
         scored = []
         for row in rows:
+            metadata = row["metadata"] or {}
+            source_id = metadata.get("source_id") or metadata.get("url")
+            if source_id in tombstoned or metadata.get("_tombstoned"):
+                continue
             score = sum(left * right for left, right in zip(row["embedding"], embedding))
             scored.append({
                 "id": row["record_id"], "document": row["document"],
@@ -316,8 +365,15 @@ class SqliteVectorStore:
                     generation_records.c.collection_name == name,
                 )
             )).mappings().all()
+            tombstoned = set((await connection.execute(
+                select(index_sources.c.source_id).where(index_sources.c.tombstoned.is_(True))
+            )).scalars().all())
         scored = []
         for row in rows:
+            metadata = row["metadata"] or {}
+            source_id = metadata.get("source_id") or metadata.get("url")
+            if source_id in tombstoned or metadata.get("_tombstoned"):
+                continue
             if len(row["embedding"]) != len(embedding):
                 continue
             score = sum(left * right for left, right in zip(row["embedding"], embedding))
