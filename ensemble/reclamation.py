@@ -33,7 +33,7 @@ class ReclamationStore(Protocol):
     async def enqueue(self, source_id: str) -> dict[str, Any]: ...
     async def claim_due(self, limit: int = 100) -> list[dict[str, Any]]: ...
     async def complete(self, source_id: str) -> None: ...
-    async def retry(self, source_id: str, error: str) -> None: ...
+    async def retry(self, source_id: str, error: str, delay_seconds: int | None = None) -> None: ...
     async def status(self) -> dict[str, int]: ...
 
 
@@ -120,7 +120,9 @@ class SqliteReclamationStore:
                 ).values(state="complete", completed_at=now, updated_at=now, last_error=None)
             )
 
-    async def retry(self, source_id: str, error: str) -> None:
+    async def retry(self, source_id: str, error: str, delay_seconds: int | None = None) -> None:
+        if delay_seconds is not None and (isinstance(delay_seconds, bool) or not isinstance(delay_seconds, int) or not 0 <= delay_seconds <= 3600):
+            raise ValueError("delay_seconds must be between 0 and 3600")
         now = datetime.now(timezone.utc)
         async with self.engine.begin() as connection:
             row = (await connection.execute(
@@ -129,7 +131,7 @@ class SqliteReclamationStore:
                 )
             )).first()
             attempts = int(row.attempts) if row else 1
-            delay = min(3600, 2 ** min(attempts, 10))
+            delay = delay_seconds if delay_seconds is not None else min(3600, 2 ** min(attempts, 10))
             await connection.execute(
                 update(reclamation_jobs).where(
                     reclamation_jobs.c.source_id == source_id,
@@ -193,10 +195,13 @@ class InMemoryReclamationStore:
         job.update(state="complete", completed_at=datetime.now(timezone.utc),
                    updated_at=datetime.now(timezone.utc), last_error=None)
 
-    async def retry(self, source_id: str, error: str) -> None:
+    async def retry(self, source_id: str, error: str, delay_seconds: int | None = None) -> None:
+        if delay_seconds is not None and (isinstance(delay_seconds, bool) or not isinstance(delay_seconds, int) or not 0 <= delay_seconds <= 3600):
+            raise ValueError("delay_seconds must be between 0 and 3600")
         job = self._jobs[source_id]
         now = datetime.now(timezone.utc)
-        job.update(state="retry", available_at=now + timedelta(seconds=min(3600, 2 ** min(job["attempts"], 10))),
+        delay = delay_seconds if delay_seconds is not None else min(3600, 2 ** min(job["attempts"], 10))
+        job.update(state="retry", available_at=now + timedelta(seconds=delay),
                    updated_at=now, last_error=error[:4000])
 
     async def status(self) -> dict[str, int]:

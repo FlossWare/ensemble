@@ -208,9 +208,12 @@ class InMemoryVectorStore:
                 if item.get("metadata", {}).get("source_id") == source_id
                 or item.get("metadata", {}).get("url") == source_id
             ]
-            for record_id in stale:
+            selected = stale[:500]
+            for record_id in selected:
                 del generation[record_id]
-            removed += len(stale)
+            removed += len(selected)
+            if len(stale) > 500:
+                return 501
         return removed
 
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:

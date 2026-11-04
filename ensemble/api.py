@@ -248,7 +248,7 @@ def create_app(
                         for item in generation_status.get("generations", [])
                     ):
                         await active_reclamation_store.retry(
-                            source_id, "generation build in progress; reclamation deferred",
+                            source_id, "generation build in progress; reclamation deferred", delay_seconds=15,
                         )
                         continue
                     await active_index_store.assert_generation_writes_open()

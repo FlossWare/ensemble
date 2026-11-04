@@ -10,9 +10,10 @@ from ensemble.index_store import SqliteIndexStore
 from ensemble.knowledge_store import SqliteKnowledgeStore
 from ensemble.memory_store import InMemoryMemoryStore
 from ensemble.models import Chunk, Document
-from ensemble.reclamation import SqliteReclamationStore
+from ensemble.reclamation import InMemoryReclamationStore, SqliteReclamationStore
 from ensemble.store import SqlDocumentStore, generation_documents
 from ensemble.vector_store import SqliteVectorStore
+from ensemble.vector_memory import InMemoryVectorStore
 
 
 def test_source_reclamation_queue_is_durable_and_idempotent(tmp_path):
@@ -218,5 +219,38 @@ def test_generation_source_reclamation_is_bounded_and_retryable(tmp_path):
         await vectors.close()
         await documents.close()
         await index.close()
+
+    asyncio.run(exercise())
+
+
+def test_inmemory_generation_vector_reclamation_is_bounded():
+    store = InMemoryVectorStore()
+
+    async def exercise():
+        items = [{
+            "id": f"record-{index:04d}",
+            "embedding": [1.0, 0.0],
+            "document": "source",
+            "metadata": {"source_id": "large-source"},
+        } for index in range(501)]
+        await store.upsert_generation("generation", "vectors", "test-model", 2, items)
+        assert await store.delete_generation_source("generation", "large-source") == 501
+        assert await store.delete_generation_source("generation", "large-source") == 1
+        assert await store.delete_generation_source("generation", "large-source") == 0
+
+    asyncio.run(exercise())
+
+
+def test_reclamation_can_use_short_deferral_for_generation_builds():
+    queue = InMemoryReclamationStore()
+
+    async def exercise():
+        await queue.enqueue("deferred-source")
+        assert len(await queue.claim_due()) == 1
+        await queue.retry("deferred-source", "generation build in progress", delay_seconds=15)
+        assert (await queue.status())["retry"] == 1
+        job = queue._jobs["deferred-source"]
+        remaining = (job["available_at"] - job["updated_at"]).total_seconds()
+        assert remaining == 15
 
     asyncio.run(exercise())
