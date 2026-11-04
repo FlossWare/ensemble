@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from sqlalchemy import Column, DateTime, Integer, JSON, MetaData, String, Table, Text, select, update
+from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, MetaData, String, Table, Text, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.engine import make_url
 
@@ -22,6 +22,8 @@ crawl_jobs = Table(
     Column("attempts", Integer, nullable=False),
     Column("result", JSON, nullable=True),
     Column("ingestion", JSON, nullable=True),
+    Column("auto_ingest", Boolean, nullable=False, default=False),
+    Column("schedule_id", String(32), nullable=True),
     Column("last_error", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
@@ -34,7 +36,9 @@ def _record(row: Any) -> dict[str, Any]:
         "job_id": row["job_id"], "uri": row["uri"],
         "max_pages": row["max_pages"], "max_depth": row["max_depth"],
         "status": row["status"], "attempts": row["attempts"],
-        "result": row["result"], "ingestion": row["ingestion"], "last_error": row["last_error"],
+        "result": row["result"], "ingestion": row["ingestion"],
+        "auto_ingest": row["auto_ingest"], "schedule_id": row["schedule_id"],
+        "last_error": row["last_error"],
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
         "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
@@ -45,7 +49,7 @@ class CrawlJobStore(Protocol):
     async def initialize(self) -> None: ...
     async def check_ready(self) -> None: ...
     async def close(self) -> None: ...
-    async def enqueue(self, uri: str, max_pages: int, max_depth: int) -> dict[str, Any]: ...
+    async def enqueue(self, uri: str, max_pages: int, max_depth: int, *, auto_ingest: bool = False, schedule_id: str | None = None) -> dict[str, Any]: ...
     async def claim_next(self) -> dict[str, Any] | None: ...
     async def complete(self, job_id: str, result: dict[str, Any]) -> dict[str, Any]: ...
     async def update_ingestion(self, job_id: str, ingestion: dict[str, Any]) -> dict[str, Any]: ...
@@ -78,13 +82,14 @@ class SqliteCrawlJobStore:
     async def close(self) -> None:
         await self.engine.dispose()
 
-    async def enqueue(self, uri: str, max_pages: int, max_depth: int) -> dict[str, Any]:
+    async def enqueue(self, uri: str, max_pages: int, max_depth: int, *, auto_ingest: bool = False, schedule_id: str | None = None) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         job_id = uuid.uuid4().hex
         async with self.engine.begin() as connection:
             await connection.execute(crawl_jobs.insert().values(
                 job_id=job_id, uri=uri, max_pages=max_pages, max_depth=max_depth,
-                status="pending", attempts=0, result=None, ingestion=None, last_error=None,
+                status="pending", attempts=0, result=None, ingestion=None,
+                auto_ingest=auto_ingest, schedule_id=schedule_id, last_error=None,
                 created_at=now, updated_at=now, completed_at=None,
             ))
         return await self.get(job_id)
@@ -192,7 +197,8 @@ class InMemoryCrawlJobStore:
         job_id = uuid.uuid4().hex
         self._jobs[job_id] = {
             "job_id": job_id, "uri": uri, "max_pages": max_pages, "max_depth": max_depth,
-            "status": "pending", "attempts": 0, "result": None, "ingestion": None, "last_error": None,
+            "status": "pending", "attempts": 0, "result": None, "ingestion": None,
+            "auto_ingest": auto_ingest, "schedule_id": schedule_id, "last_error": None,
             "created_at": now, "updated_at": now, "completed_at": None,
         }
         return dict(self._jobs[job_id])

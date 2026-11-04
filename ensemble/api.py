@@ -49,10 +49,11 @@ from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryRecla
 from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
 from .partitioning import (
-    RequestScope, partition_scope_middleware, reset_request_scope, set_request_scope,
+    RequestScope, current_request_scope, partition_scope_middleware, reset_request_scope, set_request_scope,
 )
 from .crawl_store import CrawlJobStore, SqliteCrawlJobStore, InMemoryCrawlJobStore
 from .context_tokens import ContextTokenCounter, ApproximateContextTokenCounter, configured_context_token_counter
+from .source_schedule_store import SourceScheduleStore, SqliteSourceScheduleStore, InMemorySourceScheduleStore
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -227,6 +228,7 @@ def create_app(
     learning_store: LearningStore | None = None,
     transcript_store: TranscriptCheckpointStore | None = None,
     crawl_store: CrawlJobStore | None = None,
+    source_schedule_store: SourceScheduleStore | None = None,
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
     context_token_counter = configured_context_token_counter()
@@ -281,6 +283,11 @@ def create_app(
     active_crawl_store = crawl_store or (
         InMemoryCrawlJobStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteCrawlJobStore(database_url)
+    )
+
+    active_source_schedule_store = source_schedule_store or (
+        InMemorySourceScheduleStore(active_crawl_store) if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteSourceScheduleStore(database_url)
     )
 
     # Serialize permanent source reclamation against creation of a new generation.
@@ -359,6 +366,23 @@ def create_app(
                 await asyncio.sleep(15)
 
 
+    def _internal_worker_scope(partition_id: str) -> RequestScope:
+        raw = os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip()
+        if not raw:
+            return RequestScope(partition_id=partition_id)
+        token = os.getenv("ENSEMBLE_INTERNAL_BEARER_TOKEN", "").strip()
+        if not token:
+            raise RuntimeError("scheduled ingestion requires ENSEMBLE_INTERNAL_BEARER_TOKEN")
+        token_map = json.loads(raw)
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        principal = token_map.get(digest)
+        if not isinstance(principal, dict) or partition_id not in principal.get("partitions", []):
+            raise RuntimeError("internal worker token is not authorized for this partition")
+        return RequestScope(
+            principal_id=principal["subject"], partition_id=partition_id,
+            authorization=f"Bearer {token}",
+        )
+
     async def crawl_worker() -> None:
         while True:
             processed = False
@@ -384,10 +408,42 @@ def create_app(
                                 job["uri"], max_pages=job["max_pages"], max_depth=job["max_depth"],
                             )
                             await active_crawl_store.complete(job["job_id"], result)
+                            if job.get("auto_ingest"):
+                                worker_scope = _internal_worker_scope(partition_id)
+                                worker_token = set_request_scope(worker_scope)
+                                try:
+                                    await ingest_crawl_job(job["job_id"], None)
+                                finally:
+                                    reset_request_scope(worker_token)
                         except Exception as exc:
                             await active_crawl_store.fail(
                                 job["job_id"], f"{type(exc).__name__}: {str(exc)}",
                             )
+                    finally:
+                        reset_request_scope(scope_token)
+                await asyncio.sleep(0.5 if processed else 1)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await asyncio.sleep(5)
+
+    async def source_schedule_worker() -> None:
+        while True:
+            processed = False
+            try:
+                raw = os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip()
+                if raw:
+                    token_map = json.loads(raw)
+                    partitions = ["default", *sorted({
+                        partition for principal in token_map.values()
+                        for partition in principal.get("partitions", [])
+                    })]
+                else:
+                    partitions = ["default"]
+                for partition_id in partitions:
+                    scope_token = set_request_scope(RequestScope(partition_id=partition_id))
+                    try:
+                        processed = bool(await active_source_schedule_store.dispatch_due(10)) or processed
                     finally:
                         reset_request_scope(scope_token)
                 await asyncio.sleep(0.5 if processed else 1)
@@ -417,18 +473,22 @@ def create_app(
             await active_reclamation_store.initialize()
             await active_crawl_store.initialize()
             await active_crawl_store.recover_interrupted()
+            await active_source_schedule_store.initialize()
             worker_task = asyncio.create_task(reclamation_worker())
             crawl_worker_task = asyncio.create_task(crawl_worker())
+            schedule_worker_task = asyncio.create_task(source_schedule_worker())
             try:
                 yield
             finally:
                 worker_task.cancel()
                 crawl_worker_task.cancel()
-                for task in (worker_task, crawl_worker_task):
+                schedule_worker_task.cancel()
+                for task in (worker_task, crawl_worker_task, schedule_worker_task):
                     try:
                         await task
                     except asyncio.CancelledError:
                         pass
+                await active_source_schedule_store.close()
                 await active_crawl_store.close()
                 await active_reclamation_store.close()
                 await active_transcript_store.close()
@@ -869,6 +929,7 @@ def create_app(
     app.state.learning_store = active_learning_store
     app.state.transcript_store = active_transcript_store
     app.state.crawl_store = active_crawl_store
+    app.state.source_schedule_store = active_source_schedule_store
     app.state.settings = settings_from_env(database_url)
 
     @app.exception_handler(HTTPException)
@@ -903,13 +964,14 @@ def create_app(
             await document_store.check_ready()
             await active_memory_store.check_ready()
             await active_crawl_store.check_ready()
+            await active_source_schedule_store.check_ready()
         except Exception as exc:
             raise HTTPException(status_code=503, detail="persistence unavailable") from exc
         return {
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning", "crawl_jobs"],
+            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning", "crawl_jobs", "source_schedules"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
@@ -2797,6 +2859,60 @@ def create_app(
             raise HTTPException(status_code=404, detail="crawl job not found")
         return {"ok": True, "job": job}
 
+
+    @app.post("/api/v1/ingest/urls/schedules", status_code=201, tags=["ingestion"])
+    async def create_source_schedule(payload: dict[str, Any], request: Request):
+        try:
+            uri = _validate_public_uri(payload.get("uri"))
+            interval_seconds = payload.get("interval_seconds", 86400)
+            max_pages = payload.get("max_pages", 10)
+            max_depth = payload.get("max_depth", 1)
+            run_immediately = payload.get("run_immediately", True)
+            if not isinstance(run_immediately, bool):
+                raise ValueError("run_immediately must be a boolean")
+            _internal_worker_scope(current_request_scope().partition_id)
+            schedule = await active_source_schedule_store.create(
+                uri, interval_seconds, max_pages, max_depth, run_immediately,
+            )
+            return {"ok": True, "schedule": schedule}
+        except ScrapeError as exc:
+            raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/ingest/urls/schedules", tags=["ingestion"])
+    async def list_source_schedules(limit: int = 50):
+        try:
+            return {"ok": True, "schedules": await active_source_schedule_store.list(limit)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/ingest/urls/schedules/{schedule_id}/pause", tags=["ingestion"])
+    async def pause_source_schedule(schedule_id: str):
+        try:
+            return {"ok": True, "schedule": await active_source_schedule_store.set_enabled(schedule_id, False)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="source schedule not found") from exc
+
+    @app.post("/api/v1/ingest/urls/schedules/{schedule_id}/resume", tags=["ingestion"])
+    async def resume_source_schedule(schedule_id: str):
+        try:
+            _internal_worker_scope(current_request_scope().partition_id)
+            return {"ok": True, "schedule": await active_source_schedule_store.set_enabled(schedule_id, True)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="source schedule not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.delete("/api/v1/ingest/urls/schedules/{schedule_id}", tags=["ingestion"])
+    async def delete_source_schedule(schedule_id: str):
+        deleted = await active_source_schedule_store.delete(schedule_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="source schedule not found")
+        return {"ok": True, "deleted": True}
+
     @app.post("/api/v1/ingest/urls/crawl-jobs/{job_id}/retry", tags=["ingestion"])
     async def retry_crawl_job(job_id: str):
         try:
@@ -2808,7 +2924,7 @@ def create_app(
 
 
     @app.post("/api/v1/ingest/urls/crawl-jobs/{job_id}/ingest", tags=["ingestion"])
-    async def ingest_crawl_job(job_id: str, request: Request):
+    async def ingest_crawl_job(job_id: str, request: Request = None):
         job = await active_crawl_store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="crawl job not found")
