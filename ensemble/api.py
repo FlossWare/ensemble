@@ -33,7 +33,7 @@ from .tokenization import PROFILES as TOKENIZATION_PROFILES, TokenizationError, 
 from .extraction import extract, normalize_entity
 from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
-from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingDecorator, RerankingUnavailable, configured_ranking_provider, configured_reranker, validate_rerank_request
+from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_ranking_provider, configured_reranker, validate_rerank_request
 from .scraping import ScrapeError, preview_uri
 from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
 from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpointStore, InMemoryTranscriptCheckpointStore
@@ -277,7 +277,6 @@ def create_app(
     documents = DocumentService(document_store, Chunker(), embeddings, active_vector_store)
     search = SearchService(document_store, embeddings, active_reranker, active_vector_store)
     ranking_provider = configured_ranking_provider(active_reranker)
-    ranking_decorator = RerankingDecorator(ranking_provider)
 
     async def index_document_entities(
         source_id: str, revision: int, content: str, *,
