@@ -15,11 +15,13 @@ class IndexGenerationBuilder:
     def __init__(
         self, index_store: Any, document_store: Any | None = None,
         vector_store: Any | None = None, knowledge_store: Any | None = None,
+        memory_store: Any | None = None,
     ):
         self.index_store = index_store
         self.document_store = document_store
         self.vector_store = vector_store
         self.knowledge_store = knowledge_store
+        self.memory_store = memory_store
 
     async def copy_index_sources(
         self, generation_id: str, *, page_size: int = 500,
@@ -385,6 +387,86 @@ class IndexGenerationBuilder:
             "high_watermark": high_watermark,
         }
 
+    async def copy_memory_page(
+        self, generation_id: str, *, page_size: int = 500,
+    ) -> dict[str, Any]:
+        if self.memory_store is None:
+            raise RuntimeError("Memory store is required for the Memory generation pass")
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
+            raise ValueError("page_size must be between 1 and 10000")
+        status = await self.index_store.generation_status()
+        generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        checkpoints = generation.get("checkpoints") or {}
+        previous = checkpoints.get("memory") or {}
+        if previous.get("sealed") is True:
+            value = previous.get("value") or {}
+            return {"generation_id": generation_id, "status": "complete",
+                    "page_count": 0, "record_count": value.get("record_count", 0),
+                    "cursor": value.get("cursor"), "upper_bound": value.get("upper_bound")}
+        value = previous.get("value") or {}
+        upper_bound = value.get("upper_bound") if value else await self.memory_store.memory_generation_upper_bound()
+        cursor = value.get("cursor") if value else None
+        record_count = int(value.get("record_count", 0))
+        names = await self.memory_store.list_memory_names_after(cursor, upper_bound, page_size)
+        for name in names:
+            snapshot = await self.memory_store.get_memory_snapshot(name)
+            if snapshot is not None:
+                await self.memory_store.put_memory_generation_snapshot(generation_id, name, snapshot)
+                record_count += 1
+        next_cursor = names[-1] if names else cursor
+        complete = upper_bound is None or next_cursor == upper_bound or len(names) < page_size
+        checkpoint = {"cursor": next_cursor, "upper_bound": upper_bound, "record_count": record_count}
+        await self.index_store.record_generation_checkpoint(generation_id, "memory", checkpoint, sealed=complete)
+        return {"generation_id": generation_id, "status": "complete" if complete else "in_progress",
+                "page_count": len(names), "record_count": record_count,
+                "cursor": next_cursor, "upper_bound": upper_bound}
+
+    async def reconcile_memory_changes_page(
+        self, generation_id: str, *, page_size: int = 250,
+    ) -> dict[str, Any]:
+        if self.memory_store is None:
+            raise RuntimeError("Memory store is required for Memory reconciliation")
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
+            raise ValueError("page_size must be between 1 and 10000")
+        status = await self.index_store.generation_status()
+        generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        checkpoints = generation.get("checkpoints") or {}
+        if (checkpoints.get("memory") or {}).get("sealed") is not True:
+            raise RuntimeError("Memory source copy must be sealed before reconciliation")
+        previous = checkpoints.get("memory_reconciliation") or {}
+        if previous.get("sealed") is True:
+            value = previous.get("value") or {}
+            return {"generation_id": generation_id, "status": "complete",
+                    "page_count": 0, "change_count": value.get("change_count", 0),
+                    "cursor": value.get("cursor", 0)}
+        value = previous.get("value") or {}
+        cursor = int(value.get("cursor", 0))
+        change_count = int(value.get("change_count", 0))
+        page = await self.memory_store.list_memory_generation_changes_after(generation_id, cursor, page_size)
+        for change in page:
+            await self.memory_store.put_memory_generation_snapshot(
+                generation_id, change["name"], change["snapshot"],
+            )
+        next_cursor = page[-1]["change_id"] if page else cursor
+        if page:
+            await self.memory_store.acknowledge_memory_generation_changes(generation_id, next_cursor)
+        change_count += len(page)
+        high_watermark = await self.memory_store.memory_generation_change_high_watermark(generation_id)
+        caught_up = next_cursor == high_watermark and len(page) < page_size
+        checkpoint = {"cursor": next_cursor, "change_count": change_count,
+                      "observed_high_watermark": high_watermark}
+        await self.index_store.record_generation_checkpoint(
+            generation_id, "memory_reconciliation", checkpoint, sealed=False,
+        )
+        return {"generation_id": generation_id,
+                "status": "caught_up" if caught_up else "in_progress",
+                "page_count": len(page), "change_count": change_count,
+                "cursor": next_cursor, "high_watermark": high_watermark}
+
     async def fence_reconciled_generation(self, generation_id: str) -> dict[str, Any]:
         status = await self.index_store.generation_status()
         generation = next(
@@ -403,22 +485,27 @@ class IndexGenerationBuilder:
             if (checkpoints.get(capability) or {}).get("sealed") is not True:
                 raise RuntimeError(f"{capability} source copy must be sealed before final write fencing")
         high_watermark = await self.index_store.generation_change_high_watermark(generation_id)
+        memory_high_watermark = await self.memory_store.memory_generation_change_high_watermark(generation_id)
         reconciliation_values = {}
         for capability in reconciliation_capabilities:
             checkpoint = checkpoints.get(capability) or {}
             value = checkpoint.get("value") or {}
             cursor = int(value.get("cursor", 0))
-            if cursor != high_watermark:
-                raise RuntimeError(f"{capability} is not caught up to the generation change journal")
-            reconciliation_values[capability] = value
+            expected = memory_high_watermark if capability == "memory_reconciliation" else high_watermark
+            if cursor != expected:
+                raise RuntimeError(f"{capability} is not caught up to its generation change journal")
+            reconciliation_values[capability] = (value, expected)
+        pending_memory = await self.memory_store.pending_memory_generation_changes(generation_id)
+        if pending_memory:
+            raise RuntimeError("unacknowledged Memory changes remain; reconcile before fencing")
         fence = await self.index_store.acquire_generation_write_fence(
             generation_id, through_change_id=high_watermark,
         )
         try:
-            for capability, value in reconciliation_values.items():
+            for capability, (value, expected) in reconciliation_values.items():
                 await self.index_store.record_generation_checkpoint(
                     generation_id, capability,
-                    {**value, "cursor": high_watermark, "observed_high_watermark": high_watermark},
+                    {**value, "cursor": expected, "observed_high_watermark": expected},
                     sealed=True,
                 )
         except Exception:
