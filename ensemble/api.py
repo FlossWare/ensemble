@@ -1375,6 +1375,9 @@ def create_app(
         source_id = payload.get("source_id")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        source = await active_index_store.get_source(source_id)
+        if source is None or source.get("tombstoned") is not True:
+            raise HTTPException(status_code=409, detail="source must be tombstoned through the Index lifecycle first")
         try:
             await active_index_store.assert_generation_writes_open()
         except RuntimeError as exc:
