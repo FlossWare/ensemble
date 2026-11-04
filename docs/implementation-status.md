@@ -146,3 +146,17 @@ Still outstanding:
 - Propagation of authoritative source state and tombstones into the building generation.
 - Writer fences and acknowledged-write reconciliation.
 - Restart recovery and atomic cutover across all retrieval stores.
+
+
+## Index source keyset enumeration
+
+Implemented:
+- Ordered source-key upper-bound lookup.
+- Bounded keyset pagination for SQLite and in-memory Index stores.
+- Stable cursor progression without offset-based page drift.
+- Tests cover page boundaries, final-page behavior, empty continuation, and exclusion of keys beyond the captured upper bound.
+
+Consistency boundary:
+- The upper key bounds the key range; it does not provide a transactionally consistent snapshot.
+- Updates to existing source rows and new keys inserted below the bound must be reconciled before cutover.
+- Write fences and acknowledged-write reconciliation remain required.

@@ -1385,3 +1385,49 @@ def test_in_memory_shadow_generation_tombstones_are_idempotent():
         assert await vectors.query_generation("shadow", "knowledge", [1.0, 0.0], 5) == []
 
     asyncio.run(exercise())
+
+
+def test_index_source_keyset_pagination_is_ordered_and_bounded(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'source-pages.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    store = SqliteIndexStore(database_url)
+
+    async def exercise():
+        await store.initialize()
+        for source_id in ("source-a", "source-b", "source-c", "source-d", "source-e"):
+            await store.record_revision(source_id, 1, "r1", {"chunking": "window-v1"})
+        upper_bound = await store.source_key_upper_bound()
+        assert upper_bound == "source-e"
+
+        first = await store.list_sources_after(None, upper_bound, 2)
+        second = await store.list_sources_after(first[-1]["source_id"], upper_bound, 2)
+        third = await store.list_sources_after(second[-1]["source_id"], upper_bound, 2)
+        assert [item["source_id"] for item in first] == ["source-a", "source-b"]
+        assert [item["source_id"] for item in second] == ["source-c", "source-d"]
+        assert [item["source_id"] for item in third] == ["source-e"]
+        assert await store.list_sources_after("source-e", upper_bound, 2) == []
+
+        await store.record_revision("source-z", 1, "r1", {"chunking": "window-v1"})
+        assert await store.list_sources_after("source-e", upper_bound, 10) == []
+        await store.close()
+
+    asyncio.run(exercise())
+
+
+def test_in_memory_index_source_keyset_pagination():
+    store = InMemoryIndexStore()
+
+    async def exercise():
+        for source_id in ("source-a", "source-b", "source-c", "source-d"):
+            await store.record_revision(source_id, 1, "r1", {})
+        upper_bound = await store.source_key_upper_bound()
+        first = await store.list_sources_after(None, upper_bound, 2)
+        second = await store.list_sources_after(first[-1]["source_id"], upper_bound, 2)
+        assert [item["source_id"] for item in first + second] == [
+            "source-a", "source-b", "source-c", "source-d",
+        ]
+        assert await store.list_sources_after("source-d", upper_bound, 2) == []
+
+    asyncio.run(exercise())

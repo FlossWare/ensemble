@@ -74,6 +74,22 @@ class InMemoryIndexStore:
     async def list_sources(self, limit: int) -> list[dict[str, Any]]:
         return [dict(self._sources[key]) for key in sorted(self._sources)[:limit]]
 
+    async def source_key_upper_bound(self) -> str | None:
+        return max(self._sources) if self._sources else None
+
+    async def list_sources_after(
+        self, cursor: str | None, upper_bound: str | None, limit: int,
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        if upper_bound is None:
+            return []
+        keys = [
+            key for key in sorted(self._sources)
+            if key <= upper_bound and (cursor is None or key > cursor)
+        ][:limit]
+        return [dict(self._sources[key]) for key in keys]
+
 
     async def generation_status(self) -> dict[str, Any]:
         return {
