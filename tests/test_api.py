@@ -801,9 +801,55 @@ def test_hybrid_raw_jsonl_transcript_ingestion_returns_byte_checkpoint_and_is_id
         assert body["bytes_consumed"] == len(complete.encode("utf-8"))
         assert body["next_offset"] == 4096 + len(complete.encode("utf-8"))
         assert body["incomplete_tail"] is True
+        assert body["job"]["status"] == "completed"
+        assert body["job_id"] == body["job"]["job_id"]
+        job_response = client.get(f"/api/v1/ingest/transcripts/jobs/{body['job_id']}")
+        assert job_response.status_code == 200
+        assert job_response.json()["job"]["status"] == "completed"
+        listed_jobs = client.get("/api/v1/ingest/transcripts/jobs")
+        assert listed_jobs.status_code == 200
+        assert listed_jobs.json()["jobs"][0]["job_id"] == body["job_id"]
 
         retry = client.post("/api/v1/ingest/transcripts", json=payload)
         assert retry.status_code == 200
+        assert retry.json()["inserted"] == 0
+        assert retry.json()["already_present"] == 1
+        assert retry.json()["replayed"] is True
+        assert retry.json()["job"]["status"] == "completed"
+
+
+def test_raw_jsonl_transcript_job_survives_sqlite_restart(tmp_path):
+    complete = json.dumps({
+        "sessionId": "restartable-jsonl-session",
+        "timestamp": "2026-11-02T11:00:00Z",
+        "uuid": "restartable-message-1",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Persist this transcript job across a service restart."}],
+        },
+    }) + "\n"
+    payload = {
+        "session_id": "restartable-jsonl-session",
+        "project": "restartable-project",
+        "file": "restartable/session.jsonl",
+        "revision_id": "source-revision-1",
+        "offset": 0,
+        "content": complete,
+    }
+
+    with _client(tmp_path) as client:
+        response = client.post("/api/v1/ingest/transcripts", json=payload)
+        assert response.status_code == 200
+        job_id = response.json()["job_id"]
+        assert response.json()["job"]["status"] == "completed"
+
+    with _client(tmp_path) as client:
+        persisted = client.get(f"/api/v1/ingest/transcripts/jobs/{job_id}")
+        assert persisted.status_code == 200
+        assert persisted.json()["job"]["status"] == "completed"
+        retry = client.post("/api/v1/ingest/transcripts", json=payload)
+        assert retry.status_code == 200
+        assert retry.json()["replayed"] is True
         assert retry.json()["inserted"] == 0
         assert retry.json()["already_present"] == 1
 
