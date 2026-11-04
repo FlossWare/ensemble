@@ -376,6 +376,21 @@ class SearchService:
                 is_subagent=item.document.metadata.get("is_subagent"),
                 text_sha=hashlib.sha256(item.chunk.content.encode("utf-8")).hexdigest(),
             ))
+        if active_generation_id is not None and hits:
+            source_states = await self.index_store.get_sources(
+                sorted({hit.source_id for hit in hits}),
+            )
+            current_hits = []
+            for hit in hits:
+                source_state = source_states.get(hit.source_id)
+                if source_state is None:
+                    continue
+                if source_state.get("tombstoned") is True or source_state.get("purged") is True:
+                    continue
+                if source_state.get("high_sequence") != hit.revision:
+                    continue
+                current_hits.append(hit)
+            hits = current_hits
         results = sorted(
             hits, key=lambda hit: (hit.fusion_score, hit.lexical_score, str(hit.chunk_id)),
             reverse=True,
