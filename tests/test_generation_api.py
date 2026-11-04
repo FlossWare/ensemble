@@ -572,14 +572,17 @@ def test_failed_activation_rolls_back_pointer_state_and_fence(tmp_path):
                 )
             await store.acquire_generation_write_fence(generation_id, 0)
 
+        initial = await store.generation_status()
         await prepare("generation-original")
         await store.activate_generation(
-            "generation-original", None, 0, verification,
+            "generation-original", initial["active_generation_id"],
+            initial["epoch"], verification,
         )
         await prepare("generation-target")
         try:
             await store.activate_generation(
-                "generation-target", "generation-original", 1, verification,
+                "generation-target", "generation-original",
+                initial["epoch"] + 1, verification,
             )
         except Exception:
             pass
