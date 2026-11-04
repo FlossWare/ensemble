@@ -750,8 +750,10 @@ def test_knowledge_generation_mirror_failure_keeps_index_change_retryable(tmp_pa
                 "knowledge-generation-retry", 0, 20,
             )
         )
-        change = next(item for item in changes if item["source_id"] == payload["source_id"])
-        assert change["acknowledged"] is True
+        # Active-generation journal entries are removed once every materialized
+        # store has acknowledged the mutation. A successful retry therefore
+        # proves completion by removing the previously pending entry.
+        assert not any(item["source_id"] == payload["source_id"] for item in changes)
         generation_record = asyncio.run(
             app.state.knowledge_store.get_generation(
                 "knowledge-generation-retry", payload["source_id"],
