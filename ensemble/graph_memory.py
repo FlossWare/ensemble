@@ -39,6 +39,26 @@ class InMemoryGraphStore:
         self.edges[identifier] = record
         return dict(record)
 
+    async def reclaim_source(self, source_id):
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        source_node_ids = {
+            identifier for identifier, node in self.nodes.items()
+            if node["type"] == "source"
+            and node["properties"].get("source_id") == source_id
+        }
+        edge_ids = [
+            identifier for identifier, edge in self.edges.items()
+            if edge["source"] in source_node_ids
+            or edge["target"] in source_node_ids
+            or edge["properties"].get("source_id") == source_id
+        ]
+        for identifier in edge_ids:
+            del self.edges[identifier]
+        for identifier in source_node_ids:
+            del self.nodes[identifier]
+        return len(edge_ids) + len(source_node_ids)
+
     async def get_node(self, node_id):
         record = self.nodes.get(node_id)
         return dict(record) if record else None
