@@ -1,10 +1,14 @@
+import asyncio
 import sqlite3
+
+import pytest
 
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 
 from ensemble.api import create_app
+from ensemble.index_store import SqliteIndexStore
 
 
 def _client(tmp_path):
@@ -318,3 +322,42 @@ def test_base_retrieval_fails_closed_when_index_tombstone_precedes_cleanup(tmp_p
         })
         assert after.status_code == 200
         assert all(hit["source_id"] != "base-freshness-source" for hit in after.json()["results"])
+
+
+
+def test_generation_fence_recovery_fails_closed_for_unexpected_generation_state(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-api.db'}"
+    with _client(tmp_path):
+        pass
+
+    async def prepare_fence():
+        store = SqliteIndexStore(database_url)
+        await store.initialize()
+        await store.create_generation("recovery-candidate")
+        await store.acquire_generation_write_fence("recovery-candidate", 0)
+        await store.close()
+
+    asyncio.run(prepare_fence())
+    with sqlite3.connect(tmp_path / "generation-api.db") as connection:
+        connection.execute(
+            "UPDATE ensemble_index_generations SET state = 'retired' "
+            "WHERE generation_id = ?",
+            ("recovery-candidate",),
+        )
+
+    async def recover():
+        store = SqliteIndexStore(database_url)
+        await store.initialize()
+        try:
+            with pytest.raises(RuntimeError, match="refusing unsafe recovery"):
+                await store.recover_generation_write_fence()
+        finally:
+            await store.close()
+
+    asyncio.run(recover())
+    with sqlite3.connect(tmp_path / "generation-api.db") as connection:
+        fence = connection.execute(
+            "SELECT generation_id FROM ensemble_index_generation_write_fence "
+            "WHERE singleton_id = 1"
+        ).fetchone()
+    assert fence == ("recovery-candidate",)

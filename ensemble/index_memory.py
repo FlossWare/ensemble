@@ -298,9 +298,16 @@ class InMemoryIndexStore:
         if generation_id is None:
             return {"recovered": False, "reason": "no_fence"}
         generation = self._generations.get(generation_id)
-        if generation and generation["state"] == "active":
-            raise RuntimeError("active generation unexpectedly retains a write fence")
-        if generation and generation["state"] == "building":
+        if generation is None:
+            raise RuntimeError(
+                "write fence references a missing generation; refusing unsafe recovery"
+            )
+        if generation["state"] != "building":
+            raise RuntimeError(
+                f"write fence references generation in {generation['state']} state; "
+                "refusing unsafe recovery"
+            )
+        if generation["state"] == "building":
             checkpoints = generation.get("checkpoints") or {}
             for capability in (
                 "index_reconciliation", "documents_reconciliation",
