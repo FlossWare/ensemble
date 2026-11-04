@@ -43,16 +43,16 @@ Implemented:
 - Vector similarity over stored chunk embeddings when embeddings are enabled.
 - Document and chunk provenance in search responses.
 - Tests for API behavior, migration setup, restart durability, and revision replacement.
-- Python 3.12 GitHub Actions workflow validates installer shell syntax, Control Center JavaScript syntax, and the full Python test suite. The latest verified review-branch run passed 153 tests with 1 skipped.
+- Python 3.12 GitHub Actions workflow validates installer shell syntax, Control Center JavaScript syntax, and the full Python test suite. The latest verified review-branch run passed 154 tests with 1 skipped.
 
-Implemented on the review branch (latest verified CI: 153 passed, 1 skipped):
+Implemented on the review branch (latest verified CI: 154 passed, 1 skipped):
 - POC-compatible lexical-v1 tokenization capability and REST endpoints.
 - POC-compatible identifier extraction capability and REST endpoints.
 - POC-compatible rule-based intent classification capability and REST endpoints.
 - POC-compatible explainable reciprocal-rank fusion capability and REST endpoints.
 - POC vector collection REST operations and durable SQLite collection/record storage; ANN indexing remains intentionally absent.
 - POC graph node/edge mutation, deterministic identities, typed queries, bounded directional traversal, and SQLite persistence.
-- SQLite-backed episodic Memory on the same REST listener: named memory read/write, append, append-once with payload-digest conflict detection, entries, list, lexical search, local semantic and hybrid search, context-aware recall, Markdown section chunking, idempotent Claude Code Markdown import with SHA-256 validation, source provenance, stale-source reconciliation, and knowledge status. Migrations `0006_memory` and `0009_memory_sources` persist documents, session events and imported source metadata.
+- SQLite-backed episodic Memory on the same REST listener: named memory read/write/delete, append, append-once with payload-digest conflict detection, timezone-aware event expiry (expired events are excluded from recall but retained for audit), entries, list, lexical search, local semantic and hybrid search, context-aware recall, Markdown section chunking, idempotent Claude Code Markdown import with SHA-256 validation, source provenance, stale-source reconciliation, and knowledge status. Migrations `0006_memory` and `0009_memory_sources` persist documents, session events and imported source metadata.
 - Standalone Thompson routing on the same REST listener: Beta(successes+1, failures+1) sampling, max-cost filtering, model outcome recording, state inspection and per-model reset. SQLite migrations `0008_thompson` and `0011_thompson_events` persist model statistics and idempotent outcome events, with atomic increments. The POC's `task_type` and `required_capability` inputs remain contract-compatible but are not used for filtering, matching the current POC implementation.
 - Initial bounded GA capability on the same REST listener: five synthetic local evaluator families, parameter bounds, seeded reproducible population evolution, tournament selection, crossover, Gaussian mutation, elite preservation, fitness history, top candidates, persisted run status/results, and explicit approval-to-export records. Migration `0007_ga_runs` persists runs and approvals; candidate approval never applies live settings.
 - Initial browser Control Center GA workflow: configure and launch bounded runs, inspect run history/results/fitness history/candidates, and explicitly approve a candidate for export without applying it to live settings.

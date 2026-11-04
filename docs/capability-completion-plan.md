@@ -62,7 +62,7 @@ These items are implemented foundations, not claims that every operational requi
 - Finish scoped source import/reconciliation with explicit authorization and safe path handling.
 - Complete execution-context-aware recall and useful retrieval ranking.
 - Extend the initial bounded Context assembly with exact model-tokenizer budgeting when a concrete tokenizer is configured; current character-based estimates and extractive compression are deterministic and provenance-preserving.
-- Define conflict, append-once, expiry, and deletion semantics.
+- Conflict and append-once semantics are enforced with payload-digest comparison. Optional timezone-aware event expiry now excludes expired events from recall while retaining ledger history; explicit named-memory deletion hard-deletes its content, entries, append-once keys, and imported-source provenance.
 - Ensure Memory readiness reflects usable persisted state and recovery, not just process liveness.
 
 ## Priority 1: operationally safe and useful platform behavior
