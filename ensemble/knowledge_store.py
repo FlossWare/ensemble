@@ -57,6 +57,7 @@ class KnowledgeStore(Protocol):
     async def reclaim_source(self, source_id: str) -> int: ...
     async def upsert_generation(self, generation_id: str, record: dict[str, Any]) -> str: ...
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> None: ...
+    async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int: ...
     async def get_generation(self, generation_id: str, source_id: str) -> dict[str, Any] | None: ...
     async def delete_generation(self, generation_id: str) -> int: ...
 
@@ -192,6 +193,17 @@ class SqliteKnowledgeStore:
                 knowledge_generation_records.c.source_id == source_id,
             ).values(tombstoned=True, updated_at=datetime.now(timezone.utc)))
 
+    async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int:
+        from sqlalchemy import delete
+        async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
+            result = await connection.execute(delete(knowledge_generation_records).where(
+                knowledge_generation_records.c.generation_id == generation_id,
+                knowledge_generation_records.c.source_id == source_id,
+            ))
+        return int(result.rowcount or 0)
+
     async def get_generation(self, generation_id: str, source_id: str) -> dict[str, Any] | None:
         async with self.engine.connect() as connection:
             row = (await connection.execute(select(knowledge_generation_records).where(
@@ -267,6 +279,10 @@ class InMemoryKnowledgeStore:
         record = self._generation_records.get(generation_id, {}).get(source_id)
         if record is not None:
             record["tombstoned"] = True
+
+    async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int:
+        records = self._generation_records.get(generation_id, {})
+        return int(records.pop(source_id, None) is not None)
 
     async def get_generation(self, generation_id: str, source_id: str) -> dict[str, Any] | None:
         import copy

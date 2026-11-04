@@ -239,6 +239,22 @@ def create_app(
                 # data too. Remove them before marking the Index source purged;
                 # shared entity nodes are retained.
                 await active_graph_store.reclaim_source(source_id)
+                # A permanent purge must remove source payloads from every
+                # retained generation, not merely hide them behind tombstones.
+                generation_status = await active_index_store.generation_status()
+                for generation in generation_status.get("generations", []):
+                    generation_id = generation.get("generation_id")
+                    if not generation_id:
+                        continue
+                    reclaim_documents = getattr(document_store, "reclaim_generation_source", None)
+                    if callable(reclaim_documents):
+                        await reclaim_documents(generation_id, source_id)
+                    reclaim_knowledge = getattr(active_knowledge_store, "reclaim_generation_source", None)
+                    if callable(reclaim_knowledge):
+                        await reclaim_knowledge(generation_id, source_id)
+                    delete_generation_vectors = getattr(active_vector_store, "delete_generation_source", None)
+                    if callable(delete_generation_vectors):
+                        await delete_generation_vectors(generation_id, source_id)
                 reclaimed = [
                     await document_store.reclaim_source(source_id),
                     await active_knowledge_store.reclaim_source(source_id),

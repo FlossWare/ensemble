@@ -119,7 +119,7 @@ class DocumentStore(Protocol):
     async def generation_all_chunks(self, generation_id: str) -> list[IndexedChunk]: ...
     async def generation_lexical_search(self, generation_id: str, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]: ...
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int: ...
-    async def delete_generation(self, generation_id: str) -> int: ...
+    async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int: ...\n    async def delete_generation(self, generation_id: str) -> int:
 
 
 class InMemoryDocumentStore:
@@ -661,6 +661,26 @@ class SqlDocumentStore:
                 ).values(is_current=False)
             )
         return inserted.rowcount or 0
+
+    async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int:
+        """Physically remove a purged source's generation documents and chunks."""
+        async with self.engine.begin() as connection:
+            document_ids = (await connection.execute(
+                select(generation_documents.c.document_id).where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == source_id,
+                )
+            )).scalars().all()
+            if document_ids:
+                await connection.execute(delete(generation_chunks).where(
+                    generation_chunks.c.generation_id == generation_id,
+                    generation_chunks.c.document_id.in_(document_ids),
+                ))
+                await connection.execute(delete(generation_documents).where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == source_id,
+                ))
+        return len(document_ids)
 
     async def delete_generation(self, generation_id: str) -> int:
         async with self.engine.begin() as connection:
