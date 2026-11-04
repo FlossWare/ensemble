@@ -98,45 +98,42 @@ class DocumentService:
             )
         vector_indexed = False
         digest = hashlib.sha256(request.content.encode("utf-8")).hexdigest()
-        if vector_collection and embed and self.vector_store is not None:
-            if self.embeddings.available and chunks and all(chunk.embedding for chunk in chunks):
+        if vector_collection and self.vector_store is not None:
+            if embed and self.embeddings.available and chunks and all(chunk.embedding for chunk in chunks):
                 status = self.embeddings.status()
                 model = status.get("model") or "unknown"
                 dimensions = status.get("dimensions") or len(chunks[0].embedding)
+                items = [{
+                    "id": str(chunk.id),
+                    "embedding": chunk.embedding,
+                    "document": chunk.content,
+                    "metadata": {
+                        "source_id": document.source_id,
+                        "url": document.source_id,
+                        "revision": document.revision,
+                        "title": document.title,
+                        "chunk_id": str(chunk.id),
+                        "chunk_ordinal": chunk.ordinal,
+                        "chunk_profile": chunk.profile,
+                        "chunk_start": chunk.start,
+                        "chunk_end": chunk.end,
+                        "chunk_header": chunk.header,
+                        "content_sha256": digest,
+                        "source_metadata": document.metadata,
+                    },
+                } for chunk in chunks]
                 try:
-                    items = [{
-                        "id": str(chunk.id),
-                        "embedding": chunk.embedding,
-                        "document": chunk.content,
-                        "metadata": {
-                            "source_id": document.source_id,
-                            "url": document.source_id,
-                            "revision": document.revision,
-                            "title": document.title,
-                            "chunk_id": str(chunk.id),
-                            "chunk_ordinal": chunk.ordinal,
-                            "chunk_profile": chunk.profile,
-                            "chunk_start": chunk.start,
-                            "chunk_end": chunk.end,
-                            "chunk_header": chunk.header,
-                            "content_sha256": digest,
-                            "source_metadata": document.metadata,
-                        },
-                    } for chunk in chunks]
                     for offset in range(0, len(items), 256):
                         await self.vector_store.upsert(
                             vector_collection, model, dimensions, items[offset:offset + 256]
                         )
-                    if active_generation_id is not None:
-                        await self.vector_store.delete_generation_source(
-                            active_generation_id, document.source_id, name=vector_collection,
-                        )
-                        await self.vector_store.upsert_generation(
-                            active_generation_id, vector_collection, model, dimensions, items,
-                        )
                     vector_indexed = True
                 except Exception:
+                    # Base vector indexing is an optional retrieval channel.
+                    # Keep document ingestion usable, but mirror the resulting
+                    # durable base state into the active generation below.
                     vector_indexed = False
+
             # The durable document revision is authoritative. Never leave vectors
             # from an older revision searchable after a newer revision is accepted.
             try:
@@ -145,6 +142,33 @@ class DocumentService:
                 )
             except Exception:
                 vector_indexed = False
+
+            if active_generation_id is not None:
+                # Mirror what actually persisted in the base Vector store, not
+                # the requested batch. A failed optional base write or cleanup
+                # must not leave the active generation claiming a different
+                # vector state. Fail the ingestion if this mirror fails so the
+                # Index journal remains unacknowledged and the write is retryable.
+                persisted = await self.vector_store.list_records_for_source(
+                    vector_collection, document.source_id,
+                )
+                await self.vector_store.delete_generation_source(
+                    active_generation_id, document.source_id, name=vector_collection,
+                )
+                if persisted:
+                    collections = await self.vector_store.list_collections()
+                    collection = next(
+                        (item for item in collections if item["name"] == vector_collection),
+                        None,
+                    )
+                    if collection is None:
+                        raise RuntimeError(
+                            f"Vector collection {vector_collection} disappeared during generation mirroring"
+                        )
+                    await self.vector_store.upsert_generation(
+                        active_generation_id, vector_collection,
+                        collection["model"], collection["dimensions"], persisted,
+                    )
         return DocumentOut(
             id=document.id,
             source_id=document.source_id,
