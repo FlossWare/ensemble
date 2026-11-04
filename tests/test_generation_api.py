@@ -540,3 +540,72 @@ def test_activation_rejects_incomplete_generation_without_changing_active_pointe
             if item["generation_id"] == "incomplete-activation"
         )
         assert target["state"] == "building"
+
+
+
+def test_failed_activation_rolls_back_pointer_state_and_fence(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-atomic-activation.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    required = (
+        "index", "documents", "vectors", "memory", "knowledge",
+        "index_reconciliation", "documents_reconciliation",
+        "vectors_reconciliation", "memory_reconciliation",
+        "knowledge_reconciliation",
+    )
+    verification = {
+        "acknowledged_writes_verified": True,
+        "tombstones_verified": True,
+        "reconciled_through_change_id": 0,
+    }
+
+    async def exercise():
+        store = SqliteIndexStore(database_url)
+        await store.initialize()
+
+        async def prepare(generation_id):
+            await store.create_generation(generation_id)
+            for capability in required:
+                await store.record_generation_checkpoint(
+                    generation_id, capability, {"cursor": 0}, sealed=True,
+                )
+            await store.acquire_generation_write_fence(generation_id, 0)
+
+        await prepare("generation-original")
+        await store.activate_generation(
+            "generation-original", None, 0, verification,
+        )
+        await prepare("generation-target")
+        try:
+            await store.activate_generation(
+                "generation-target", "generation-original", 1, verification,
+            )
+        except Exception:
+            pass
+        else:
+            raise AssertionError("simulated activation failure was not raised")
+
+        status = await store.generation_status()
+        states = {
+            item["generation_id"]: item["state"]
+            for item in status["generations"]
+        }
+        assert status["active_generation_id"] == "generation-original"
+        assert status["epoch"] == 1
+        assert states["generation-original"] == "active"
+        assert states["generation-target"] == "building"
+        with pytest.raises(RuntimeError, match="writes are fenced"):
+            await store.assert_generation_writes_open()
+        await store.close()
+
+    with sqlite3.connect(tmp_path / "generation-atomic-activation.db") as connection:
+        connection.execute(
+            "CREATE TRIGGER reject_target_activation "
+            "BEFORE UPDATE OF state ON ensemble_index_generations "
+            "WHEN NEW.generation_id = 'generation-target' AND NEW.state = 'active' "
+            "BEGIN SELECT RAISE(ABORT, 'simulated activation failure'); END"
+        )
+        connection.commit()
+
+    asyncio.run(exercise())
