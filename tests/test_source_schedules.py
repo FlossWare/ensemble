@@ -2,11 +2,15 @@ import asyncio
 import time
 
 from fastapi.testclient import TestClient
+from alembic import command
+from alembic.config import Config
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import update
 
 from ensemble import api
 from ensemble.api import create_app
-from ensemble.crawl_store import InMemoryCrawlJobStore
-from ensemble.source_schedule_store import InMemorySourceScheduleStore
+from ensemble.crawl_store import InMemoryCrawlJobStore, SqliteCrawlJobStore
+from ensemble.source_schedule_store import InMemorySourceScheduleStore, SqliteSourceScheduleStore, schedules as schedule_table
 from ensemble.store import InMemoryDocumentStore
 
 
@@ -120,5 +124,62 @@ def test_source_schedule_does_not_overlap_an_active_scheduled_crawl():
         assert second_job_id != first_job_id
         second_job = await crawl_store.get(second_job_id)
         assert second_job["schedule_id"] == schedule["schedule_id"]
+
+    asyncio.run(scenario())
+
+
+def test_sqlite_source_schedule_dispatch_is_durable_and_prevents_overlap(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'scheduled-refresh.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+
+    async def scenario():
+        schedules = SqliteSourceScheduleStore(database_url)
+        jobs = SqliteCrawlJobStore(database_url)
+        await schedules.initialize()
+        await jobs.initialize()
+        schedule = await schedules.create(
+            "https://example.com/reference", 3600, 8, 2, run_immediately=True,
+        )
+        assert await schedules.dispatch_due() == 1
+        first_job_id = (await schedules.get(schedule["schedule_id"]))["last_job_id"]
+
+        # Force the interval due while the first job is pending and then
+        # running. Neither state may create an overlapping refresh.
+        async with schedules.engine.begin() as connection:
+            await connection.execute(update(schedule_table).where(
+                schedule_table.c.schedule_id == schedule["schedule_id"],
+            ).values(next_run_at=datetime.now(timezone.utc) - timedelta(seconds=1)))
+        assert await schedules.dispatch_due() == 0
+        assert (await schedules.get(schedule["schedule_id"]))["last_job_id"] == first_job_id
+
+        claimed = await jobs.claim_next()
+        assert claimed["job_id"] == first_job_id
+        assert await schedules.dispatch_due() == 0
+        await jobs.complete(first_job_id, {"ok": True, "page_count": 2})
+        assert await schedules.dispatch_due() == 1
+        second_job_id = (await schedules.get(schedule["schedule_id"]))["last_job_id"]
+        assert second_job_id != first_job_id
+
+        await schedules.close()
+        await jobs.close()
+
+        # A new store instance sees both the schedule and its dispatched jobs.
+        schedules = SqliteSourceScheduleStore(database_url)
+        jobs = SqliteCrawlJobStore(database_url)
+        await schedules.initialize()
+        await jobs.initialize()
+        persisted = await schedules.get(schedule["schedule_id"])
+        assert persisted is not None
+        assert persisted["last_job_id"] == second_job_id
+        first = await jobs.get(first_job_id)
+        second = await jobs.get(second_job_id)
+        assert first["status"] == "completed"
+        assert second["status"] == "pending"
+        assert second["auto_ingest"] is True
+        assert second["schedule_id"] == schedule["schedule_id"]
+        await schedules.close()
+        await jobs.close()
 
     asyncio.run(scenario())
