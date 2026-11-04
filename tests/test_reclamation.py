@@ -99,16 +99,18 @@ def test_reclamation_physically_removes_active_source_data_but_not_index_tombsto
         assert (await knowledge.get("source-1"))["tombstoned"] is True
         assert await vectors.query("test", [1.0, 0.0], 10) == []
 
+        # Physical cleanup completes before Index marks the tombstone permanent.
+        assert await documents.reclaim_source("source-1") == 1
+        assert await knowledge.reclaim_source("source-1") == 1
+        assert await vectors.reclaim_source("source-1") == 1
         await index.mark_purged("source-1")
+        await index.mark_purged("source-1")  # retry after an uncertain completion is idempotent
         try:
             await index.restore_source("source-1", 5)
             raise AssertionError("permanently purged source was restored")
         except RuntimeError:
             pass
 
-        assert await documents.reclaim_source("source-1") == 1
-        assert await knowledge.reclaim_source("source-1") == 1
-        assert await vectors.reclaim_source("source-1") == 1
         assert await documents.all_chunks() == []
         assert await knowledge.get("source-1") is None
         assert await vectors.query("test", [1.0, 0.0], 10) == []
