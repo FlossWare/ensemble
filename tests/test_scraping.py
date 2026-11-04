@@ -160,3 +160,34 @@ def test_crawl_preview_route_exposes_bounded_crawler(monkeypatch):
         })
     assert response.status_code == 200
     assert response.json()["limits"] == {"max_pages": 4, "max_depth": 2}
+
+
+def test_crawl_limit_counts_unsuccessful_page_fetches(monkeypatch):
+    from ensemble import scraping
+
+    calls = []
+    async def fake_robots(uri, origin):
+        return ["User-agent: *", "Allow: /"]
+
+    async def fake_preview(uri, allowed_origin=None):
+        calls.append(uri)
+        if uri == "https://example.com/":
+            return {
+                "final_uri": uri, "title": "Home", "text": "home",
+                "characters": 4,
+                "links": [
+                    "https://example.com/a", "https://example.com/b",
+                    "https://example.com/c",
+                ],
+            }
+        raise ScrapeError("upstream_failure", "request failed")
+
+    monkeypatch.setattr(scraping, "_validate_public_uri", lambda uri: uri)
+    monkeypatch.setattr(scraping, "_fetch_robots_txt", fake_robots)
+    monkeypatch.setattr(scraping, "preview_uri", fake_preview)
+    result = asyncio.run(scraping.crawl_uri("https://example.com/", max_pages=3, max_depth=2))
+    assert result["attempted_pages"] == 3
+    assert result["page_count"] == 1
+    assert len(result["failures"]) == 2
+    assert len(calls) == 3
+    assert result["truncated"] is True

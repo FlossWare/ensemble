@@ -163,6 +163,8 @@ async def preview_uri(uri: str, allowed_origin: tuple[str, str, int] | None = No
     current = uri
     response = None
     for _ in range(MAX_REDIRECTS + 1):
+        if allowed_origin is not None and _origin_key(current) != allowed_origin:
+            raise ScrapeError("cross_origin_redirect", "crawl redirects must remain on the starting origin", 403)
         current, hostname, address = _resolve_public_uri(current)
         transport = _pinned_transport(hostname, address)
         async with httpx.AsyncClient(
@@ -303,6 +305,7 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1) -> dict:
 
     first = await preview_uri(start_uri, allowed_origin=origin)
     pages = [first]
+    attempts = 1
     total_characters = first["characters"]
     queue = deque()
     seen = {first["final_uri"]}
@@ -312,15 +315,19 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1) -> dict:
                 seen.add(link)
                 queue.append((link, 1))
     skipped = []
+    skipped_count = 0
     failures = []
     crawl_delay = rules.crawl_delay(CRAWLER_AGENT) or rules.crawl_delay("*") or 0
     crawl_delay = min(5.0, max(0.0, float(crawl_delay)))
 
-    while queue and len(pages) < max_pages:
+    while queue and attempts < max_pages:
         target, depth = queue.popleft()
         if not rules.can_fetch(CRAWLER_AGENT, target):
-            skipped.append({"uri": target, "reason": "robots_disallowed"})
+            skipped_count += 1
+            if len(skipped) < 100:
+                skipped.append({"uri": target, "reason": "robots_disallowed"})
             continue
+        attempts += 1
         if crawl_delay:
             await asyncio.sleep(crawl_delay)
         try:
@@ -334,9 +341,11 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1) -> dict:
         if total_characters + page["characters"] > MAX_CRAWL_CHARS:
             return {
                 "ok": True, "start_uri": start_uri, "page_count": len(pages),
-                "pages": pages, "skipped": skipped, "failures": failures,
-                "characters": total_characters, "truncated": True,
+                "pages": pages, "skipped": skipped, "skipped_count": skipped_count,
+                "failures": failures, "characters": total_characters,
+                "attempted_pages": attempts, "truncated": True,
                 "robots_policy": "applied",
+                "limits": {"max_pages": max_pages, "max_depth": max_depth, "max_characters": MAX_CRAWL_CHARS},
             }
         pages.append(page)
         total_characters += page["characters"]
@@ -352,8 +361,10 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1) -> dict:
         "page_count": len(pages),
         "pages": pages,
         "skipped": skipped,
+        "skipped_count": skipped_count,
         "failures": failures,
         "characters": total_characters,
+        "attempted_pages": attempts,
         "truncated": bool(queue),
         "robots_policy": "applied",
         "limits": {"max_pages": max_pages, "max_depth": max_depth, "max_characters": MAX_CRAWL_CHARS},
