@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 
 import pytest
@@ -506,5 +507,5 @@ def test_application_startup_recovers_interrupted_generation_fence(tmp_path):
     assert fence_count == 0
     assert generation is not None
     assert generation[0] == "building"
-    checkpoints = __import__("json").loads(generation[1])
+    checkpoints = json.loads(generation[1])
     assert checkpoints["index_reconciliation"]["sealed"] is False
