@@ -191,3 +191,37 @@ def test_crawl_limit_counts_unsuccessful_page_fetches(monkeypatch):
     assert len(result["failures"]) == 2
     assert len(calls) == 3
     assert result["truncated"] is True
+
+
+
+def test_bounded_crawl_emits_real_page_and_policy_trace_stages(monkeypatch):
+    from ensemble import scraping
+
+    async def fake_robots(uri, origin):
+        return ["User-agent: *", "Allow: /"]
+
+    async def fake_preview(uri, allowed_origin=None):
+        return {
+            "final_uri": uri, "title": "Home", "text": "home",
+            "characters": 4, "links": [],
+        }
+
+    monkeypatch.setattr(scraping, "_validate_public_uri", lambda uri: uri)
+    monkeypatch.setattr(scraping, "_fetch_robots_txt", fake_robots)
+    monkeypatch.setattr(scraping, "preview_uri", fake_preview)
+    stages = []
+
+    async def record(stage):
+        stages.append(stage)
+
+    result = asyncio.run(scraping.crawl_uri(
+        "https://example.com/", max_pages=1, max_depth=0, trace=record,
+    ))
+    assert result["page_count"] == 1
+    assert [stage["name"] for stage in stages] == [
+        "robots_policy", "page_fetch_and_extraction", "crawl_summary",
+    ]
+    assert stages[0]["policy_applied"] is True
+    assert stages[1]["page"] == 1
+    assert stages[1]["characters"] == 4
+    assert stages[2]["page_count"] == 1

@@ -44,7 +44,9 @@ def test_crawl_job_store_failure_can_be_retried():
 
 
 def test_crawl_job_api_persists_job_and_worker_completes_it(monkeypatch):
-    async def fake_crawl(uri, max_pages=10, max_depth=1):
+    async def fake_crawl(uri, max_pages=10, max_depth=1, trace=None):
+        if callable(trace):
+            await trace({"name": "fake_page_fetch", "status": "completed", "duration_ms": 0.1, "page": 1})
         return {
             "ok": True, "start_uri": uri, "page_count": 2,
             "pages": [{"final_uri": uri}, {"final_uri": uri + "docs"}],
@@ -73,6 +75,15 @@ def test_crawl_job_api_persists_job_and_worker_completes_it(monkeypatch):
         assert job["status"] == "completed"
         assert job["attempts"] == 1
         assert job["result"]["page_count"] == 2
+        trace_id = job["result"]["execution_trace_id"]
+        trace_response = client.get(f"/api/v1/execution-traces/{trace_id}")
+        assert trace_response.status_code == 200
+        trace = trace_response.json()["trace"]
+        assert trace["operation"] == "crawl_job"
+        assert trace["status"] == "completed"
+        assert [stage["name"] for stage in trace["stages"]] == [
+            "fake_page_fetch", "crawl_job_execution",
+        ]
 
         listed = client.get("/api/v1/ingest/urls/crawl-jobs")
         assert listed.status_code == 200
@@ -91,6 +102,8 @@ def test_crawl_job_api_validates_bounds_before_persisting(monkeypatch):
 
 def test_crawl_job_ingestion_is_checkpointed_per_source_and_retrievable(monkeypatch):
     async def fake_crawl(uri, max_pages=10, max_depth=1):
+        if callable(trace):
+            await trace({"name": "fake_page_fetch", "status": "completed", "duration_ms": 0.1, "page": 1})
         return {
             "ok": True, "start_uri": uri, "page_count": 1,
             "pages": [{

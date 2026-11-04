@@ -414,19 +414,99 @@ def create_app(
                         if job is None:
                             continue
                         processed = True
+                        trace_id = uuid4().hex
+                        trace_started = time.perf_counter()
+                        trace_created = False
                         try:
+                            await active_execution_trace_store.create({
+                                "trace_id": trace_id,
+                                "request_id": job["job_id"],
+                                "operation": "crawl_job",
+                                "status": "running",
+                                "started_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                                "completed_at": None,
+                                "duration_ms": None,
+                                "attributes": {
+                                    "uri_key": hashlib.sha256(job["uri"].encode("utf-8")).hexdigest(),
+                                    "max_pages": job["max_pages"],
+                                    "max_depth": job["max_depth"],
+                                    "schedule_id": job.get("schedule_id"),
+                                },
+                                "stages": [],
+                                "error_category": None,
+                            })
+                            trace_created = True
+                        except Exception:
+                            pass
+
+                        async def record_crawl_stage(stage: dict[str, Any]) -> None:
+                            if not trace_created:
+                                return
+                            try:
+                                await active_execution_trace_store.record_stage(trace_id, stage)
+                            except Exception:
+                                pass
+
+                        try:
+                            crawl_started = time.perf_counter()
                             result = await crawl_uri(
-                                job["uri"], max_pages=job["max_pages"], max_depth=job["max_depth"],
+                                job["uri"], max_pages=job["max_pages"],
+                                max_depth=job["max_depth"], trace=record_crawl_stage,
                             )
+                            await record_crawl_stage({
+                                "name": "crawl_job_execution", "status": "completed",
+                                "duration_ms": round((time.perf_counter() - crawl_started) * 1000, 3),
+                                "page_count": result.get("page_count", 0),
+                                "attempted_pages": result.get("attempted_pages", 0),
+                                "failure_count": len(result.get("failures", [])),
+                            })
+                            if trace_created:
+                                result["execution_trace_id"] = trace_id
                             await active_crawl_store.complete(job["job_id"], result)
+                            ingestion_result = None
                             if job.get("auto_ingest"):
                                 worker_scope = _internal_worker_scope(partition_id)
                                 worker_token = set_request_scope(worker_scope)
+                                ingestion_started = time.perf_counter()
                                 try:
-                                    await ingest_crawl_job(job["job_id"], None)
+                                    ingestion_result = await ingest_crawl_job(job["job_id"], None)
+                                    await record_crawl_stage({
+                                        "name": "automatic_ingestion", "status": "completed" if ingestion_result.get("ok") else "degraded",
+                                        "duration_ms": round((time.perf_counter() - ingestion_started) * 1000, 3),
+                                        "page_count": len((ingestion_result.get("ingestion") or {}).get("pages", [])),
+                                    })
+                                except Exception as exc:
+                                    await record_crawl_stage({
+                                        "name": "automatic_ingestion", "status": "failed",
+                                        "duration_ms": round((time.perf_counter() - ingestion_started) * 1000, 3),
+                                        "error_category": type(exc).__name__,
+                                    })
+                                    raise
                                 finally:
                                     reset_request_scope(worker_token)
+                            if trace_created:
+                                degraded = bool(result.get("failures") or result.get("skipped_count") or result.get("truncated"))
+                                if ingestion_result is not None and not ingestion_result.get("ok"):
+                                    degraded = True
+                                await active_execution_trace_store.finish(
+                                    trace_id, "degraded" if degraded else "completed",
+                                    (time.perf_counter() - trace_started) * 1000,
+                                )
                         except Exception as exc:
+                            if trace_created:
+                                try:
+                                    await record_crawl_stage({
+                                        "name": "crawl_job_execution", "status": "failed",
+                                        "duration_ms": round((time.perf_counter() - trace_started) * 1000, 3),
+                                        "error_category": type(exc).__name__,
+                                    })
+                                    await active_execution_trace_store.finish(
+                                        trace_id, "failed",
+                                        (time.perf_counter() - trace_started) * 1000,
+                                        type(exc).__name__,
+                                    )
+                                except Exception:
+                                    pass
                             await active_crawl_store.fail(
                                 job["job_id"], f"{type(exc).__name__}: {str(exc)}",
                             )

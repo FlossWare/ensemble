@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 import ipaddress
 import socket
+import time
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
@@ -289,21 +290,62 @@ async def _fetch_robots_txt(uri: str, origin: tuple[str, str, int]) -> list[str]
     raise ScrapeError("robots_redirect_limit", "robots.txt exceeded the redirect limit", 400)
 
 
-async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1) -> dict:
+async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1, *, trace: object | None = None) -> dict:
     if isinstance(max_pages, bool) or not isinstance(max_pages, int) or not 1 <= max_pages <= MAX_CRAWL_PAGES:
         raise ScrapeError("invalid_crawl_limit", f"max_pages must be between 1 and {MAX_CRAWL_PAGES}")
     if isinstance(max_depth, bool) or not isinstance(max_depth, int) or not 0 <= max_depth <= MAX_CRAWL_DEPTH:
         raise ScrapeError("invalid_crawl_depth", f"max_depth must be between 0 and {MAX_CRAWL_DEPTH}")
 
+    async def record_stage(name: str, status: str, started: float, **details: object) -> None:
+        if not callable(trace):
+            return
+        try:
+            await trace({
+                "name": name, "status": status,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                **details,
+            })
+        except Exception:
+            # Trace persistence must not change crawl safety or completion.
+            pass
+
+    crawl_started = time.perf_counter()
     start_uri = _validate_public_uri(uri)
     origin = _origin_key(start_uri)
     rules = RobotFileParser()
     rules.set_url(urlunsplit((origin[0], urlsplit(start_uri).netloc, "/robots.txt", "", "")))
-    rules.parse(await _fetch_robots_txt(start_uri, origin))
+    robots_started = time.perf_counter()
+    try:
+        rules.parse(await _fetch_robots_txt(start_uri, origin))
+    except Exception as exc:
+        await record_stage(
+            "robots_policy", "failed", robots_started,
+            error_category=getattr(exc, "code", type(exc).__name__),
+        )
+        raise
+    await record_stage(
+        "robots_policy", "completed", robots_started,
+        policy_applied=True, crawl_delay_seconds=min(
+            5.0, max(0.0, float(rules.crawl_delay(CRAWLER_AGENT) or rules.crawl_delay("*") or 0))
+        ),
+    )
     if not rules.can_fetch(CRAWLER_AGENT, start_uri):
         raise ScrapeError("robots_disallowed", "robots.txt disallows crawling the requested URI", 403)
 
-    first = await preview_uri(start_uri, allowed_origin=origin)
+    first_started = time.perf_counter()
+    try:
+        first = await preview_uri(start_uri, allowed_origin=origin)
+    except Exception as exc:
+        await record_stage(
+            "page_fetch_and_extraction", "failed", first_started,
+            page=1, depth=0,
+            error_category=getattr(exc, "code", type(exc).__name__),
+        )
+        raise
+    await record_stage(
+        "page_fetch_and_extraction", "completed", first_started,
+        page=1, depth=0, characters=first["characters"],
+    )
     pages = [first]
     attempts = 1
     total_characters = first["characters"]
@@ -326,20 +368,41 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1) -> dict:
             skipped_count += 1
             if len(skipped) < 100:
                 skipped.append({"uri": target, "reason": "robots_disallowed"})
+            await record_stage(
+                "page_policy", "skipped", time.perf_counter(),
+                depth=depth, reason="robots_disallowed",
+            )
             continue
         attempts += 1
+        page_started = time.perf_counter()
         if crawl_delay:
             await asyncio.sleep(crawl_delay)
         try:
             page = await preview_uri(target, allowed_origin=origin)
         except ScrapeError as exc:
             failures.append({"uri": target, "code": exc.code, "message": str(exc)[:300]})
+            await record_stage(
+                "page_fetch_and_extraction", "failed", page_started,
+                page=attempts, depth=depth, error_category=exc.code,
+            )
             continue
+        await record_stage(
+            "page_fetch_and_extraction", "completed", page_started,
+            page=attempts, depth=depth, characters=page["characters"],
+        )
         if _origin_key(page["final_uri"]) != origin:
             skipped.append({"uri": target, "reason": "cross_origin"})
+            await record_stage(
+                "page_policy", "skipped", time.perf_counter(),
+                page=attempts, depth=depth, reason="cross_origin",
+            )
             continue
         if total_characters + page["characters"] > MAX_CRAWL_CHARS:
-            return {
+            await record_stage(
+                "page_policy", "skipped", time.perf_counter(),
+                page=attempts, depth=depth, reason="character_limit",
+            )
+            result = {
                 "ok": True, "start_uri": start_uri, "page_count": len(pages),
                 "pages": pages, "skipped": skipped, "skipped_count": skipped_count,
                 "failures": failures, "characters": total_characters,
@@ -347,6 +410,13 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1) -> dict:
                 "robots_policy": "applied",
                 "limits": {"max_pages": max_pages, "max_depth": max_depth, "max_characters": MAX_CRAWL_CHARS},
             }
+            await record_stage(
+                "crawl_summary", "degraded", crawl_started,
+                page_count=len(pages), attempted_pages=attempts,
+                skipped_count=skipped_count + len(skipped), failure_count=len(failures),
+                characters=total_characters, truncated=True,
+            )
+            return result
         pages.append(page)
         total_characters += page["characters"]
         if depth < max_depth:
@@ -355,7 +425,7 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1) -> dict:
                     seen.add(link)
                     queue.append((link, depth + 1))
 
-    return {
+    result = {
         "ok": True,
         "start_uri": start_uri,
         "page_count": len(pages),
@@ -369,3 +439,11 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1) -> dict:
         "robots_policy": "applied",
         "limits": {"max_pages": max_pages, "max_depth": max_depth, "max_characters": MAX_CRAWL_CHARS},
     }
+    await record_stage(
+        "crawl_summary",
+        "degraded" if failures or skipped_count or skipped or queue else "completed",
+        crawl_started, page_count=len(pages), attempted_pages=attempts,
+        skipped_count=skipped_count + len(skipped), failure_count=len(failures),
+        characters=total_characters, truncated=bool(queue),
+    )
+    return result
