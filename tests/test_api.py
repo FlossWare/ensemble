@@ -451,6 +451,39 @@ def test_knowledge_store_readback_and_provenance(tmp_path):
         assert len(record["content_sha256"]) == 64
 
 
+def test_knowledge_hybrid_search_uses_embedding_and_vector_rest_contracts():
+    class Embeddings:
+        available = True
+
+        def status(self):
+            return {"ok": True, "ready": True, "model": "knowledge-test", "dimensions": 3}
+
+        async def embed(self, texts, mode="document"):
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+    vectors = InMemoryVectorStore()
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        embedding_provider=Embeddings(),
+        vector_store=vectors,
+    )
+    with TestClient(app) as client:
+        stored = client.post("/api/v1/knowledge/records", json=_knowledge_record(
+            source_id="knowledge-rest-search",
+            content="REST composition for Knowledge vector retrieval.",
+        ))
+        assert stored.status_code == 200
+
+        result = client.post("/api/v1/search/hybrid/knowledge", json={
+            "query": "Knowledge vector retrieval", "limit": 5,
+        })
+        assert result.status_code == 200
+        body = result.json()
+        assert body["retrieval"] == "knowledge-only"
+        assert body["results"]
+        assert body["results"][0]["metadata"]["source_id"] == "knowledge-rest-search"
+
+
 def test_knowledge_vector_records_follow_revision_and_tombstone():
     from ensemble.vector_memory import InMemoryVectorStore
 
@@ -524,6 +557,54 @@ def test_knowledge_publication_enters_hybrid_search_and_graph(tmp_path):
             "query": "CPSEARCH-10177", "limit": 10,
         }).json()
         assert all(item["source_id"] != "rfc-entity" for item in after_delete["results"])
+
+
+def test_search_retrieve_rest_contract_owns_lexical_vector_retrieval(tmp_path):
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/ingest/documents", json={
+            "source_id": "search-retrieve-source",
+            "revision": 1,
+            "title": "Search retrieval contract",
+            "content": "The Search capability owns lexical and vector retrieval.",
+        })
+        assert ingested.status_code == 201
+
+        response = client.post("/api/v1/search/retrieve", json={
+            "query": "lexical vector retrieval",
+            "limit": 5,
+            "rerank": True,
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["results"][0]["source_id"] == "search-retrieve-source"
+        assert body["retrieval"] == "lexical"
+        assert body["reranked"] is False
+
+
+def test_graph_expansion_source_reads_have_document_and_index_rest_contracts(tmp_path):
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/ingest/documents", json={
+            "source_id": "rest-source-read",
+            "revision": 1,
+            "title": "REST source lookup",
+            "content": "Graph expansion resolves current source chunks through REST.",
+        })
+        assert ingested.status_code == 201
+
+        index = client.post("/api/v1/index/sources/query", json={
+            "source_ids": ["rest-source-read", "missing-source"],
+        })
+        assert index.status_code == 200
+        assert index.json()["sources"]["rest-source-read"]["high_sequence"] == 1
+        assert "missing-source" not in index.json()["sources"]
+
+        chunks = client.post("/api/v1/documents/chunks/query", json={
+            "source_ids": ["rest-source-read"],
+        })
+        assert chunks.status_code == 200
+        assert len(chunks.json()["chunks"]) == 1
+        assert chunks.json()["chunks"][0]["source_id"] == "rest-source-read"
+        assert "Graph expansion resolves current source chunks" in chunks.json()["chunks"][0]["text"]
 
 
 def test_knowledge_is_index_gated_and_revision_ordered(tmp_path):
@@ -1210,3 +1291,48 @@ def test_tombstone_cleanup_retries_failed_vector_collection_without_blocking_oth
         assert retry.json()["cleanup"]["status"] == "complete"
         counts = {item["name"]: item["count"] for item in asyncio.run(vector_store.list_collections())}
         assert counts == {"knowledge_chunks": 0, "transcript_text": 0}
+
+
+def test_context_assembly_composes_search_and_analysis_over_internal_rest(tmp_path):
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/ingest/documents", json={
+            "source_id": "context-rest-source",
+            "revision": 1,
+            "title": "REST capability composition",
+            "content": "Ensemble context assembly must call retrieval through REST contracts.",
+        })
+        assert ingested.status_code == 201
+
+        response = client.post("/api/v1/context/assemble", json={
+            "query": "retrieval through REST contracts",
+            "include_memory": False,
+            "include_search": True,
+            "limit": 5,
+            "max_tokens": 500,
+        })
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ok"] is True
+        assert "retrieval through REST contracts" in result["context"]
+        assert result["sources"][0]["source_id"] == "context-rest-source"
+        assert result["intent"] is not None
+        assert isinstance(result["entities"], list)
+
+
+def test_context_assembly_works_without_search_or_memory_dependencies(tmp_path):
+    with _client(tmp_path) as client:
+        response = client.post("/api/v1/context/assemble", json={
+            "query": "classify this request",
+            "include_memory": False,
+            "include_search": False,
+            "max_tokens": 100,
+        })
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ok"] is True
+        assert result["context"] == ""
+        assert result["sources"] == []
+        assert result["intent"] is not None
+        assert result["degraded"] == []

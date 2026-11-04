@@ -51,6 +51,26 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 - Make long-running work explicit rather than holding requests open indefinitely.
 - Expose health/readiness separately from business operations.
 
+## 6. Internal capability dispatch
+
+Capability-to-capability calls use the same versioned REST contracts as external consumers, including when capabilities are co-located in the initial application. The initial implementation uses an ASGI-local HTTP transport; this preserves HTTP routing, request validation, and JSON serialization without introducing another process or listener. Hybrid graph expansion also reads current source state through Index and source chunks through the Documents resource contract.
+
+Each capability group can be assigned an independent REST base URL. The initial configuration keys are:
+
+- `ENSEMBLE_SEARCH_REST_URL`
+- `ENSEMBLE_MEMORY_REST_URL`
+- `ENSEMBLE_INTENT_REST_URL`
+- `ENSEMBLE_ENTITIES_REST_URL`
+- `ENSEMBLE_GRAPH_REST_URL`
+- `ENSEMBLE_RERANKING_REST_URL`
+- `ENSEMBLE_EMBEDDINGS_REST_URL`
+- `ENSEMBLE_VECTOR_REST_URL`
+- `ENSEMBLE_INDEX_REST_URL`
+- `ENSEMBLE_DOCUMENTS_REST_URL`
+- `ENSEMBLE_KNOWLEDGE_REST_URL`
+
+When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. Context Assembly dispatches to Search, Memory, Intent, and Entity REST endpoints. Hybrid Search dispatches base retrieval to Search, intent classification and entity extraction to their capabilities, Graph query/traversal to Graph, reranking to Reranking, and its search-ledger write to Memory through REST. Knowledge-scoped Hybrid Search dispatches embedding and vector queries through their REST contracts. Document ingestion dispatches revision registration to Index, document/chunk storage to Documents, entity extraction to Entities, and graph association to Graph through REST. Transcript session ingestion dispatches event persistence to Memory, revision lookup to Index, entity extraction to Entities, and session/file relationships to Graph through REST. Source tombstone propagation dispatches to Documents, Knowledge, and every configured Vector collection through REST. Hybrid Search invokes the Search capability through `POST /api/v1/search/retrieve`. Search retains ownership of its retrieval algorithm and persistence rather than exposing its internal store implementation to Hybrid. Setting `ENSEMBLE_SEARCH_REST_URL` moves Search behind a separate REST server without changing the Hybrid contract. Remaining direct store access inside Search is capability-owned implementation, not cross-capability composition. Only call paths explicitly migrated to the internal REST client satisfy the boundary.
+
 ## 7. Initial implemented endpoints
 
 | Method | Path | Purpose |
@@ -58,6 +78,10 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | GET | /health | Liveness |
 | GET | /ready | Application readiness and persistence configuration |
 | POST | /api/v1/ingest/documents | Register or replace a document revision, chunk it, optionally embed it, and durably store it |
+| POST | /api/v1/documents/records | Documents capability resource used by the ingestion orchestrator to store and chunk a validated document |
+| POST | /api/v1/documents/sources/tombstone | Tombstone a source in Documents |
+| POST | /api/v1/knowledge/sources/tombstone | Tombstone a source in Knowledge |
+| POST | /api/v1/vector/collections/{name}/sources/tombstone | Remove all records for a source from one vector collection |
 | POST | /api/v1/ingest/files | Upload a bounded supported file (currently PDF), extract text and ingest it through the shared document pipeline |
 | POST | /api/v1/ingest/urls/preview, /api/v1/ingest/urls | Preview or ingest a public HTTP(S) HTML/plain-text page |
 | POST | /api/v1/ingest/transcripts | Parse caller-supplied JSONL transcript slices and return a UTF-8 byte checkpoint |
@@ -67,10 +91,13 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/search | Default retrieval using lexical and configured vector channels |
 | GET | /api/v1/search/lexical/health, /api/v1/search/lexical/ready | Lexical retrieval capability status |
 | POST | /api/v1/search/lexical | Explicit lexical-only retrieval strategy |
+| POST | /api/v1/search/retrieve | Execute Search-owned lexical/vector retrieval and return ranked candidates without reranking |
 | POST | /api/v1/lexical/documents | Lexical document/session ingestion convenience; placement remains under audit |
 | GET | /api/v1/search/hybrid/health, /api/v1/search/hybrid/ready | Hybrid retrieval capability status |
 | POST | /api/v1/search/hybrid | Unified hybrid retrieval |
 | POST | /api/v1/search/hybrid/knowledge | Knowledge-scoped hybrid retrieval |
+| POST | /api/v1/embeddings/embed | Generate query or document embeddings |
+| POST | /api/v1/vector/collections/{name}/query | Query a named vector collection |
 | POST | /api/v1/memory/events | Capture an idempotent prompt event in the Memory event ledger |
 | GET | /api/v1/tokenization/health, /ready, /profiles | Tokenization capability status and analyzer profiles |
 | POST | /api/v1/tokenization/tokenize | Versioned deterministic text analysis |
@@ -88,6 +115,8 @@ Where useful, request metadata may include a caller-generated correlation ID. Co
 | POST | /api/v1/index/revisions | Record a revision and return accepted/duplicate/conflict/superseded/tombstoned decision |
 | POST | /api/v1/index/tombstones | Permanently tombstone a source at a revision sequence |
 | GET | /api/v1/index/sources/{source_id}, /manifest | Read source state and bounded source manifest |
+| POST | /api/v1/index/sources/query | Read current source state for a bounded set of source identifiers |
+| POST | /api/v1/documents/chunks/query | Read chunks for a bounded set of source identifiers with document and chunk provenance |
 | GET | /api/v1/vector/health, /collections | Vector storage status and collection inventory |
 | POST | /api/v1/vector/collections/{name}/records/lookup | Find existing record IDs |
 | PUT | /api/v1/vector/collections/{name}/records | Idempotently create or replace vectors and metadata |
@@ -117,7 +146,7 @@ The current document and search implementation remains an initial vertical slice
 
 ## 8. Required capability endpoint groups
 
-The POC parity inventory in docs/poc-parity.md defines the complete capability baseline. All 13 POC capabilities are required in Ensemble; these endpoint groups are not optional candidates. The exact resource paths and schemas will be specified in versioned contract documents before implementation.
+The required capability surface is defined by Ensemble's own product scope, architecture, and capability completion plan. Historical prototypes may provide evidence about useful behavior, but they do not define Ensemble's product boundaries, internal design, or completion criteria.
 
 | Capability group | Required operations |
 |---|---|
@@ -180,7 +209,7 @@ Security-sensitive decorators are defense in depth. Enforcement also belongs at 
 
 ## 11. Search API conventions
 
-Search paths are capability-first. `POST /api/v1/search` is the default retrieval contract; `POST /api/v1/search/lexical` requests lexical-only retrieval; `POST /api/v1/search/hybrid` requests the full Hybrid orchestration contract. The Knowledge-scoped Hybrid operation is `POST /api/v1/search/hybrid/knowledge`. The default route returns standard result records; the lexical route explicitly disables vector retrieval and deduplicates identical chunk text; the Hybrid route adds retrieval diagnostics, intent enrichment, and related-session context. The scope segment is present because Knowledge-only retrieval is a distinct caller-facing operation. Do not expose channel implementation details such as FTS5, SQLite, vector collection names, or model providers in search paths. Other strategies or scopes should be added only when a real consumer requirement exists.
+Search paths are capability-first. `POST /api/v1/search` is the default retrieval contract; `POST /api/v1/search/lexical` requests lexical-only retrieval; `POST /api/v1/search/retrieve` is the internal Search capability contract used by Hybrid; `POST /api/v1/search/hybrid` requests the full Hybrid orchestration contract. The Knowledge-scoped Hybrid operation is `POST /api/v1/search/hybrid/knowledge`. The default route returns standard result records; the lexical route explicitly disables vector retrieval and deduplicates identical chunk text; the Hybrid route adds retrieval diagnostics, intent enrichment, and related-session context. The scope segment is present because Knowledge-only retrieval is a distinct caller-facing operation. Do not expose channel implementation details such as FTS5, SQLite, vector collection names, or model providers in search paths. Other strategies or scopes should be added only when a real consumer requirement exists.
 
 ## 12. Ingestion API conventions
 

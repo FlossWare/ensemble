@@ -18,6 +18,7 @@ from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chu
 from .embeddings import EmbeddingProvider, MAX_BODY_BYTES as MAX_EMBED_BODY_BYTES, configured_embedding_provider, validate_embedding_request
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
+from .rest_client import InternalRestClient
 from .store import DocumentStore, InMemoryDocumentStore, SqlDocumentStore
 from .vector_store import SqliteVectorStore, VectorStore
 from .vector_memory import InMemoryVectorStore
@@ -251,79 +252,135 @@ def create_app(
     documents = DocumentService(document_store, Chunker(), embeddings, active_vector_store)
     search = SearchService(document_store, embeddings, active_reranker, active_vector_store)
 
-    async def index_document_entities(source_id: str, revision: int, content: str, *, origin: str, locator: str) -> int:
-        """Associate exact extracted entities with a durable source revision."""
+    async def index_document_entities(
+        source_id: str, revision: int, content: str, *,
+        origin: str, locator: str, request: Request | None = None,
+    ) -> int:
+        """Associate exact extracted entities with a durable source revision through REST."""
+        internal = InternalRestClient(app, {
+            "entities": os.getenv("ENSEMBLE_ENTITIES_REST_URL"),
+            "graph": os.getenv("ENSEMBLE_GRAPH_REST_URL"),
+        })
         identity = hashlib.sha256(f"{source_id}:{revision}".encode("utf-8")).hexdigest()
-        source_node = await active_graph_store.add_node(
-            "source",
-            {"source_id": source_id, "revision": revision, "origin": origin, "locator": locator},
-            node_id="source_" + identity,
+        source_response = await internal.request(
+            "POST", "/api/v1/graph/nodes", request=request,
+            json={
+                "type": "source",
+                "id": "source_" + identity,
+                "properties": {
+                    "source_id": source_id, "revision": revision,
+                    "origin": origin, "locator": locator,
+                },
+            },
+        )
+        source_node = source_response["node"]
+        extracted = await internal.request(
+            "POST", "/api/v1/entities/extract", request=request,
+            json={"text": content[:1_000_000], "source": "ingestion"},
         )
         linked = 0
-        for candidate in extract(content[:1_000_000], source="ingestion")[:500]:
+        for candidate in extracted.get("entities", [])[:500]:
             if not candidate.get("exact"):
                 continue
             kind, normalized = candidate["type"], candidate["normalized"]
-            matches = await active_graph_store.query_nodes(
-                "entity", {"entity_type": kind, "normalized": normalized}
-            )
+            matches = (await internal.request(
+                "POST", "/api/v1/graph/query", request=request,
+                json={"type": "entity", "properties": {
+                    "entity_type": kind, "normalized": normalized,
+                }},
+            )).get("nodes", [])
             if len(matches) > 1:
                 continue
             if matches:
                 entity_node = matches[0]
             else:
                 entity_identity = hashlib.sha256(f"{kind}:{normalized}".encode("utf-8")).hexdigest()
-                entity_node = await active_graph_store.add_node(
-                    "entity",
-                    {"entity_type": kind, "normalized": normalized, "canonical_name": normalized},
-                    node_id="entity_" + entity_identity,
-                )
-            await active_graph_store.add_edge(
-                source_node["id"], entity_node["id"], "mentions",
-                {"source_id": source_id, "revision": revision,
-                 "start": candidate["start"], "end": candidate["end"]},
+                entity_node = (await internal.request(
+                    "POST", "/api/v1/graph/nodes", request=request,
+                    json={
+                        "type": "entity", "id": "entity_" + entity_identity,
+                        "properties": {
+                            "entity_type": kind, "normalized": normalized,
+                            "canonical_name": normalized,
+                        },
+                    },
+                ))["node"]
+            edge_identity = hashlib.sha256(
+                f"{source_id}:{revision}:{entity_node['id']}:{candidate['start']}:{candidate['end']}".encode("utf-8")
+            ).hexdigest()
+            await internal.request(
+                "POST", "/api/v1/graph/edges", request=request,
+                json={
+                    "source": source_node["id"], "target": entity_node["id"],
+                    "type": "mentions", "id": "mention_" + edge_identity,
+                    "properties": {
+                        "source_id": source_id, "revision": revision,
+                        "start": candidate["start"], "end": candidate["end"],
+                    },
+                },
             )
             linked += 1
         return linked
 
     async def ingest_indexed_document(
-        request: DocumentIn, *, embed: bool = True, vector_collection: str | None = None,
+        document: DocumentIn, *, embed: bool = True, vector_collection: str | None = None,
         origin: str = "document", locator: str | None = None,
+        request: Request | None = None,
     ):
-        revision_id = hashlib.sha256(request.content.encode("utf-8")).hexdigest()
-        profiles = {"chunking": request.chunk_profile, "media_type": request.media_type}
-        decision = await active_index_store.record_revision(
-            request.source_id, request.revision, revision_id, profiles
+        internal = InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
+            "entities": os.getenv("ENSEMBLE_ENTITIES_REST_URL"),
+            "graph": os.getenv("ENSEMBLE_GRAPH_REST_URL"),
+        })
+        revision_id = hashlib.sha256(document.content.encode("utf-8")).hexdigest()
+        profiles = {"chunking": document.chunk_profile, "media_type": document.media_type}
+        decision = await internal.request(
+            "POST", "/api/v1/index/revisions", request=request,
+            json={
+                "source_id": document.source_id,
+                "revision_sequence": document.revision,
+                "revision_id": revision_id,
+                "profiles": profiles,
+            },
         )
         if decision["decision"] not in {"accepted", "duplicate"}:
             raise HTTPException(
                 status_code=409,
                 detail="source revision rejected: " + decision["decision"],
             )
-        result = await documents.ingest(
-            request, embed=embed, vector_collection=vector_collection
+        result = await internal.request(
+            "POST", "/api/v1/documents/records", request=request,
+            json={
+                "document": document.model_dump(mode="json"),
+                "embed": embed,
+                "vector_collection": vector_collection,
+            },
         )
+        result = DocumentOut.model_validate(result)
         try:
             linked = await index_document_entities(
-                request.source_id, request.revision, request.content,
-                origin=origin, locator=locator or request.source_id,
+                document.source_id, document.revision, document.content,
+                origin=origin, locator=locator or document.source_id, request=request,
             )
             result.metadata = {**result.metadata, "graph_entities_indexed": linked}
         except Exception:
             result.metadata = {**result.metadata, "graph_entities_indexed": 0, "graph_degraded": True}
         return result, decision["decision"]
 
-    async def expand_graph_results(query: str, entities: list[dict[str, Any]], results: list[SearchHit], limit: int):
+    async def expand_graph_results(query: str, entities: list[dict[str, Any]], results: list[SearchHit], limit: int, internal: InternalRestClient, request: Request):
         graph_sources: dict[str, int] = {}
         graph_matches = []
         try:
             for candidate in entities:
                 if not candidate.get("exact"):
                     continue
-                matches = await active_graph_store.query_nodes(
-                    "entity",
-                    {"entity_type": candidate["type"], "normalized": candidate["normalized"]},
-                )
+                matches = (await internal.request(
+                    "POST", "/api/v1/graph/query", request=request,
+                    json={"type": "entity", "properties": {
+                        "entity_type": candidate["type"], "normalized": candidate["normalized"],
+                    }},
+                )).get("nodes", [])
                 if len(matches) != 1:
                     continue
                 entity_node = matches[0]
@@ -332,9 +389,11 @@ def create_app(
                     "type": candidate["type"],
                     "normalized": candidate["normalized"],
                 })
-                related = await active_graph_store.traverse(
-                    entity_node["id"], direction="in", max_depth=1, edge_type="mentions"
-                )
+                related = (await internal.request(
+                    "POST", "/api/v1/graph/traverse", request=request,
+                    json={"start": entity_node["id"], "direction": "in",
+                          "max_depth": 1, "edge_type": "mentions"},
+                )).get("results", [])
                 for item in related:
                     source_node = item["node"]
                     if source_node.get("type") != "source":
@@ -347,23 +406,34 @@ def create_app(
             if not graph_sources:
                 return results, {"matched_entities": graph_matches, "candidate_sources": 0}
 
-            indexed_chunks = await document_store.all_chunks()
-            by_source: dict[str, list[Any]] = {}
-            for item in indexed_chunks:
-                by_source.setdefault(item.document.source_id, []).append(item)
+            source_ids = sorted(graph_sources)
+            source_states: dict[str, dict[str, Any]] = {}
+            by_source: dict[str, list[dict[str, Any]]] = {}
+            for offset in range(0, len(source_ids), 200):
+                batch = source_ids[offset:offset + 200]
+                source_state_response = await internal.request(
+                    "POST", "/api/v1/index/sources/query", request=request,
+                    json={"source_ids": batch},
+                )
+                chunk_response = await internal.request(
+                    "POST", "/api/v1/documents/chunks/query", request=request,
+                    json={"source_ids": batch},
+                )
+                source_states.update(source_state_response.get("sources", {}))
+                for chunk in chunk_response.get("chunks", []):
+                    by_source.setdefault(chunk["source_id"], []).append(chunk)
             existing = {
                 (hit.source_id, str(hit.chunk_id)): index
                 for index, hit in enumerate(results)
             }
             expanded = list(results)
-            for source_rank, source_id in enumerate(sorted(graph_sources), start=1):
-                state = await active_index_store.get_source(source_id)
+            for source_rank, source_id in enumerate(source_ids, start=1):
+                state = source_states.get(source_id)
                 if state is None or state.get("tombstoned") or state.get("high_sequence") != graph_sources[source_id]:
                     continue
                 contribution = 1.0 / (60 + source_rank)
                 for item in by_source.get(source_id, []):
-                    document, chunk = item.document, item.chunk
-                    key = (source_id, str(chunk.id))
+                    key = (source_id, str(item["chunk_id"]))
                     if key in existing:
                         position = existing[key]
                         hit = expanded[position]
@@ -373,19 +443,16 @@ def create_app(
                         })
                         continue
                     expanded.append(SearchHit(
-                        document_id=document.id, source_id=source_id,
-                        revision=document.revision, title=document.title,
-                        chunk_id=chunk.id, chunk_ordinal=chunk.ordinal,
-                        text=chunk.content, lexical_score=0.0, vector_score=0.0,
+                        document_id=item["document_id"], source_id=source_id,
+                        revision=item["revision"], title=item["title"],
+                        chunk_id=item["chunk_id"], chunk_ordinal=item["chunk_ordinal"],
+                        text=item["text"], lexical_score=0.0, vector_score=0.0,
                         graph_score=contribution, fusion_score=contribution,
-                        chunk_profile=chunk.profile, chunk_start=chunk.start,
-                        chunk_end=chunk.end, chunk_header=chunk.header,
-                        session_id=document.metadata.get("session_id"),
-                        project=document.metadata.get("project"),
-                        role=document.metadata.get("role"),
-                        kind=document.metadata.get("kind"),
-                        is_subagent=document.metadata.get("is_subagent"),
-                        text_sha=hashlib.sha256(chunk.content.encode("utf-8")).hexdigest(),
+                        chunk_profile=item["chunk_profile"], chunk_start=item["chunk_start"],
+                        chunk_end=item["chunk_end"], chunk_header=item["chunk_header"],
+                        session_id=item.get("session_id"), project=item.get("project"),
+                        role=item.get("role"), kind=item.get("kind"),
+                        is_subagent=item.get("is_subagent"), text_sha=item["text_sha"],
                     ))
             expanded.sort(
                 key=lambda hit: (hit.fusion_score, hit.lexical_score, hit.graph_score, str(hit.chunk_id)),
@@ -399,27 +466,39 @@ def create_app(
                 "matched_entities": graph_matches, "candidate_sources": 0, "degraded": True,
             }
 
-    async def tombstone_indexed_source(source_id: str) -> dict[str, Any]:
+    async def tombstone_indexed_source(
+        source_id: str, request: Request | None = None,
+    ) -> dict[str, Any]:
         # The Index tombstone is authoritative before cleanup begins. Cleanup
-        # is deliberately best-effort: one failed store must not prevent the
-        # remaining stores and collections from being pruned.
+        # is best-effort: one failed capability must not prevent the remaining
+        # stores and vector collections from being pruned.
+        internal = InternalRestClient(app, {
+            "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+        })
         cleanup: dict[str, Any] = {
             "status": "complete", "retryable": False, "completed": [],
             "failed": [],
         }
-        for name, operation in (
-            ("documents", lambda: document_store.tombstone_source(source_id)),
-            ("knowledge", lambda: active_knowledge_store.tombstone(source_id)),
+        for name, path in (
+            ("documents", "/api/v1/documents/sources/tombstone"),
+            ("knowledge", "/api/v1/knowledge/sources/tombstone"),
         ):
             try:
-                await operation()
+                await internal.request(
+                    "POST", path, request=request, json={"source_id": source_id},
+                )
                 cleanup["completed"].append(name)
             except Exception as exc:
                 cleanup["failed"].append({
                     "target": name, "error": type(exc).__name__,
                 })
         try:
-            collections = await active_vector_store.list_collections()
+            response = await internal.request(
+                "GET", "/api/v1/vector/collections", request=request,
+            )
+            collections = response.get("collections", [])
         except Exception as exc:
             collections = []
             cleanup["failed"].append({
@@ -428,11 +507,14 @@ def create_app(
         for collection in collections:
             name = collection["name"]
             try:
-                deleted = await active_vector_store.delete_superseded(
-                    name, source_id, ""
+                response = await internal.request(
+                    "POST",
+                    f"/api/v1/vector/collections/{name}/sources/tombstone",
+                    request=request, json={"source_id": source_id},
                 )
                 cleanup["completed"].append({
-                    "target": "vector:" + name, "deleted": deleted,
+                    "target": "vector:" + name,
+                    "deleted": response.get("deleted") if isinstance(response, dict) else None,
                 })
             except Exception as exc:
                 cleanup["failed"].append({
@@ -612,6 +694,7 @@ def create_app(
             graph_entities = await index_document_entities(
                 source_id, sequence, content,
                 origin=provenance["origin"], locator=provenance["locator"],
+                request=request,
             )
         except Exception:
             graph_entities = 0
@@ -629,17 +712,49 @@ def create_app(
             raise HTTPException(status_code=404, detail="unknown record")
         return {"ok": True, "record": record}
 
+    @app.post("/api/v1/knowledge/sources/tombstone", tags=["knowledge"])
+    async def knowledge_source_tombstone(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        await active_knowledge_store.tombstone(source_id)
+        return {"ok": True, "source_id": source_id}
+
     @app.post("/api/v1/knowledge/records/{source_id}/tombstone", tags=["knowledge"])
-    async def knowledge_tombstone(source_id: str, payload: dict[str, Any]):
+    async def knowledge_tombstone(source_id: str, payload: dict[str, Any], request: Request):
         sequence = payload.get("revision_sequence")
         if not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
-        decision = await active_index_store.record_tombstone(source_id, sequence)
-        if decision["decision"] == "tombstoned":
-            await tombstone_indexed_source(source_id)
-        return {"ok": True, "decision": decision["decision"], "source_id": source_id}
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        return await internal.request(
+            "POST", "/api/v1/index/tombstones", request=request,
+            json={"source_id": source_id, "revision_sequence": sequence},
+        )
+
+    @app.post("/api/v1/documents/sources/tombstone", tags=["documents"])
+    async def documents_source_tombstone(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        await document_store.tombstone_source(source_id)
+        return {"ok": True, "source_id": source_id}
+
+    @app.post("/api/v1/documents/records", tags=["documents"])
+    async def documents_ingest(payload: dict[str, Any]):
+        try:
+            document = DocumentIn.model_validate(payload.get("document", {}))
+            result = await documents.ingest(
+                document,
+                embed=payload.get("embed", True),
+                vector_collection=payload.get("vector_collection"),
+            )
+            return result
+        except ChunkingError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/v1/index/health", tags=["index"])
     async def index_health():
@@ -671,7 +786,7 @@ def create_app(
         return {"ok": True, **result}
 
     @app.post("/api/v1/index/tombstones", tags=["index"])
-    async def index_tombstone(payload: dict[str, Any]):
+    async def index_tombstone(payload: dict[str, Any], request: Request):
         source_id = payload.get("source_id")
         sequence = payload.get("revision_sequence")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
@@ -680,10 +795,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         result = await active_index_store.record_tombstone(source_id, sequence)
         if result["decision"] == "tombstoned":
-            # Keep every ingestion path on the same cleanup routine. Sources may
-            # have vectors in transcript_text, knowledge_chunks, or future
-            # collections, not only the Knowledge collection.
-            cleanup = await tombstone_indexed_source(source_id)
+            cleanup = await tombstone_indexed_source(source_id, request)
         else:
             cleanup = {"status": "not_required", "retryable": False, "completed": [], "failed": []}
         return {"ok": True, **result, "cleanup": cleanup}
@@ -700,6 +812,56 @@ def create_app(
         if not 1 <= limit <= 500:
             raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
         return {"ok": True, "sources": await active_index_store.list_sources(limit)}
+
+    @app.post("/api/v1/index/sources/query", tags=["index"])
+    async def index_sources_query(payload: dict[str, Any]):
+        source_ids = payload.get("source_ids")
+        if (not isinstance(source_ids, list) or not source_ids
+                or len(source_ids) > 200
+                or any(not isinstance(value, str) or not value or len(value) > 2048
+                       for value in source_ids)):
+            raise HTTPException(status_code=400, detail="source_ids must contain 1-200 non-empty source identifiers")
+        sources = {}
+        for source_id in dict.fromkeys(source_ids):
+            source = await active_index_store.get_source(source_id)
+            if source is not None:
+                sources[source_id] = source
+        return {"ok": True, "sources": sources}
+
+    @app.post("/api/v1/documents/chunks/query", tags=["documents"])
+    async def document_chunks_query(payload: dict[str, Any]):
+        source_ids = payload.get("source_ids")
+        if (not isinstance(source_ids, list) or not source_ids
+                or len(source_ids) > 200
+                or any(not isinstance(value, str) or not value or len(value) > 2048
+                       for value in source_ids)):
+            raise HTTPException(status_code=400, detail="source_ids must contain 1-200 non-empty source identifiers")
+        selected = set(source_ids)
+        chunks = []
+        for item in await document_store.all_chunks():
+            document, chunk = item.document, item.chunk
+            if document.source_id not in selected:
+                continue
+            chunks.append({
+                "document_id": document.id,
+                "source_id": document.source_id,
+                "revision": document.revision,
+                "title": document.title,
+                "chunk_id": str(chunk.id),
+                "chunk_ordinal": chunk.ordinal,
+                "text": chunk.content,
+                "chunk_profile": chunk.profile,
+                "chunk_start": chunk.start,
+                "chunk_end": chunk.end,
+                "chunk_header": chunk.header,
+                "session_id": document.metadata.get("session_id"),
+                "project": document.metadata.get("project"),
+                "role": document.metadata.get("role"),
+                "kind": document.metadata.get("kind"),
+                "is_subagent": document.metadata.get("is_subagent"),
+                "text_sha": hashlib.sha256(chunk.content.encode("utf-8")).hexdigest(),
+            })
+        return {"ok": True, "chunks": chunks}
 
     @app.get("/api/v1/vector/health", tags=["vector"])
     async def vector_health():
@@ -791,6 +953,15 @@ def create_app(
         if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             raise HTTPException(status_code=400, detail="keep_sha256 must be a lowercase hex SHA-256")
         deleted = await active_vector_store.delete_superseded(name, url, digest)
+        return {"ok": True, "deleted": deleted}
+
+    @app.post("/api/v1/vector/collections/{name}/sources/tombstone", tags=["vector"])
+    async def vector_source_tombstone(name: str, payload: dict[str, Any]):
+        _validate_vector_collection_name(name)
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        deleted = await active_vector_store.delete_superseded(name, source_id, "")
         return {"ok": True, "deleted": deleted}
 
     @app.post("/api/v1/vector/collections/{name}/query", tags=["vector"])
@@ -1457,7 +1628,7 @@ def create_app(
         return {"ok": True, "ready": True, "token_estimator": "characters-divided-by-four"}
 
     @app.post("/api/v1/context/assemble", tags=["context"])
-    async def context_assemble(payload: dict[str, Any]):
+    async def context_assemble(payload: dict[str, Any], request: Request):
         query = payload.get("query")
         limit = payload.get("limit", 10)
         max_tokens = payload.get("max_tokens", 4000)
@@ -1480,22 +1651,37 @@ def create_app(
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise HTTPException(status_code=400, detail="limit must be an integer between 1 and 100")
 
+        internal = InternalRestClient(app, {
+            "search": os.getenv("ENSEMBLE_SEARCH_REST_URL"),
+            "memory": os.getenv("ENSEMBLE_MEMORY_REST_URL"),
+            "intent": os.getenv("ENSEMBLE_INTENT_REST_URL"),
+            "entities": os.getenv("ENSEMBLE_ENTITIES_REST_URL"),
+        })
         candidates = []
         degraded = []
+        intent_result = None
+        entity_result = []
         if include_search:
             try:
-                found = await search.search_with_status(query, limit=limit, rerank=False)
-                entities = extract(query, source="context.query")
-                hits, graph = await expand_graph_results(query, entities, found["results"], limit)
+                found = await internal.request(
+                    "POST", "/api/v1/search/hybrid",
+                    request=request,
+                    json={"query": query, "limit": limit, "rerank": False},
+                )
                 degraded.extend(found.get("degraded", []))
+                graph = found.get("graph_expansion", {})
                 if graph.get("degraded"):
                     degraded.append("graph")
-                for hit in hits:
+                for hit in found.get("results", []):
                     candidates.append({
-                        "source": "ensemble-retrieval", "title": hit.title,
-                        "content": hit.text, "score": hit.fusion_score,
-                        "source_id": hit.source_id, "revision": hit.revision,
-                        "chunk_id": str(hit.chunk_id), "graph_score": hit.graph_score,
+                        "source": "ensemble-retrieval",
+                        "title": hit.get("title", ""),
+                        "content": hit.get("text", ""),
+                        "score": hit.get("fusion_score", 0.0),
+                        "source_id": hit.get("source_id"),
+                        "revision": hit.get("revision"),
+                        "chunk_id": hit.get("chunk_id"),
+                        "graph_score": hit.get("graph_score", 0.0),
                     })
             except Exception:
                 degraded.append("search")
@@ -1503,36 +1689,82 @@ def create_app(
         if include_memory:
             try:
                 if memory_name is not None:
-                    recalled = await active_memory_store.retrieve(
-                        memory_name, execution_context, limit
+                    recalled = await internal.request(
+                        "POST", "/api/v1/memory/recall",
+                        request=request,
+                        json={
+                            "name": memory_name,
+                            "context": execution_context,
+                            "limit": limit,
+                        },
                     )
-                    priorities = {"parent": 100, "ancestor": 90, "same-request": 70, "related-lineage": 60}
-                    for item in recalled:
+                    priorities = {
+                        "parent": 100, "ancestor": 90,
+                        "same-request": 70, "related-lineage": 60,
+                    }
+                    for item in recalled.get("results", []):
                         candidates.append({
                             "source": "memory-recall",
                             "title": item.get("relation", "related execution"),
-                            "content": json.dumps(item.get("record", {}), ensure_ascii=False, sort_keys=True),
+                            "content": json.dumps(
+                                item.get("record", {}), ensure_ascii=False, sort_keys=True
+                            ),
                             "score": priorities.get(item.get("relation"), 0),
                             "relation": item.get("relation"),
                             "execution_context": item.get("execution_context"),
                         })
-                for item in await active_memory_store.search_semantic(query, top_k=limit):
+
+                semantic = await internal.request(
+                    "POST", "/api/v1/memory/search/semantic",
+                    request=request,
+                    json={"query": query, "top_k": limit},
+                )
+                for item in semantic.get("results", []):
                     file_name, section = item.get("file"), item.get("section", "full")
                     content = item.get("content", "")
                     if isinstance(file_name, str):
-                        chunks = await active_memory_store.chunk(file_name, size=2000)
-                        selected = next((part for part in chunks if part.get("header") == section), None)
+                        chunked = await internal.request(
+                            "POST", "/api/v1/memory/chunking",
+                            request=request,
+                            json={"name": file_name, "size": 2000},
+                        )
+                        selected = next(
+                            (part for part in chunked.get("chunks", [])
+                             if part.get("header") == section),
+                            None,
+                        )
                         if selected:
                             content = selected.get("content", content)
                     candidates.append({
-                        "source": "memory-document", "title": f"{file_name} · {section}",
-                        "content": content, "score": float(item.get("score", 0.0)),
-                        "file": file_name, "section": section,
+                        "source": "memory-document",
+                        "title": f"{file_name} · {section}",
+                        "content": content,
+                        "score": float(item.get("score", 0.0)),
+                        "file": file_name,
+                        "section": section,
                     })
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 400:
+                    raise HTTPException(status_code=400, detail="memory request was invalid") from exc
+                degraded.append("memory")
             except Exception:
                 degraded.append("memory")
+
+        try:
+            intent_result = await internal.request(
+                "POST", "/api/v1/intent/classify",
+                request=request, json={"text": query},
+            )
+        except Exception:
+            degraded.append("intent")
+
+        try:
+            entity_result = (await internal.request(
+                "POST", "/api/v1/entities/extract",
+                request=request, json={"text": query, "source": "context.query"},
+            )).get("entities", [])
+        except Exception:
+            degraded.append("entities")
 
         candidates.sort(key=lambda item: -float(item.get("score", 0.0)))
         try:
@@ -1541,7 +1773,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "ok": True, **assembled, "query": query,
-            "intent": classify(query), "entities": extract(query, source="context.query"),
+            "intent": intent_result, "entities": entity_result,
             "degraded": sorted(set(degraded)),
         }
 
@@ -1773,7 +2005,7 @@ def create_app(
                     "extracted_pages": extracted["extracted_pages"],
                 },
             )
-            result, decision = await ingest_indexed_document(document, origin="pdf", locator=source_id)
+            result, decision = await ingest_indexed_document(document, origin="pdf", locator=source_id, request=request)
             return {"ok": True, "decision": decision, "document": result, "extraction": {
                 "page_count": extracted["page_count"],
                 "extracted_pages": extracted["extracted_pages"],
@@ -1799,7 +2031,7 @@ def create_app(
             raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
 
     @app.post("/api/v1/ingest/urls", status_code=201, tags=["ingestion"])
-    async def scrape_and_ingest(payload: dict[str, Any]):
+    async def scrape_and_ingest(payload: dict[str, Any], request: Request):
         try:
             preview = await preview_uri(payload.get("uri"))
             source_id = preview["final_uri"]
@@ -1815,7 +2047,7 @@ def create_app(
                 metadata={"origin": "web", "locator": source_id},
             )
             result, decision = await ingest_indexed_document(
-                document, origin="web", locator=source_id
+                document, origin="web", locator=source_id, request=request
             )
             await active_knowledge_store.put({
                 "source_id": source_id, "revision_sequence": revision, "revision_id": digest,
@@ -1853,7 +2085,7 @@ def create_app(
             return await ingest_session(payload, request)
         try:
             document_request = DocumentIn.model_validate(payload)
-            result, _ = await ingest_indexed_document(document_request, embed=False)
+            result, _ = await ingest_indexed_document(document_request, embed=False, request=request)
             return result
         except ChunkingError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
@@ -1886,16 +2118,65 @@ def create_app(
             "degraded_mode": "lexical fallback",
         }
 
-    @app.post("/api/v1/search/hybrid", tags=["search"])
-    async def hybrid_search(request: SearchIn):
+    @app.post("/api/v1/search/retrieve", tags=["search"])
+    async def search_retrieve(search_request: SearchIn):
+        """Execute the Search capability's lexical/vector retrieval contract."""
         try:
-            result = await search.search_with_status(request.query, request.limit, rerank=False)
-            intent = classify(request.query)
-            entities = extract(request.query, source="search.query")
+            return await search.search_with_status(
+                search_request.query, search_request.limit, rerank=False
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="search retrieval failed") from exc
+
+    @app.post("/api/v1/search/hybrid", tags=["search"])
+    async def hybrid_search(search_request: SearchIn, request: Request):
+        internal = InternalRestClient(app, {
+            "graph": os.getenv("ENSEMBLE_GRAPH_REST_URL"),
+            "entities": os.getenv("ENSEMBLE_ENTITIES_REST_URL"),
+            "intent": os.getenv("ENSEMBLE_INTENT_REST_URL"),
+            "reranking": os.getenv("ENSEMBLE_RERANKING_REST_URL"),
+            "memory": os.getenv("ENSEMBLE_MEMORY_REST_URL"),
+            "search": os.getenv("ENSEMBLE_SEARCH_REST_URL"),
+        })
+        try:
+            # All capability composition crosses the versioned REST contracts.
+            # Search owns its retrieval algorithm and persistence implementation.
+            result = await internal.request(
+                "POST", "/api/v1/search/retrieve", request=request,
+                json=search_request.model_dump(mode="json"),
+            )
+            # HTTP JSON decoding returns dictionaries; restore the typed
+            # SearchHit contract before Hybrid applies graph/rerank/ledger logic.
+            result["results"] = [
+                SearchHit.model_validate(hit) for hit in result.get("results", [])
+            ]
+
+            try:
+                intent = await internal.request(
+                    "POST", "/api/v1/intent/classify", request=request,
+                    json={"text": search_request.query},
+                )
+            except Exception:
+                intent = None
+                result["degraded"].append("intent")
+
+            try:
+                entities_response = await internal.request(
+                    "POST", "/api/v1/entities/extract", request=request,
+                    json={"text": search_request.query, "source": "search.query"},
+                )
+                entities = entities_response.get("entities", [])
+            except Exception:
+                entities = []
+                result["degraded"].append("entities")
+
             result["intent"] = intent
             result["entities"] = entities
             result["results"], graph_expansion = await expand_graph_results(
-                request.query, entities, result["results"], request.limit
+                search_request.query, entities, result["results"],
+                search_request.limit, internal, request,
             )
             result["graph_expansion"] = graph_expansion
             if graph_expansion.get("degraded"):
@@ -1904,33 +2185,35 @@ def create_app(
                 result["retrieval"] = "hybrid"
 
             rerank_enabled = (
-                request.rerank if request.rerank is not None
+                search_request.rerank if search_request.rerank is not None
                 else os.getenv("ENSEMBLE_RERANK_ENABLED", "0").strip() == "1"
             )
             if rerank_enabled and result["results"]:
-                if not active_reranker.available:
+                candidates = result["results"][:min(30, len(result["results"]))]
+                try:
+                    reranked = await internal.request(
+                        "POST", "/api/v1/reranking/rerank", request=request,
+                        json={
+                            "query": search_request.query,
+                            "documents": [candidate.text[:4000] for candidate in candidates],
+                        },
+                    )
+                    scores = reranked.get("scores", [])
+                    if len(scores) != len(candidates) or any(
+                        not math.isfinite(float(score)) for score in scores
+                    ):
+                        raise RuntimeError("reranker returned invalid or misaligned scores")
+                    reranked_hits = [
+                        hit.model_copy(update={"rerank_score": float(score)})
+                        for hit, score in zip(candidates, scores)
+                    ]
+                    result["results"] = sorted(
+                        reranked_hits, key=lambda hit: hit.rerank_score, reverse=True
+                    ) + result["results"][len(candidates):]
+                    result["reranked"] = True
+                except Exception:
                     result["degraded"].append("reranking")
-                else:
-                    candidates = result["results"][:min(30, len(result["results"]))]
-                    try:
-                        scores = await asyncio.to_thread(
-                            active_reranker.score, request.query,
-                            [candidate.text[:4000] for candidate in candidates],
-                        )
-                        if len(scores) != len(candidates) or any(
-                            not math.isfinite(float(score)) for score in scores
-                        ):
-                            raise RuntimeError("reranker returned invalid or misaligned scores")
-                        reranked = [
-                            hit.model_copy(update={"rerank_score": float(score)})
-                            for hit, score in zip(candidates, scores)
-                        ]
-                        result["results"] = sorted(
-                            reranked, key=lambda hit: hit.rerank_score, reverse=True
-                        ) + result["results"][len(candidates):]
-                        result["reranked"] = True
-                    except Exception:
-                        result["degraded"].append("reranking")
+
             related = []
             try:
                 exact_paths = {
@@ -1938,7 +2221,10 @@ def create_app(
                     if item.get("exact") and item.get("type") in {"path", "file"}
                 }
                 if exact_paths:
-                    file_nodes = await active_graph_store.query_nodes("file", {})
+                    file_nodes = (await internal.request(
+                        "POST", "/api/v1/graph/query", request=request,
+                        json={"type": "file", "properties": {}},
+                    )).get("nodes", [])
                     sessions = {}
                     for file_node in file_nodes:
                         path = (file_node.get("properties") or {}).get("path", "")
@@ -1947,9 +2233,12 @@ def create_app(
                             for candidate in exact_paths
                         ):
                             continue
-                        for hit in await active_graph_store.traverse(
-                            file_node["id"], direction="in", max_depth=1, edge_type="touched"
-                        ):
+                        touched = (await internal.request(
+                            "POST", "/api/v1/graph/traverse", request=request,
+                            json={"start": file_node["id"], "direction": "in",
+                                  "max_depth": 1, "edge_type": "touched"},
+                        )).get("results", [])
+                        for hit in touched:
                             node = hit["node"]
                             props = node.get("properties") or {}
                             session_id = props.get("session_id")
@@ -1964,13 +2253,16 @@ def create_app(
             except Exception:
                 result["degraded"].append("graph")
             result["related_sessions"] = related
-            # Successful searches are recorded for audit/learning. Ledger failure
-            # must never turn a successful retrieval into a failed request.
+
+            # Successful searches are recorded for audit/learning through the
+            # Memory resource contract. Ledger failure never fails retrieval.
             try:
-                await active_memory_store.append(
-                    "search-ledger",
-                    {
-                        "query": request.query,
+                await internal.request(
+                    "PUT",
+                    f"/api/v1/memory/memories/search-ledger/entries/search-{uuid4()}",
+                    request=request,
+                    json={"entry": {
+                        "query": search_request.query,
                         "intent": result["intent"],
                         "degraded": result["degraded"],
                         "result_count": len(result["results"]),
@@ -1980,8 +2272,7 @@ def create_app(
                             "chunk_id": str(hit.chunk_id),
                             "score": hit.fusion_score,
                         } for hit in result["results"]],
-                    },
-                    event_id=f"search-{uuid4()}",
+                    }},
                 )
             except Exception:
                 pass
@@ -1992,14 +2283,40 @@ def create_app(
             raise HTTPException(status_code=502, detail="hybrid search failed") from exc
 
     @app.post("/api/v1/search/hybrid/knowledge", tags=["search"])
-    async def hybrid_knowledge_search(request: SearchIn):
-        if not embeddings.available:
-            raise HTTPException(status_code=503, detail="knowledge search requires an available embedding provider")
+    async def hybrid_knowledge_search(search_request: SearchIn, request: Request):
+        internal = InternalRestClient(app, {
+            "embeddings": os.getenv("ENSEMBLE_EMBEDDINGS_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+        })
         try:
-            vector = (await embeddings.embed([request.query], mode="query"))[0]
-            candidates = await active_vector_store.query(
-                "knowledge_chunks", vector, min(200, max(request.limit, request.limit * 4))
+            embedded = await internal.request(
+                "POST", "/api/v1/embeddings/embed", request=request,
+                json={"texts": [search_request.query], "mode": "query"},
             )
+            vectors = embedded.get("embeddings", [])
+            if len(vectors) != 1:
+                raise RuntimeError("embedding capability returned an invalid result")
+            response = await internal.request(
+                "POST", "/api/v1/vector/collections/knowledge_chunks/query",
+                request=request,
+                json={
+                    "embedding": vectors[0],
+                    "top_k": min(200, max(search_request.limit, search_request.limit * 4)),
+                    "dimensions": embedded.get("dimensions"),
+                },
+            )
+            candidates = response.get("results", [])
+            source_ids = sorted({
+                item.get("metadata", {}).get("source_id")
+                for item in candidates
+                if isinstance(item.get("metadata"), dict)
+                and isinstance(item["metadata"].get("source_id"), str)
+            })
+            states = (await internal.request(
+                "POST", "/api/v1/index/sources/query", request=request,
+                json={"source_ids": source_ids},
+            )).get("sources", {})
             results = []
             for candidate in candidates:
                 metadata = candidate.get("metadata")
@@ -2011,14 +2328,14 @@ def create_app(
                     or isinstance(revision, bool) or not isinstance(revision, int)
                 ):
                     continue
-                source = await active_index_store.get_source(source_id)
+                source = states.get(source_id)
                 if (
                     source is None or source.get("tombstoned")
                     or source.get("high_sequence") != revision
                 ):
                     continue
                 results.append(candidate)
-                if len(results) >= request.limit:
+                if len(results) >= search_request.limit:
                     break
             return {
                 "ok": True, "results": results, "degraded": [],
@@ -2160,16 +2477,30 @@ def create_app(
             if total_chars > 4_000_000:
                 raise HTTPException(status_code=413, detail="session content exceeds 4000000 characters")
         session_id, project, file_path = session["session_id"], session["project"], session["file"]
+        internal = InternalRestClient(app, {
+            "graph": os.getenv("ENSEMBLE_GRAPH_REST_URL"),
+            "memory": os.getenv("ENSEMBLE_MEMORY_REST_URL"),
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "entities": os.getenv("ENSEMBLE_ENTITIES_REST_URL"),
+        })
         try:
-            session_node = await active_graph_store.add_node("session", {
-                "session_id": session_id, "project": project,
-                "title": session.get("title"), "file": file_path,
-            })
-            file_node = await active_graph_store.add_node("file", {
-                "path": file_path, "session_id": session_id, "project": project,
-            })
-            await active_graph_store.add_edge(
-                session_node["id"], file_node["id"], "contains", {}
+            session_node = (await internal.request(
+                "POST", "/api/v1/graph/nodes", request=request,
+                json={"type": "session", "properties": {
+                    "session_id": session_id, "project": project,
+                    "title": session.get("title"), "file": file_path,
+                }},
+            ))["node"]
+            file_node = (await internal.request(
+                "POST", "/api/v1/graph/nodes", request=request,
+                json={"type": "file", "properties": {
+                    "path": file_path, "session_id": session_id, "project": project,
+                }},
+            ))["node"]
+            await internal.request(
+                "POST", "/api/v1/graph/edges", request=request,
+                json={"source": session_node["id"], "target": file_node["id"],
+                      "type": "contains", "properties": {}},
             )
             inserted = duplicates = 0
             degraded = []
@@ -2185,12 +2516,20 @@ def create_app(
                     "kind": kind, "text": message["text"],
                     "timestamp": message.get("ts", ""),
                 }
-                stored = await active_memory_store.append("session-events", event, event_id=event_id)
+                stored = await internal.request(
+                    "PUT",
+                    f"/api/v1/memory/memories/session-events/entries/{event_id}",
+                    request=request, json={"entry": event},
+                )
                 source_identity = hashlib.sha256(
                     f"{session_id}|{message['uuid']}|{kind}".encode("utf-8")
                 ).hexdigest()
                 source_id = f"transcript:{source_identity}"
-                source_state = await active_index_store.get_source(source_id)
+                source_states = (await internal.request(
+                    "POST", "/api/v1/index/sources/query", request=request,
+                    json={"source_ids": [source_id]},
+                )).get("sources", {})
+                source_state = source_states.get(source_id)
                 if source_state is None:
                     revision = 1
                 elif source_state.get("revision_id") == content_revision:
@@ -2212,7 +2551,8 @@ def create_app(
                     },
                 )
                 ingested, _ = await ingest_indexed_document(
-                    document, vector_collection="transcript_text", origin="transcript", locator=file_path
+                    document, vector_collection="transcript_text", origin="transcript", locator=file_path,
+                    request=request,
                 )
                 if embeddings.available and not ingested.embedded:
                     degraded.append("embeddings")
@@ -2222,14 +2562,23 @@ def create_app(
                     duplicates += 1
                 else:
                     inserted += 1
-                for entity in extract(message["text"]):
+                extracted = await internal.request(
+                    "POST", "/api/v1/entities/extract", request=request,
+                    json={"text": message["text"], "source": "transcript"},
+                )
+                for entity in extracted.get("entities", []):
                     if entity.get("exact") and entity.get("type") in {"path", "file"}:
-                        path_node = await active_graph_store.add_node("file", {
-                            "path": entity["text"], "session_id": session_id,
-                            "project": project,
-                        })
-                        await active_graph_store.add_edge(
-                            session_node["id"], path_node["id"], "touched", {}
+                        path_node = (await internal.request(
+                            "POST", "/api/v1/graph/nodes", request=request,
+                            json={"type": "file", "properties": {
+                                "path": entity["text"], "session_id": session_id,
+                                "project": project,
+                            }},
+                        ))["node"]
+                        await internal.request(
+                            "POST", "/api/v1/graph/edges", request=request,
+                            json={"source": session_node["id"], "target": path_node["id"],
+                                  "type": "touched", "properties": {}},
                         )
             return {
                 "ok": True, "session_id": session_id,
@@ -2243,9 +2592,9 @@ def create_app(
             raise HTTPException(status_code=503, detail="session ingestion dependency unavailable") from exc
 
     @app.post("/api/v1/ingest/documents", response_model=DocumentOut, status_code=201, tags=["ingestion"])
-    async def ingest_document(request: DocumentIn):
+    async def ingest_document(document: DocumentIn, http_request: Request):
         try:
-            result, _ = await ingest_indexed_document(request)
+            result, _ = await ingest_indexed_document(document, request=http_request)
             return result
         except HTTPException:
             raise
