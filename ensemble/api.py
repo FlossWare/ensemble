@@ -233,8 +233,8 @@ def create_app(
         for job in jobs:
             source_id = job["source_id"]
             try:
-                # The authoritative Index tombstone is retained. Only active
-                # materialized data is reclaimed; generation tombstones remain.
+                # The authoritative Index tombstone and generation source
+                # tombstones are retained; source payloads are physically reclaimed.
                 # Graph source nodes and mention edges are derived materialized
                 # data too. Remove them before marking the Index source purged;
                 # shared entity nodes are retained.
