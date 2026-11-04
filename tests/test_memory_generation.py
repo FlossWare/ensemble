@@ -12,12 +12,12 @@ from ensemble.rebuild import IndexGenerationBuilder
 
 
 def test_memory_generation_snapshot_and_reconciliation_are_durable(tmp_path):
-    async def exercise():
-        database_url = f"sqlite+aiosqlite:///{tmp_path / 'memory-generation.db'}"
-        config = Config("alembic.ini")
-        config.set_main_option("sqlalchemy.url", database_url)
-        command.upgrade(config, "head")
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'memory-generation.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
 
+    async def exercise():
         index = SqliteIndexStore(database_url)
         memory = SqliteMemoryStore(database_url)
         await index.initialize()
@@ -57,12 +57,12 @@ def test_memory_generation_snapshot_and_reconciliation_are_durable(tmp_path):
 
 
 def test_memory_writes_are_blocked_while_generation_write_fence_is_held(tmp_path):
-    async def exercise():
-        database_url = f"sqlite+aiosqlite:///{tmp_path / 'memory-fence.db'}"
-        config = Config("alembic.ini")
-        config.set_main_option("sqlalchemy.url", database_url)
-        command.upgrade(config, "head")
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'memory-fence.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
 
+    async def exercise():
         index = SqliteIndexStore(database_url)
         memory = SqliteMemoryStore(database_url)
         await index.initialize()
