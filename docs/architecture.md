@@ -6,14 +6,14 @@
 
 Ensemble is the shared, standalone platform for reusable intelligence capabilities. It is built first.
 
-The platform owns the reusable capabilities and their service contracts. Client-specific repositories own only their client integration and workflows.
+The platform owns reusable capabilities and their service contracts. Client-specific repositories own only their client integration and workflows.
 
 - ensemble: shared platform and capabilities.
 - ensemble-claude: Claude-specific integration consuming Ensemble.
-- Claude, Codex, Cursor, Crush, and other applications are optional clients.
+- Claude Code, Codex, Cursor, Crush, and other applications are optional clients.
 - The historical claude-ensemble and poc-claude-ensemble repositories are source material to assess and consolidate, not assumed to be the long-term platform boundary.
 
-Ensemble must start and operate without Claude Code, Codex, Cursor, MCP clients, or any other AI coding assistant.
+Ensemble must start and operate without Claude Code, Codex, Cursor, MCP clients, or any other AI coding assistant installed, authenticated, or running.
 
 ## 2. REST is the service contract
 
@@ -46,7 +46,31 @@ A decorator may wrap a REST client/implementation while preserving the same serv
 
 Provider selection can compose multiple implementations behind one capability. For example, an embedding capability may route requests to multiple independently hosted embedding servers based on model, dimensions, workload, policy, or availability.
 
-## 5. RAG and MCP
+## 5. Model access and client boundary
+
+Model inference is an Ensemble capability, not an AI-client integration.
+
+- Ensemble owns a provider-neutral model invocation contract, model catalog, explicit routing, and usage records.
+- Provider adapters implement external inference protocols. The Anthropic Messages API is one adapter protocol, not Ensemble's universal internal contract.
+- EnMaaS is the first identified enterprise model gateway and the first candidate provider adapter. Its Anthropic Messages API compatibility does not make Claude Code a dependency.
+- Other gateways and direct providers may be added through adapters without changing consumers of Ensemble's model-access REST contract.
+- Enterprise and personal provider profiles, credentials, model allowlists, and policies must remain isolated.
+- Model selection must be explicit. Unknown, unavailable, or unauthorized models fail clearly; there is no silent provider or model fallback.
+- Gateway discovery informs the catalog but does not itself establish workload approval or authorization.
+- Ensemble must not duplicate or bypass upstream gateway authorization and enterprise policy.
+
+**AI clients are consumers, not model-provider implementations.** Claude Code, Codex, Cursor, Crush, and similar applications may call Ensemble APIs, but they do not belong in Ensemble's core runtime or provider registry.
+
+In particular:
+
+- No ClaudeCodeProvider, Claude CLI subprocess, Claude authentication check, or Claude-specific runtime selection belongs in Ensemble core.
+- No Claude installation, account, token, or configuration is required to start or operate Ensemble.
+- If a client-specific integration is needed, it belongs in its own integration project (for example, ensemble-claude).
+- A client may use its own model gateway independently while consuming Ensemble memory, knowledge, retrieval, or other capabilities. Using Ensemble does not require routing that client's inference through Ensemble.
+
+See [Model Access](model-access.md) for the initial provider boundary and EnMaaS direction.
+
+## 6. RAG and MCP
 
 ### RAG
 
@@ -63,7 +87,7 @@ MCP is an optional adapter over existing Ensemble REST capabilities.
 - MCP contains no duplicate business logic.
 - Ensemble remains fully usable when MCP is disabled.
 
-## 6. Storage and active POC ingestion
+## 7. Storage and active POC ingestion
 
 The initial storage foundation reuses the existing POC data and storage:
 
@@ -78,7 +102,7 @@ Before changing storage ownership, inventory the actual deployed databases, coll
 
 Reuse existing data first; assess and consolidate implementation behind Ensemble contracts afterward.
 
-## 7. Capability consolidation
+## 8. Capability consolidation
 
 Existing POC and related work should be assessed as candidate Ensemble capabilities rather than automatically retained as separate platforms or repositories. Candidate areas include:
 
@@ -86,6 +110,7 @@ Existing POC and related work should be assessed as candidate Ensemble capabilit
 - Graph
 - Knowledge
 - Retrieval and RAG
+- Model access and provider routing
 - Embeddings and provider routing
 - Reranking and ranking
 - Chunking and tokenization
@@ -94,26 +119,35 @@ Existing POC and related work should be assessed as candidate Ensemble capabilit
 
 This is an inventory for assessment, not a claim that every capability is complete or that each requires a separate process.
 
-## 8. Explicitly deferred
+## 9. Explicitly deferred
 
 - Messaging endpoint/service.
 - Federation infrastructure and distributed service discovery.
 - Service mesh, message broker, and distributed coordination.
 - Mandatory MCP support.
 - Dependency on any particular AI client or model vendor.
+- Anthropic-compatible public API facade over Ensemble's provider-neutral model contract, unless a concrete consumer requires it.
+- Streaming, tool use, and advanced model features until provider-specific support and requirements are verified.
 
-## 9. Initial implementation sequence
+## 10. Initial implementation sequence
 
 1. Establish the repository architecture and REST contract conventions.
 2. Inventory the active POC storage and ingestion without interrupting it.
 3. Map existing capabilities, implementations, data ownership, and dependencies into Ensemble boundaries.
 4. Define the minimum server and endpoint skeleton.
-5. Reuse existing ChromaDB/SQLite data through Ensemble REST contracts.
-6. Consolidate capabilities incrementally and validate against existing data.
-7. Build ensemble-claude and other clients as independent consumers.
+5. Define provider-neutral model-access contracts and the EnMaaS adapter boundary.
+6. Reuse existing ChromaDB/SQLite data through Ensemble REST contracts.
+7. Consolidate capabilities incrementally and validate against existing data.
+8. Build ensemble-claude and other clients as independent consumers.
 
-## 10. Architectural test
+## 11. Architectural tests
 
-Can a capability move from the initial co-located Ensemble deployment to another host without changing its consumers or its REST contract?
+The architecture must pass these tests:
 
-If yes, the architecture supports the intended future federation without requiring federation machinery today.
+1. Can Ensemble start, become healthy, and serve its REST APIs when Claude Code is not installed?
+2. Can Ensemble start and serve non-model capabilities when no model provider is configured or reachable?
+3. Can a capability move from the initial co-located deployment to another host without changing its consumers or REST contract?
+4. Can Claude Code, Crush, Cursor, or another client consume Ensemble without becoming a runtime dependency?
+5. Can a model provider be replaced or added without changing the provider-neutral model-access contract?
+
+If yes, the architecture preserves the intended independence and future deployment flexibility without requiring premature federation machinery.
