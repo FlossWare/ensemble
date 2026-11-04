@@ -89,7 +89,7 @@ Implemented in this branch:
 - Post-activation document/vector/Knowledge writes, Index manifest changes, Memory snapshots, and tombstones are reflected in the active generation.
 - Activation is retry-safe when the original response is lost.
 
-The end-to-end cutover tests cover initial ingestion, bounded copy, independent reconciliation, fencing, activation, retrieval from the new generation, post-activation document/Knowledge/vector writes, metadata updates, pruning, tombstone removal, activation retry after a lost response, Memory snapshot updates, and restart recovery of an abandoned fence. The latest verified integration implementation commit `fd4bcd398c97bd417dfabc8fba7bfa9cba33fcfa` passed **203 tests, 1 skipped**. A subsequent documentation-only commit is undergoing the same CI workflow before PR creation.
+The end-to-end cutover tests cover initial ingestion, bounded copy, independent reconciliation, fencing, activation, retrieval from the new generation, post-activation document/Knowledge/vector writes, metadata updates, pruning, tombstone removal, activation retry after a lost response, Memory snapshot updates, restart recovery of an abandoned fence, and Index-authoritative filtering before downstream cleanup. The integration head `7c2fa457732bef9e2ec4c3f1b0d5cde8aae5e7a7` passed **203 tests, 1 skipped**. Consolidated PR [#42](https://github.com/FlossWare/ensemble/pull/42) is open against `main`; merge is pending review and required PR checks.
 
 ## Partition isolation implementation
 
