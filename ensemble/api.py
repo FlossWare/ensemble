@@ -20,6 +20,7 @@ from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chu
 from .embeddings import EmbeddingProvider, MAX_BODY_BYTES as MAX_EMBED_BODY_BYTES, configured_embedding_provider, validate_embedding_request
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
+from .rrf import reciprocal_rank_fusion
 from .rest_client import InternalRestClient
 from .store import DocumentStore, InMemoryDocumentStore, SqlDocumentStore
 from .vector_store import SqliteVectorStore, VectorStore
@@ -1648,6 +1649,35 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "results": results}
+
+
+    @app.post("/api/v1/ranking/fuse", tags=["ranking"])
+    async def fuse_ranked_candidates(payload: dict[str, Any]):
+        """Provider-neutral weighted RRF over caller-supplied ranked candidate lists."""
+        try:
+            results = reciprocal_rank_fusion(
+                payload.get("channels"),
+                k=payload.get("k", 60),
+                weights=payload.get("weights"),
+                identity_key=payload.get("identity_key", "chunk_id"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "ok": True,
+            "algorithm": "weighted_rrf" if payload.get("weights") else "rrf",
+            "k": payload.get("k", 60),
+            "results": [
+                {
+                    "candidate_id": item.candidate_id,
+                    "candidate": dict(item.candidate),
+                    "score": item.score,
+                    "ranks": dict(item.ranks),
+                    "contributions": dict(item.contributions),
+                }
+                for item in results
+            ],
+        }
 
 
 

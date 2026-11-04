@@ -1338,3 +1338,36 @@ def test_context_assembly_works_without_search_or_memory_dependencies(tmp_path):
         assert result["sources"] == []
         assert result["intent"] is not None
         assert result["degraded"] == []
+
+
+
+def test_ranking_fuse_endpoint_supports_weighted_multi_channel_rrf():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        response = client.post("/api/v1/ranking/fuse", json={
+            "k": 10,
+            "weights": {"lexical": 2.0, "vector": 0.5, "graph": 1.0},
+            "channels": {
+                "lexical": [{"chunk_id": "a"}, {"chunk_id": "b"}],
+                "vector": [{"chunk_id": "b"}, {"chunk_id": "c"}],
+                "graph": [{"chunk_id": "c"}, {"chunk_id": "a"}],
+            },
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["algorithm"] == "weighted_rrf"
+        assert body["results"][0]["candidate_id"] == "a"
+        assert body["results"][0]["ranks"] == {"lexical": 1, "graph": 2}
+        assert body["results"][0]["contributions"] == {
+            "lexical": 2 / 11, "graph": 1 / 12,
+        }
+
+
+def test_ranking_fuse_endpoint_rejects_invalid_channel_weights():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        response = client.post("/api/v1/ranking/fuse", json={
+            "channels": {"lexical": [{"chunk_id": "a"}]},
+            "weights": {"lexical": -1},
+        })
+        assert response.status_code == 400
