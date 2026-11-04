@@ -68,6 +68,16 @@ def test_generation_api_runs_all_copy_and_reconciliation_passes_before_fence(tmp
         assert fenced.json()["generation_id"] == "generation-api-test"
         status = client.get("/api/v1/index/generations")
         assert status.json()["build"]["activation_ready"] is True
+        blocked_vector_write = client.put(
+            "/api/v1/vector/collections/fenced_test/records",
+            json={
+                "ids": ["blocked-vector"], "embeddings": [[1.0, 0.0]],
+                "documents": ["must not write while fenced"],
+                "metadatas": [{"source_id": "fenced-source"}],
+                "model": "test-model", "dimensions": 2,
+            },
+        )
+        assert blocked_vector_write.status_code == 409
 
 
 
