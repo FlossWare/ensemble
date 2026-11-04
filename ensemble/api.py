@@ -1143,6 +1143,14 @@ def create_app(
     async def index_reclamation_status():
         return {"ok": True, "jobs": await active_reclamation_store.status()}
 
+    @app.post("/api/v1/index/reclamation/run", tags=["index"])
+    async def index_reclamation_run():
+        processed = await reclaim_due_sources()
+        return {
+            "ok": True, "processed": processed,
+            "jobs": await active_reclamation_store.status(),
+        }
+
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
     async def index_source(source_id: str):
         source = await active_index_store.get_source(source_id)
