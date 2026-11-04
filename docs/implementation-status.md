@@ -76,3 +76,17 @@ Not yet implemented:
 - Authentication, partition enforcement, durable ingestion/background jobs, production observability, rate limits, backup/restore automation, and deployment/upgrade hardening.
 
 SQLite is the only persistence implementation in this repository. FTS5 provides the lexical index. Embeddings are stored as JSON and scored by exact scan in the application; this is not a scalable approximate-nearest-neighbor vector index.
+
+
+## Durable transcript jobs
+
+Implemented:
+- Revision-scoped transcript checkpoints and per-slice job records persist in SQLite.
+- Job states track running, completed, failed, and interrupted work, including attempts, failure details, payload digests, and results.
+- Jobs left running at process startup are marked interrupted; callers recover by resubmitting the same slice because raw payloads are not retained.
+- Exact retries are idempotent, including zero-byte incomplete-tail retries.
+- REST endpoints expose individual transcript job status and recent job history.
+- Checkpoint identity, offsets, result shape, and SHA-256 payload digests are validated consistently by SQLite and in-memory adapters.
+- Conditional checkpoint updates prevent stale writers from silently advancing offsets.
+
+Ingestion remains synchronous. This is caller-driven retry/recovery, not automatic background replay or a claim of production readiness.
