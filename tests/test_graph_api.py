@@ -1,7 +1,10 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from ensemble.api import create_app
 from ensemble.store import InMemoryDocumentStore
+from ensemble.graph_memory import InMemoryGraphStore
 
 
 def test_graph_rest_add_query_and_traverse():
@@ -33,3 +36,25 @@ def test_graph_rejects_missing_edge_endpoints_and_unknown_traversal_start():
         assert edge.status_code == 404
         traversal = client.post("/api/v1/graph/traverse", json={"start": "missing"})
         assert traversal.status_code == 404
+
+
+def test_in_memory_graph_source_reclamation_preserves_shared_entities():
+    async def scenario():
+        graph = InMemoryGraphStore()
+        source = await graph.add_node(
+            "source", {"source_id": "source-to-purge", "revision": 2}, "source-node",
+        )
+        entity = await graph.add_node(
+            "entity", {"entity_type": "concept", "normalized": "shared"}, "shared-entity",
+        )
+        await graph.add_edge(
+            source["id"], entity["id"], "mentions",
+            {"source_id": "source-to-purge", "revision": 2}, "owned-mention",
+        )
+        reclaimed = await graph.reclaim_source("source-to-purge")
+        assert reclaimed == 2
+        assert await graph.get_node("source-node") is None
+        assert await graph.get_node("shared-entity") is not None
+        assert await graph.query_edges() == []
+
+    asyncio.run(scenario())
