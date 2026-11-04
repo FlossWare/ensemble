@@ -177,7 +177,7 @@ Branch: `integration/source-lifecycle-mainline-2026-11-04` (not yet merged).
 - Control endpoints expose reclamation queue status and an operator-triggered bounded pass.
 - Direct document writes require a matching current Index revision; direct document/Knowledge/vector source tombstones require the Index tombstone lifecycle.
 - Standalone vector upsert, metadata, and prune operations are paused during generation rebuilds. Normal indexed ingestion remains available and is reconciled through the Index change journal.
-- Latest verified integration CI: **249 passed, 1 skipped, 1 warning**.
+- Latest verified integration CI: **258 passed, 1 skipped, 1 warning**.
 
 ## Current main state
 

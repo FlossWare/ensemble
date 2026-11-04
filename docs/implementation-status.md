@@ -104,7 +104,7 @@ Branch `integration/source-lifecycle-mainline-2026-11-04` is in progress and not
 - Activation rejects incomplete checkpoints. Injected failure during the activation transaction preserves the previous active pointer, generation state, epoch, and write fence.
 - Memory generation snapshots reconcile updates and deletions during rebuild and continue mirroring writes and deletes after activation.
 - Vector generation mirroring reflects the persisted base Vector state. A failed active-generation mirror leaves the Index journal unacknowledged for retry; non-embedded revisions remove stale vectors from both stores.
-- Latest verified integration CI at the time of this update: **247 passed, 1 skipped, 1 warning**. The branch includes source-reclamation retry safety, bounded generation cleanup, RRF diagnostics/evaluation, and Thompson-adaptive retrieval weighting; latest run is green.
+- Latest verified integration CI at the time of this update: **258 passed, 1 skipped, 1 warning**. The branch includes source-reclamation retry safety, bounded generation cleanup, RRF diagnostics/evaluation, and Thompson-adaptive retrieval weighting; latest run is green.
 
 ## Partition isolation implementation
 
