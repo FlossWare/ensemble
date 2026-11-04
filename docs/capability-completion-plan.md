@@ -187,3 +187,13 @@ These are implemented slices, not a declaration that the platform is production-
 5. Finish Control Center usability and real execution diagnostics, while keeping all operations REST-backed.
 6. Complete operational readiness: backup/restore, migrations/upgrade, observability, rate limits, authentication/authorization, and partition enforcement.
 7. Verify the local embedding/reranking runtime matrix and decide when exact vector scans require a local ANN implementation.
+
+### Reversible deletion and deferred permanent purge
+
+Source lifecycle has two distinct operations:
+
+1. **Soft delete:** mark the authoritative Index source deleted and hide it from every retrieval surface immediately. Retain the underlying document/chunk, Knowledge, and Vector materializations so the source can be restored.
+2. **Restore:** reactivate retained materializations and clear the Index deletion state with a new, higher revision sequence. Permanently purged sources cannot be restored.
+3. **Permanent purge:** an explicit request marks the source irreversibly purged and queues bounded, retryable physical removal. The compact Index purge marker remains to prevent stale writes or rebuilds from resurrecting it.
+
+The durable SQLite worker handles purge batches, retry/backoff, and restart recovery. Automatic retention-based purge is deliberately not enabled until a configurable retention policy is defined. Memory imports, Graph lineage, retired generation materializations, and privacy erasure remain separate lifecycle concerns.

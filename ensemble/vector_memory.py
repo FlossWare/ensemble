@@ -76,10 +76,50 @@ class InMemoryVectorStore:
             del collection["records"][record_id]
         return len(stale)
 
+    async def tombstone_source(self, source_id: str) -> int:
+        changed = 0
+        for collection in self._collections.values():
+            for records in [collection.get("records", {}), *collection.get("generations", {}).values()]:
+                for item in records.values():
+                    metadata = item.get("metadata", {})
+                    if metadata.get("source_id") == source_id or metadata.get("url") == source_id:
+                        if not metadata.get("_tombstoned"):
+                            metadata["_tombstoned"] = True
+                            changed += 1
+        return changed
+
+    async def restore_source(self, source_id: str) -> int:
+        changed = 0
+        for collection in self._collections.values():
+            for records in [collection.get("records", {}), *collection.get("generations", {}).values()]:
+                for item in records.values():
+                    metadata = item.get("metadata", {})
+                    if metadata.get("source_id") == source_id or metadata.get("url") == source_id:
+                        if metadata.pop("_tombstoned", None):
+                            changed += 1
+        return changed
+
+    async def reclaim_source(self, source_id: str) -> int:
+        removed = 0
+        for collection in self._collections.values():
+            records = collection.get("records", {})
+            stale = [record_id for record_id, item in records.items()
+                     if item.get("metadata", {}).get("source_id") == source_id
+                     or item.get("metadata", {}).get("url") == source_id]
+            selected = stale[:500]
+            for record_id in selected:
+                del records[record_id]
+            removed += len(selected)
+            if len(stale) > 500:
+                return 501
+        return removed
+
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]:
         collection = self._collections.get(name, {"records": {}})
         scored = []
         for record_id, item in collection["records"].items():
+            if item.get("metadata", {}).get("_tombstoned"):
+                continue
             score = sum(left * right for left, right in zip(item["embedding"], embedding))
             scored.append({
                 "id": record_id, "document": item["document"],
@@ -114,6 +154,8 @@ class InMemoryVectorStore:
         generation = collection.get("generations", {}).get(generation_id, {})
         scored = []
         for record_id, item in generation.items():
+            if item.get("metadata", {}).get("_tombstoned"):
+                continue
             if len(item["embedding"]) != len(embedding):
                 continue
             score = sum(left * right for left, right in zip(item["embedding"], embedding))
