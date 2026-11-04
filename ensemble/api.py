@@ -399,16 +399,49 @@ def create_app(
                 "matched_entities": graph_matches, "candidate_sources": 0, "degraded": True,
             }
 
-    async def tombstone_indexed_source(source_id: str) -> None:
-        await document_store.tombstone_source(source_id)
-        await active_knowledge_store.tombstone(source_id)
-        # Source records may have been written through different ingestion
-        # capabilities and vector collections. Remove them all, not just
-        # Knowledge's collection.
-        for collection in await active_vector_store.list_collections():
-            await active_vector_store.delete_superseded(
-                collection["name"], source_id, ""
-            )
+    async def tombstone_indexed_source(source_id: str) -> dict[str, Any]:
+        # The Index tombstone is authoritative before cleanup begins. Cleanup
+        # is deliberately best-effort: one failed store must not prevent the
+        # remaining stores and collections from being pruned.
+        cleanup: dict[str, Any] = {
+            "status": "complete", "retryable": False, "completed": [],
+            "failed": [],
+        }
+        for name, operation in (
+            ("documents", lambda: document_store.tombstone_source(source_id)),
+            ("knowledge", lambda: active_knowledge_store.tombstone(source_id)),
+        ):
+            try:
+                await operation()
+                cleanup["completed"].append(name)
+            except Exception as exc:
+                cleanup["failed"].append({
+                    "target": name, "error": type(exc).__name__,
+                })
+        try:
+            collections = await active_vector_store.list_collections()
+        except Exception as exc:
+            collections = []
+            cleanup["failed"].append({
+                "target": "vector_collections", "error": type(exc).__name__,
+            })
+        for collection in collections:
+            name = collection["name"]
+            try:
+                deleted = await active_vector_store.delete_superseded(
+                    name, source_id, ""
+                )
+                cleanup["completed"].append({
+                    "target": "vector:" + name, "deleted": deleted,
+                })
+            except Exception as exc:
+                cleanup["failed"].append({
+                    "target": "vector:" + name, "error": type(exc).__name__,
+                })
+        if cleanup["failed"]:
+            cleanup["status"] = "partial"
+            cleanup["retryable"] = True
+        return cleanup
 
     app.state.store = document_store
     app.state.embedding_provider = embeddings
@@ -647,10 +680,13 @@ def create_app(
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         result = await active_index_store.record_tombstone(source_id, sequence)
         if result["decision"] == "tombstoned":
-            await document_store.tombstone_source(source_id)
-            await active_knowledge_store.tombstone(source_id)
-            await active_vector_store.delete_superseded("knowledge_chunks", source_id, "")
-        return {"ok": True, **result}
+            # Keep every ingestion path on the same cleanup routine. Sources may
+            # have vectors in transcript_text, knowledge_chunks, or future
+            # collections, not only the Knowledge collection.
+            cleanup = await tombstone_indexed_source(source_id)
+        else:
+            cleanup = {"status": "not_required", "retryable": False, "completed": [], "failed": []}
+        return {"ok": True, **result, "cleanup": cleanup}
 
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
     async def index_source(source_id: str):
@@ -1961,7 +1997,29 @@ def create_app(
             raise HTTPException(status_code=503, detail="knowledge search requires an available embedding provider")
         try:
             vector = (await embeddings.embed([request.query], mode="query"))[0]
-            results = await active_vector_store.query("knowledge_chunks", vector, request.limit)
+            candidates = await active_vector_store.query(
+                "knowledge_chunks", vector, min(200, max(request.limit, request.limit * 4))
+            )
+            results = []
+            for candidate in candidates:
+                metadata = candidate.get("metadata")
+                if not isinstance(metadata, dict):
+                    continue
+                source_id, revision = metadata.get("source_id"), metadata.get("revision")
+                if (
+                    not isinstance(source_id, str) or not source_id
+                    or isinstance(revision, bool) or not isinstance(revision, int)
+                ):
+                    continue
+                source = await active_index_store.get_source(source_id)
+                if (
+                    source is None or source.get("tombstoned")
+                    or source.get("high_sequence") != revision
+                ):
+                    continue
+                results.append(candidate)
+                if len(results) >= request.limit:
+                    break
             return {
                 "ok": True, "results": results, "degraded": [],
                 "retrieval": "knowledge-only",

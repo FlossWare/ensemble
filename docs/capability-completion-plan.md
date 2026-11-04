@@ -21,7 +21,7 @@ Complete the intended Ensemble platform as a standalone, client-independent REST
 - All supported document, lexical, transcript, PDF, URL, and Knowledge ingestion paths now pass through Index revision decisions.
 - Knowledge publication writes the durable document/chunk index, Knowledge provenance record, and optional knowledge_chunks vectors.
 - Accepted source revisions are associated with exact extracted entities in Graph. Hybrid retrieval expands through Graph-linked source relationships and reranks after candidate fusion.
-- Source tombstones remove content from the active document retrieval view and prune Knowledge vectors.
+- Source tombstones remove content from the active document retrieval view and prune vectors across all collections. Knowledge-only vector retrieval also checks each candidate against the current Index revision and tombstone state.
 - Initial client-independent Context assembly composes Hybrid retrieval, Graph expansion, Memory documents, and optional execution-lineage recall. It preserves source provenance and applies a bounded extractive context budget.
 - Review-branch CI currently verifies the existing suite plus new source lifecycle, Graph expansion, and Context assembly coverage. Token estimates are character-based approximations, not model-tokenizer exact counts.
 
