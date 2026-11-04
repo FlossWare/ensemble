@@ -113,6 +113,15 @@ class InMemoryIndexStore:
                     })
         return {"decision": decision, "source": dict(current)}
 
+    async def mark_purged(self, source_id: str) -> None:
+        source = self._sources.get(source_id)
+        if source is None or not source["tombstoned"]:
+            raise RuntimeError("only a soft-deleted source can be permanently purged")
+        if source.get("purged"):
+            return
+        source["purged"] = True
+        source["updated_at"] = datetime.now(timezone.utc).isoformat()
+
     async def get_source(self, source_id: str) -> dict[str, Any] | None:
         value = self._sources.get(source_id)
         return dict(value) if value else None

@@ -736,13 +736,18 @@ class SqliteIndexStore:
 
     async def mark_purged(self, source_id: str) -> None:
         async with self.engine.begin() as connection:
-            changed = await connection.execute(update(sources).where(
+            current = (await connection.execute(select(
+                sources.c.tombstoned, sources.c.purged,
+            ).where(sources.c.source_id == source_id))).first()
+            if current is None or not current.tombstoned:
+                raise RuntimeError("only a soft-deleted source can be permanently purged")
+            if current.purged:
+                return
+            await connection.execute(update(sources).where(
                 sources.c.source_id == source_id,
                 sources.c.tombstoned.is_(True),
                 sources.c.purged.is_(False),
             ).values(purged=True, updated_at=datetime.now(timezone.utc)))
-            if changed.rowcount != 1:
-                raise RuntimeError("only a soft-deleted source can be permanently purged")
 
     async def get_sources(self, source_ids: list[str]) -> dict[str, dict[str, Any]]:
         if not source_ids:

@@ -243,6 +243,11 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
         })
         assert tombstone.status_code == 200
         assert tombstone.json()["cleanup"]["status"] == "complete"
+        assert tombstone.json()["reclamation"]["source_id"] == "generation-source-1"
+        assert tombstone.json()["reclamation"]["state"] in {"pending", "running", "complete"}
+        queue_status = client.get("/api/v1/index/reclamation")
+        assert queue_status.status_code == 200
+        assert sum(queue_status.json()["jobs"].values()) >= 1
 
         knowledge_tombstone = client.post("/api/v1/index/tombstones", json={
             "source_id": "generation-knowledge-source", "revision_sequence": 2,

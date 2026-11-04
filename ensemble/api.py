@@ -245,6 +245,9 @@ def create_app(
                     # idempotent source cleanup in another bounded pass.
                     await active_reclamation_store.retry(source_id, "additional reclamation pages remain")
                 else:
+                    # Permanently mark the Index source only after all
+                    # materialized stores report that no more pages remain.
+                    await active_index_store.mark_purged(source_id)
                     await active_reclamation_store.complete(source_id)
             except Exception as exc:
                 await active_reclamation_store.retry(source_id, f"{type(exc).__name__}: {exc}")
@@ -1122,9 +1125,23 @@ def create_app(
         result = await active_index_store.record_tombstone(source_id, sequence)
         if result["decision"] == "tombstoned":
             cleanup = await tombstone_indexed_source(source_id, request)
+            try:
+                reclamation = await active_reclamation_store.enqueue(source_id)
+            except Exception as exc:
+                cleanup["status"] = "partial"
+                cleanup["retryable"] = True
+                cleanup["failed"].append({
+                    "target": "reclamation_queue", "error": type(exc).__name__,
+                })
+                reclamation = None
         else:
             cleanup = {"status": "not_required", "retryable": False, "completed": [], "failed": []}
-        return {"ok": True, **result, "cleanup": cleanup}
+            reclamation = None
+        return {"ok": True, **result, "cleanup": cleanup, "reclamation": reclamation}
+
+    @app.get("/api/v1/index/reclamation", tags=["index"])
+    async def index_reclamation_status():
+        return {"ok": True, "jobs": await active_reclamation_store.status()}
 
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
     async def index_source(source_id: str):
