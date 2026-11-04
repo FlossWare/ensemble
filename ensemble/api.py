@@ -62,6 +62,11 @@ def _validate_vector_collection_name(name: str) -> None:
         raise HTTPException(status_code=400, detail="collection name must be 1-128 safe characters")
 
 
+def _execution_request_id(request: Request | None, trace_id: str) -> str:
+    candidate = request.headers.get("x-request-id", "") if request else ""
+    return candidate if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", candidate) else trace_id
+
+
 def _problem(request: Request, status: int, title: str, detail: str, code: str) -> JSONResponse:
     return JSONResponse(
         status_code=status,
@@ -638,7 +643,7 @@ def create_app(
         request: Request | None = None,
     ):
         trace_id = uuid4().hex
-        request_id = (request.headers.get("x-request-id", "")[:256] if request else "") or trace_id
+        request_id = _execution_request_id(request, trace_id)
         trace_started = time.perf_counter()
         trace_created = False
 
@@ -775,7 +780,8 @@ def create_app(
                 )
         except Exception:
             pass
-        result.metadata = {**result.metadata, "execution_trace_id": trace_id}
+        if trace_created:
+            result.metadata = {**result.metadata, "execution_trace_id": trace_id}
         return result, decision["decision"]
 
     async def expand_graph_results(
@@ -3237,7 +3243,7 @@ def create_app(
         try:
             await active_execution_trace_store.create({
                 "trace_id": trace_id,
-                "request_id": trace_id,
+                "request_id": _execution_request_id(request, trace_id),
                 "operation": "retrieval",
                 "status": "running",
                 "started_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
@@ -3282,7 +3288,8 @@ def create_app(
                     )
                 except Exception:
                     pass
-            result["execution_trace_id"] = trace_id
+            if created:
+                result["execution_trace_id"] = trace_id
             return result
         except ValueError as exc:
             if created:

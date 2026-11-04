@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import os
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from sqlalchemy import Column, DateTime, Float, JSON, MetaData, String, Table, select, update
+from sqlalchemy import Column, DateTime, Float, JSON, MetaData, String, Table, delete, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from .partitioning import PartitionedAsyncEngine
+
+MAX_TRACE_RECORDS = 10_000
 
 metadata = MetaData()
 traces = Table(
@@ -69,6 +70,10 @@ class SqliteExecutionTraceStore:
     async def create(self, record: dict[str, Any]) -> None:
         async with self.engine.begin() as connection:
             await connection.execute(traces.insert().values(**record))
+            overflow = select(traces.c.trace_id).order_by(
+                traces.c.started_at.desc()
+            ).offset(MAX_TRACE_RECORDS)
+            await connection.execute(delete(traces).where(traces.c.trace_id.in_(overflow)))
 
     async def record_stage(self, trace_id: str, stage: dict[str, Any]) -> None:
         async with self.engine.begin() as connection:
@@ -118,6 +123,12 @@ class InMemoryExecutionTraceStore:
         item = dict(record)
         item["stages"] = list(record.get("stages", []))
         self._items[record["trace_id"]] = item
+        if len(self._items) > MAX_TRACE_RECORDS:
+            oldest = sorted(
+                self._items.values(), key=lambda value: value["started_at"]
+            )[:len(self._items) - MAX_TRACE_RECORDS]
+            for expired in oldest:
+                self._items.pop(expired["trace_id"], None)
 
     async def record_stage(self, trace_id: str, stage: dict[str, Any]) -> None:
         if trace_id in self._items:

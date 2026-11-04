@@ -92,6 +92,14 @@ def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch
         result = response.json()
         assert result["document"]["source_id"] == "https://example.org/guide"
         assert result["document"]["chunk_count"] == 1
+        trace_id = result["document"]["metadata"]["execution_trace_id"]
+        trace = client.get(f"/api/v1/execution-traces/{trace_id}").json()["trace"]
+        assert trace["operation"] == "document_ingestion"
+        assert trace["status"] in {"completed", "degraded"}
+        assert [stage["name"] for stage in trace["stages"]] == [
+            "index_revision", "document_materialization",
+            "graph_entity_linking", "generation_acknowledgement",
+        ]
         index = asyncio.run(index_store.get_source("https://example.org/guide"))
         knowledge = asyncio.run(knowledge_store.get("https://example.org/guide"))
         assert index["high_sequence"] == 1
