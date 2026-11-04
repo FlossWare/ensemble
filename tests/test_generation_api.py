@@ -811,3 +811,40 @@ def test_knowledge_generation_mirror_failure_keeps_index_change_retryable(tmp_pa
         )
         assert generation_record is not None
         assert generation_record["revision_id"] == payload["revision_id"]
+
+
+def test_source_reclamation_waits_for_generation_build_to_finish(tmp_path):
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/ingest/documents", json={
+            "source_id": "reclaim-during-build",
+            "revision": 1,
+            "title": "Retained during rebuild",
+            "content": "A generation builder may still be copying this source.",
+        })
+        assert ingested.status_code == 201
+
+        generation = client.post("/api/v1/index/generations", json={
+            "generation_id": "reclaim-race-generation",
+        })
+        assert generation.status_code == 200
+
+        tombstone = client.post("/api/v1/index/tombstones", json={
+            "source_id": "reclaim-during-build",
+            "revision_sequence": 2,
+        })
+        assert tombstone.status_code == 200
+
+        run = client.post("/api/v1/index/reclamation/run")
+        assert run.status_code == 200
+        assert run.json()["processed"] == 1
+        assert run.json()["jobs"]["retry"] == 1
+
+        source = client.get("/api/v1/index/sources/reclaim-during-build").json()["source"]
+        assert source["tombstoned"] is True
+        assert source["purged"] is False
+
+        chunks = client.post("/api/v1/documents/chunks/query", json={
+            "source_ids": ["reclaim-during-build"],
+        })
+        assert chunks.status_code == 200
+        assert chunks.json()["chunks"]
