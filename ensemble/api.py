@@ -235,6 +235,10 @@ def create_app(
             try:
                 # The authoritative Index tombstone is retained. Only active
                 # materialized data is reclaimed; generation tombstones remain.
+                # Graph source nodes and mention edges are derived materialized
+                # data too. Remove them before marking the Index source purged;
+                # shared entity nodes are retained.
+                await active_graph_store.reclaim_source(source_id)
                 reclaimed = [
                     await document_store.reclaim_source(source_id),
                     await active_knowledge_store.reclaim_source(source_id),

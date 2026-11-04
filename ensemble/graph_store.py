@@ -44,6 +44,7 @@ class GraphStore(Protocol):
     async def add_node(self, node_type: str, properties: dict[str, Any], node_id: str | None = None) -> dict[str, Any]: ...
     async def add_edge(self, source: str, target: str, edge_type: str, properties: dict[str, Any], edge_id: str | None = None) -> dict[str, Any]: ...
     async def get_node(self, node_id: str) -> dict[str, Any] | None: ...
+    async def reclaim_source(self, source_id: str) -> int: ...
     async def query_nodes(self, node_type: str | None, properties: dict[str, Any]) -> list[dict[str, Any]]: ...
     async def query_edges(self, from_type: str | None = None, to_type: str | None = None, relationship: str | None = None) -> list[dict[str, Any]]: ...
     async def traverse(self, start: str, direction: str = "out", max_depth: int = 1, edge_type: str | None = None) -> list[dict[str, Any]]: ...
@@ -105,6 +106,31 @@ class SqliteGraphStore:
                 return record
             await connection.execute(edges.insert().values(id=identifier, source_id=source, target_id=target, edge_type=edge_type, properties=properties))
         return record
+
+    async def reclaim_source(self, source_id: str) -> int:
+        """Remove source-owned graph edges and source nodes, retaining shared entities."""
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        async with self.engine.begin() as connection:
+            source_rows = (await connection.execute(
+                select(nodes).where(nodes.c.node_type == "source")
+            )).mappings().all()
+            source_node_ids = {
+                row["id"] for row in source_rows
+                if (row["properties"] or {}).get("source_id") == source_id
+            }
+            edge_rows = (await connection.execute(select(edges))).mappings().all()
+            edge_ids = [
+                row["id"] for row in edge_rows
+                if row["source_id"] in source_node_ids
+                or row["target_id"] in source_node_ids
+                or (row["properties"] or {}).get("source_id") == source_id
+            ]
+            if edge_ids:
+                await connection.execute(edges.delete().where(edges.c.id.in_(edge_ids)))
+            if source_node_ids:
+                await connection.execute(nodes.delete().where(nodes.c.id.in_(source_node_ids)))
+        return len(edge_ids) + len(source_node_ids)
 
     async def get_node(self, node_id: str) -> dict[str, Any] | None:
         async with self.engine.connect() as connection:
