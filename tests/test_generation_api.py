@@ -146,6 +146,7 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
                 "documents": ["generation vector content"],
                 "metadatas": [{
                     "source_id": "generation-vector-source",
+                    "url": "generation-vector-source",
                     "content_sha256": "a" * 64,
                 }],
                 "model": "test-model",
@@ -167,7 +168,7 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
             "/api/v1/vector/collections/generation_test/records/metadata",
             json={
                 "ids": ["generation-vector-1"],
-                "metadatas": [{"source_id": "generation-vector-source", "label": "updated"}],
+                "metadatas": [{"source_id": "generation-vector-source", "url": "generation-vector-source", "label": "updated"}],
             },
         )
         assert metadata_update.status_code == 200
