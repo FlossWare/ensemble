@@ -79,7 +79,7 @@ Implemented on `integration/generation-mainline-2026-11-04` (not yet merged):
 - The active generation pointer now drives lexical/vector retrieval. Document writes, vector writes, Knowledge publication, Index manifest changes, Memory snapshots, and tombstones keep the active generation current after cutover.
 - The existing FTS5/BM25 lexical scoring path is preserved; active-generation candidate IDs constrain returned results.
 - Activation retries are idempotent after a lost response. Restart recovery releases an abandoned fence and reopens reconciliation checkpoints so subsequent writes can be reconciled.
-- CI has verified end-to-end copy, reconciliation, activation, retrieval, post-activation writes, tombstones, Memory snapshot reconciliation, and fence recovery on recent integration commits.
+- CI has verified end-to-end copy, reconciliation, activation, retrieval, post-activation document/Knowledge/vector writes, tombstones, Memory snapshot reconciliation, idempotent activation retry, and fence recovery. The latest verified integration run passed 203 tests with 1 skipped.
 
 Still required before merge:
 - Verify the latest integration head's CI result and review the crash/recovery boundaries and migration compatibility.

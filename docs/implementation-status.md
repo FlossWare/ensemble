@@ -84,12 +84,12 @@ The integration branch `integration/generation-mainline-2026-11-04` contains the
 Implemented in this branch:
 - Durable generation-scoped Memory snapshots and a mutation journal, including writes, append-once entries, deletes, imported Markdown metadata, and stale-source reconciliation.
 - Bounded REST copy and reconciliation operations for Index, Documents, Vectors, Memory, and Knowledge.
-- A shared write fence that blocks Index and Memory mutations during cutover; startup recovery releases an abandoned fence and reopens all reconciliation checkpoints.
+- A shared write fence enforced inside Index, Documents, Vectors, Knowledge, and Memory write transactions; startup recovery releases an abandoned fence and reopens all reconciliation checkpoints.
 - Active-generation retrieval for lexical and vector candidates, with FTS5/BM25 scoring retained.
 - Post-activation document/vector/Knowledge writes, Index manifest changes, Memory snapshots, and tombstones are reflected in the active generation.
 - Activation is retry-safe when the original response is lost.
 
-The end-to-end cutover test covers initial ingestion, copy, reconciliation, fencing, activation, retrieval from the new generation, a subsequent write, and tombstone removal. Recent successful CI runs include 202 passed / 1 skipped and 201 passed / 1 skipped; the current integration head still requires its own completed CI result before review or merge.
+The end-to-end cutover tests cover initial ingestion, bounded copy, independent reconciliation, fencing, activation, retrieval from the new generation, post-activation document/Knowledge/vector writes, metadata updates, pruning, tombstone removal, activation retry after a lost response, Memory snapshot updates, and restart recovery of an abandoned fence. The latest verified integration implementation commit `fd4bcd398c97bd417dfabc8fba7bfa9cba33fcfa` passed **203 tests, 1 skipped**. A subsequent documentation-only commit is undergoing the same CI workflow before PR creation.
 
 ## Partition isolation implementation
 
