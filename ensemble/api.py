@@ -461,6 +461,9 @@ def create_app(
             result.metadata = {**result.metadata, "graph_entities_indexed": linked}
         except Exception:
             result.metadata = {**result.metadata, "graph_entities_indexed": 0, "graph_degraded": True}
+        await active_index_store.acknowledge_generation_change(
+            document.source_id, document.revision, False,
+        )
         return result, decision["decision"]
 
     async def expand_graph_results(query: str, entities: list[dict[str, Any]], results: list[SearchHit], limit: int, internal: InternalRestClient, request: Request):
@@ -615,6 +618,22 @@ def create_app(
                 cleanup["failed"].append({
                     "target": "vector:" + name, "error": type(exc).__name__,
                 })
+        if not cleanup["failed"]:
+            active_generation = await active_generation_id()
+            source = await active_index_store.get_source(source_id)
+            if active_generation is not None and source is not None:
+                try:
+                    await document_store.tombstone_generation_source(active_generation, source_id)
+                    await active_knowledge_store.tombstone_generation_source(active_generation, source_id)
+                    await active_vector_store.tombstone_generation_source(active_generation, source_id)
+                    await active_index_store.acknowledge_generation_change(
+                        source_id, source["high_sequence"], True,
+                    )
+                    cleanup["completed"].append("active_generation")
+                except Exception as exc:
+                    cleanup["failed"].append({
+                        "target": "active_generation", "error": type(exc).__name__,
+                    })
         if cleanup["failed"]:
             cleanup["status"] = "partial"
             cleanup["retryable"] = True
