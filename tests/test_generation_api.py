@@ -241,8 +241,8 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
                 "embeddings": [[1.0, 0.0]],
                 "documents": ["generation vector content"],
                 "metadatas": [{
-                    "source_id": "generation-vector-source",
-                    "url": "generation-vector-source",
+                    "source_id": "generation-source-1",
+                    "url": "generation-source-1",
                     "content_sha256": "a" * 64,
                 }],
                 "model": "test-model",
@@ -264,7 +264,7 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
             "/api/v1/vector/collections/generation_test/records/metadata",
             json={
                 "ids": ["generation-vector-1"],
-                "metadatas": [{"source_id": "generation-vector-source", "url": "generation-vector-source", "label": "updated"}],
+                "metadatas": [{"source_id": "generation-source-1", "url": "generation-source-1", "label": "updated"}],
             },
         )
         assert metadata_update.status_code == 200
@@ -279,7 +279,7 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
 
         vector_prune = client.post(
             "/api/v1/vector/collections/generation_test/records/prune",
-            json={"url": "generation-vector-source", "keep_sha256": "0" * 64},
+            json={"url": "generation-source-1", "keep_sha256": "0" * 64},
         )
         assert vector_prune.status_code == 200
         vector_query = client.post(
@@ -365,7 +365,7 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
             generation_vectors = connection.execute(
                 "SELECT COUNT(*) FROM ensemble_vector_generation_records "
                 "WHERE generation_id = ? AND json_extract(metadata, '$.source_id') = ?",
-                ("generation-cutover-test", "generation-vector-source"),
+                ("generation-cutover-test", "generation-source-1"),
             ).fetchone()[0]
             graph_source_nodes = connection.execute(
                 "SELECT COUNT(*) FROM ensemble_graph_nodes "
