@@ -527,7 +527,10 @@ def create_app(
             expanded = list(results)
             for source_rank, source_id in enumerate(source_ids, start=1):
                 state = source_states.get(source_id)
-                if state is None or state.get("tombstoned") or state.get("high_sequence") != graph_sources[source_id]:
+                if (
+                    state is None or state.get("tombstoned") or state.get("purged")
+                    or state.get("high_sequence") != graph_sources[source_id]
+                ):
                     continue
                 contribution = 1.0 / (60 + source_rank)
                 for item in by_source.get(source_id, []):
@@ -2764,7 +2767,7 @@ def create_app(
                     continue
                 source = states.get(source_id)
                 if (
-                    source is None or source.get("tombstoned")
+                    source is None or source.get("tombstoned") or source.get("purged")
                     or source.get("high_sequence") != revision
                 ):
                     continue
