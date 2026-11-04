@@ -68,7 +68,7 @@ Remaining:
 - Finish scoped source import/reconciliation with explicit authorization and safe path handling.
 - Complete execution-context-aware recall and useful retrieval ranking.
 - Memory keyword and semantic search now share the provider-neutral RRF implementation rather than combining incomparable raw scores. Results retain each channel's rank, raw score, and RRF contribution for inspection.
-- Extend the initial bounded Context assembly with exact model-tokenizer budgeting when a concrete tokenizer is configured; current character-based estimates and extractive compression are deterministic and provenance-preserving.
+- Context assembly now supports exact model-tokenizer budgeting when `ENSEMBLE_CONTEXT_TOKENIZER_PATH` points to a configured Hugging Face `tokenizers` JSON file (install the `context-tokenizer` extra). Without that explicit configuration, it retains the deterministic character/4 approximation and reports that it is approximate. Both paths use the selected counter for the complete assembled context and preserve source provenance during extractive compression.
 - Conflict and append-once semantics are enforced with payload-digest comparison. Optional timezone-aware event expiry now excludes expired events from recall while retaining ledger history; explicit named-memory deletion hard-deletes its content, entries, append-once keys, and imported-source provenance.
 - Ensure Memory readiness reflects usable persisted state and recovery, not just process liveness.
 
@@ -177,7 +177,7 @@ Branch: `integration/source-lifecycle-mainline-2026-11-04` (not yet merged).
 - Control endpoints expose reclamation queue status and an operator-triggered bounded pass.
 - Direct document writes require a matching current Index revision; direct document/Knowledge/vector source tombstones require the Index tombstone lifecycle.
 - Standalone vector upsert, metadata, and prune operations are paused during generation rebuilds. Normal indexed ingestion remains available and is reconciled through the Index change journal.
-- Latest verified integration CI: **263 passed, 1 skipped, 1 warning**.
+- Latest verified integration CI: **264 passed, 1 skipped, 1 warning**.
 
 ## Current main state
 

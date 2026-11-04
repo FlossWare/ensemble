@@ -379,3 +379,42 @@ def test_memory_delete_removes_content_and_event_ledger():
         assert http.get("/api/v1/memory/memories/notes").status_code == 404
         assert "notes" not in http.get("/api/v1/memory/memories").json()["memories"]
         assert http.delete("/api/v1/memory/memories/notes").status_code == 404
+
+
+def test_context_assembly_uses_an_exact_configured_token_counter():
+    from ensemble.api import _assemble_context
+
+    class WordCounter:
+        tokenizer_id = "test-whitespace"
+        exact = True
+        description = "exact whitespace-token count for deterministic tests"
+
+        def count(self, text):
+            return len(text.split())
+
+        def truncate(self, text, max_tokens):
+            return " ".join(text.split()[:max_tokens])
+
+    result = _assemble_context([{
+        "source": "memory", "title": "retrieval",
+        "content": (
+            "An unrelated sentence discusses other systems. "
+            "Retrieval preserves provenance and source attribution. "
+            "A final unrelated sentence discusses storage."
+        ),
+    }], "retrieval provenance", 9, WordCounter())
+    assert result["tokenizer_id"] == "test-whitespace"
+    assert result["tokenizer_exact"] is True
+    assert result["estimated_tokens"] <= result["max_tokens"]
+    assert result["compressed_count"] == 1
+    assert "Retrieval preserves provenance" in result["context"]
+
+
+def test_context_tokenizer_status_is_reported_by_rest():
+    with client() as http:
+        response = http.get("/api/v1/context/tokenizer")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is True
+        assert body["exact"] is False
+        assert body["id"] == "approx-char4"

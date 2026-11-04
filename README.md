@@ -21,7 +21,7 @@ See [REST contract conventions](docs/rest-contracts.md), [REST route inventory a
 
 ## Current implementation
 
-The Python application provides health/readiness, durable document ingestion, versioned window/Markdown/message chunking with persisted provenance, SQLite FTS5 lexical indexing with shared tokenization and BM25, exact SQLite vector collections, Hybrid lexical/vector retrieval with degraded-mode fallback, optional cross-encoder reranking, intent enrichment, typed entity extraction, Graph-backed entity resolution/linking, and graph-based related-session lookup. It also includes SQLite-backed episodic Memory with append-once conflict detection, expiry-aware recall and explicit deletion, plus Knowledge, Index revision/tombstone management, Graph, Thompson sampling, Learning outcomes/artifacts, a bounded GA optimizer, extraction, tokenization, and explainable ranking through one FastAPI application. Raw JSONL transcript ingestion supports caller-supplied incremental slices with UTF-8 byte checkpoints; bounded PDF uploads and public single-page HTML/plain-text URI ingestion feed the shared document pipeline. Durable transcript checkpoint jobs, broad website crawling, OCR, complete hybrid channel orchestration, and several deeper Memory/GA operational behaviors remain open in the [capability completion plan](docs/capability-completion-plan.md).
+The Python application provides health/readiness, durable document ingestion, versioned window/Markdown/message chunking with persisted provenance, SQLite FTS5 lexical indexing with shared tokenization and BM25, exact SQLite vector collections, Hybrid lexical/vector retrieval with degraded-mode fallback, optional cross-encoder reranking, intent enrichment, typed entity extraction, Graph-backed entity resolution/linking, and graph-based related-session lookup. It also includes SQLite-backed episodic Memory with append-once conflict detection, expiry-aware recall and explicit deletion, plus Knowledge, Index revision/tombstone management, Graph, Thompson sampling, Learning outcomes/artifacts, a bounded GA optimizer, extraction, tokenization, and explainable ranking through one FastAPI application. Raw JSONL transcript ingestion supports caller-supplied incremental slices with UTF-8 byte checkpoints; bounded PDF uploads and public single-page HTML/plain-text URI ingestion feed the shared document pipeline. Durable transcript checkpoint jobs, bounded robots-aware same-origin crawling with persistent crawl/ingestion jobs, optional exact context-tokenizer budgeting, OCR, scheduled source refresh, and several deeper Memory/GA operational behaviors are tracked in the [capability completion plan](docs/capability-completion-plan.md).
 
 SQLite is the only persistence implementation in this repository. The storage adapter is private to the implementation; REST contracts expose neither database choice nor schema. Database schema changes are managed with Alembic migrations.
 
@@ -33,6 +33,8 @@ Python 3.12 or newer is required.
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[dev]'
+# Optional, for exact model-tokenizer context budgets:
+python -m pip install -e '.[context-tokenizer]'
 alembic upgrade head
 uvicorn ensemble.api:app --host 127.0.0.1 --port 8090
 ```
@@ -52,7 +54,7 @@ Run the existing tests:
 pytest
 ```
 
-All source ingestion uses the canonical /api/v1/ingest/... namespace: documents, files, URLs (including preview), and transcripts. The browser Control Center is available at /control. It includes live capability health/readiness checks, a retrieval explorer with optional reranking, structured transcript-session ingestion, Index and Vector inspection, Memory and Knowledge inspection, source lookup and confirmed permanent tombstoning, URI preview/explicit-ingest, PDF upload ingestion, raw JSONL transcript ingestion, GA run/history/candidate inspection and approval-to-export, Thompson model inspection/selection/reset, and Learning report/outcome/artifact inspection with confirmed reset. GA candidates are not applied to live settings. Discovered URI links are displayed but not crawled. API documentation is available at /docs; the OpenAPI document is at /openapi.json.
+All source ingestion uses the canonical /api/v1/ingest/... namespace: documents, files, URLs (including preview), and transcripts. The browser Control Center is available at /control. It includes live capability health/readiness checks, a retrieval explorer with optional reranking, structured transcript-session ingestion, Index and Vector inspection, Memory and Knowledge inspection, source lookup and confirmed permanent tombstoning, bounded URI crawl preview plus durable queue/status/retry and explicit batch ingestion, PDF upload ingestion, raw JSONL transcript ingestion, GA run/history/candidate inspection and approval-to-export, Thompson model inspection/selection/reset, and Learning report/outcome/artifact inspection with confirmed reset. GA candidates are not applied to live settings. Discovered URI links are displayed but not crawled. API documentation is available at /docs; the OpenAPI document is at /openapi.json.
 
 ## Scope
 
@@ -64,4 +66,4 @@ Ensemble has no runtime dependency on other applications' data stores or process
 
 ## Runtime configuration
 
-The HTTP listener and persistence root are configurable through ENSEMBLE_HOST, ENSEMBLE_PORT and ENSEMBLE_PERSISTENCE_ROOT. Defaults are 127.0.0.1, 8090 and ./.ensemble respectively. The SQLite database defaults to <persistence-root>/ensemble.db. Command-line overrides are available through python -m ensemble --host, --port, --persistence-root and --database-url. See docs/installation.md for the systemd installer and deployment configuration.
+The HTTP listener and persistence root are configurable through ENSEMBLE_HOST, ENSEMBLE_PORT and ENSEMBLE_PERSISTENCE_ROOT. Defaults are 127.0.0.1, 8090 and ./.ensemble respectively. The SQLite database defaults to <persistence-root>/ensemble.db. Command-line overrides are available through python -m ensemble --host, --port, --persistence-root and --database-url. Set `ENSEMBLE_CONTEXT_TOKENIZER_PATH` to a local tokenizer JSON file and optionally `ENSEMBLE_CONTEXT_TOKENIZER_ID` to a safe model/tokenizer label to enable exact context token counting. The path is server configuration, not a client-supplied path. See docs/installation.md for the systemd installer and deployment configuration.

@@ -52,6 +52,7 @@ from .partitioning import (
     RequestScope, partition_scope_middleware, reset_request_scope, set_request_scope,
 )
 from .crawl_store import CrawlJobStore, SqliteCrawlJobStore, InMemoryCrawlJobStore
+from .context_tokens import ContextTokenCounter, ApproximateContextTokenCounter, configured_context_token_counter
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -109,16 +110,25 @@ def _compress_context_text(value: str, query: str, max_chars: int) -> tuple[str,
     return value[:max_chars].rstrip(), True
 
 
-def _assemble_context(candidates: list[dict[str, Any]], query: str, max_tokens: int) -> dict[str, Any]:
+def _assemble_context(
+    candidates: list[dict[str, Any]], query: str, max_tokens: int,
+    token_counter: ContextTokenCounter | None = None,
+) -> dict[str, Any]:
     if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1 <= max_tokens <= 32_000:
         raise ValueError("max_tokens must be an integer between 1 and 32000")
+    counter = token_counter or ApproximateContextTokenCounter()
     included, blocks, seen = [], [], {}
-    remaining, omitted, truncated, compressed = max_tokens, 0, 0, 0
+    omitted = truncated = compressed = 0
+
+    def joined(candidate_block: str) -> str:
+        return "\n\n".join([*blocks, candidate_block])
+
     for candidate in candidates:
         value = candidate.get("content")
         if not isinstance(value, str) or not value.strip():
             omitted += 1
             continue
+        value = value.strip()
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
         if digest in seen:
             previous = included[seen[digest]]
@@ -126,43 +136,77 @@ def _assemble_context(candidates: list[dict[str, Any]], query: str, max_tokens: 
             previous.setdefault("also_from", []).append(alternate)
             omitted += 1
             continue
+
         source = candidate.get("source", "unknown")
         title = candidate.get("title") or candidate.get("section") or source
         header = f"[{source}] {title}"
-        block = header + "\n" + value.strip()
-        needed = _context_token_estimate(block)
-        was_truncated = was_compressed = False
-        if needed > remaining:
-            available = remaining * 4 - len(header) - 1
-            if available <= 0:
+        prefix = ("\n\n" if blocks else "") + header + "\n"
+        candidate_text = value
+        block = header + "\n" + candidate_text
+        was_compressed = was_truncated = False
+
+        if counter.count(joined(block)) > max_tokens:
+            sentences = [
+                match.group(0).strip()
+                for match in re.finditer(r"[^.!?\n]+(?:[.!?]+|$)", value)
+                if match.group(0).strip()
+            ]
+            query_terms = {
+                token.casefold() for token in re.findall(r"[^\W_]+", query)
+                if len(token) > 1
+            }
+            ranked = []
+            for index, sentence in enumerate(sentences):
+                terms = {token.casefold() for token in re.findall(r"[^\W_]+", sentence)}
+                ranked.append((len(query_terms & terms), index, sentence))
+            selected: list[tuple[int, str]] = []
+            for _, index, sentence in sorted(ranked, key=lambda item: (-item[0], item[1])):
+                trial = " ".join([item[1] for item in selected] + [sentence])
+                trial_block = header + "\n" + trial
+                if counter.count(joined(trial_block)) <= max_tokens:
+                    selected.append((index, sentence))
+            if selected:
+                selected.sort(key=lambda item: item[0])
+                candidate_text = " ".join(sentence for _, sentence in selected)
+                was_compressed = True
+            else:
+                available = max_tokens - counter.count("\n\n".join(blocks) + prefix)
+                candidate_text = counter.truncate(value, max(0, available))
+                while candidate_text and counter.count(joined(header + "\n" + candidate_text)) > max_tokens:
+                    available -= 1
+                    candidate_text = counter.truncate(value, max(0, available))
+                was_truncated = len(candidate_text) < len(value)
+
+            if not candidate_text:
                 omitted += 1
                 continue
-            selected, was_compressed = _compress_context_text(value.strip(), query, available)
-            if not selected:
+            block = header + "\n" + candidate_text
+            was_truncated = was_truncated or len(candidate_text) < len(value)
+            if counter.count(joined(block)) > max_tokens:
                 omitted += 1
                 continue
-            block = header + "\n" + selected
-            was_truncated = len(selected) < len(value.strip())
-            needed = _context_token_estimate(block)
-            if needed > remaining:
-                omitted += 1
-                continue
+
         item = {key: val for key, val in candidate.items() if key != "content"}
         item.update({
-            "content": block, "estimated_tokens": needed,
-            "truncated": was_truncated, "compressed": was_compressed,
+            "content": block,
+            "estimated_tokens": max(0, counter.count(joined(block)) - counter.count("\n\n".join(blocks))),
+            "truncated": was_truncated,
+            "compressed": was_compressed,
             "content_sha256": digest,
         })
         seen[digest] = len(included)
         included.append(item)
         blocks.append(block)
-        remaining -= needed
         truncated += int(was_truncated)
         compressed += int(was_compressed)
+
+    context = "\n\n".join(blocks)
     return {
-        "context": "\n\n".join(blocks), "sources": included,
-        "estimated_tokens": max_tokens - remaining,
-        "token_estimator": "UTF-8 character count divided by four; approximate, not model-tokenizer exact",
+        "context": context, "sources": included,
+        "estimated_tokens": counter.count(context),
+        "token_estimator": counter.description,
+        "tokenizer_id": counter.tokenizer_id,
+        "tokenizer_exact": counter.exact,
         "max_tokens": max_tokens, "omitted_count": omitted,
         "truncated_count": truncated, "compressed_count": compressed,
     }
@@ -185,6 +229,7 @@ def create_app(
     crawl_store: CrawlJobStore | None = None,
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
+    context_token_counter = configured_context_token_counter()
     document_store = store or SqlDocumentStore(database_url)
     if isinstance(document_store, InMemoryDocumentStore) and os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip():
         raise ValueError("partition authentication requires durable SQLite-backed stores; in-memory adapters are test-only")
@@ -405,6 +450,11 @@ def create_app(
         lifespan=lifespan,
     )
     app.middleware("http")(partition_scope_middleware)
+    app.state.context_tokenizer = {
+        "id": context_token_counter.tokenizer_id,
+        "exact": context_token_counter.exact,
+        "description": context_token_counter.description,
+    }
 
     def openapi_with_partition_auth():
         if app.openapi_schema:
@@ -2428,7 +2478,7 @@ def create_app(
 
         candidates.sort(key=lambda item: -float(item.get("score", 0.0)))
         try:
-            assembled = _assemble_context(candidates, query, max_tokens)
+            assembled = _assemble_context(candidates, query, max_tokens, context_token_counter)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
@@ -2436,6 +2486,10 @@ def create_app(
             "intent": intent_result, "entities": entity_result,
             "degraded": sorted(set(degraded)),
         }
+
+    @app.get("/api/v1/context/tokenizer", tags=["context"])
+    async def context_tokenizer_status():
+        return {"ok": True, **app.state.context_tokenizer}
 
     @app.get("/api/v1/memory/health", tags=["memory"])
     async def memory_health():
@@ -2544,7 +2598,7 @@ def create_app(
                     })
                 response["context"] = _assemble_context(
                     candidates, payload.get("context", {}).get("objective", ""),
-                    payload["max_tokens"],
+                    payload["max_tokens"], context_token_counter,
                 )
             return response
         except ValueError as exc:
