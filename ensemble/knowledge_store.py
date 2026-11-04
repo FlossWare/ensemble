@@ -122,6 +122,15 @@ class SqliteKnowledgeStore:
                 ).values(tombstoned=True, updated_at=datetime.now(timezone.utc))
             )
 
+    async def restore(self, source_id: str) -> None:
+        async with self.engine.begin() as connection:
+            await connection.execute(knowledge_records.update().where(knowledge_records.c.source_id == source_id).values(tombstoned=False, updated_at=datetime.now(timezone.utc)))
+
+    async def reclaim_source(self, source_id: str) -> int:
+        async with self.engine.begin() as connection:
+            result = await connection.execute(knowledge_records.delete().where(knowledge_records.c.source_id == source_id))
+        return result.rowcount or 0
+
 
     async def upsert_generation(self, generation_id: str, record: dict[str, Any]) -> str:
         digest = hashlib.sha256(record["content"].encode("utf-8")).hexdigest()
@@ -215,15 +224,6 @@ class InMemoryKnowledgeStore:
             "tombstoned": False,
         }
         return digest
-
-    async def restore(self, source_id: str) -> None:
-        async with self.engine.begin() as connection:
-            await connection.execute(knowledge_records.update().where(knowledge_records.c.source_id == source_id).values(tombstoned=False, updated_at=datetime.now(timezone.utc)))
-
-    async def reclaim_source(self, source_id: str) -> int:
-        async with self.engine.begin() as connection:
-            result = await connection.execute(knowledge_records.delete().where(knowledge_records.c.source_id == source_id))
-        return result.rowcount or 0
 
     async def get(self, source_id: str) -> dict[str, Any] | None:
         import copy
