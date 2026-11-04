@@ -1021,7 +1021,14 @@ def create_app(
     async def index_generation_activate(generation_id: str):
         status = await active_index_store.generation_status()
         target = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
-        if target is None or target["state"] != "building":
+        if target is None:
+            raise HTTPException(status_code=404, detail="unknown generation")
+        if target["state"] == "active" and status["active_generation_id"] == generation_id:
+            return {
+                "ok": True, "active_generation_id": generation_id,
+                "epoch": status["epoch"], "already_active": True,
+            }
+        if target["state"] != "building":
             raise HTTPException(status_code=404, detail="unknown building generation")
         checkpoints = target.get("checkpoints") or {}
         required = (
