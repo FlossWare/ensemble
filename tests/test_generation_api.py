@@ -386,9 +386,10 @@ def test_memory_generation_reconciliation_replays_updates_and_deletions(tmp_path
             assert copied_index["status"] == "complete"
             copied_memory = await builder.copy_memory_page("memory-reconciliation-test")
             assert copied_memory["status"] == "complete"
-            assert await memory.get_memory_generation_snapshot(
+            initial_snapshot = await memory.get_memory_generation_snapshot(
                 "memory-reconciliation-test", "rebuild-memory",
-            )["content"] == "before rebuild"
+            )
+            assert initial_snapshot["content"] == "before rebuild"
 
             await memory.write("rebuild-memory", "updated during rebuild")
             updated = await builder.reconcile_memory_changes_page(
