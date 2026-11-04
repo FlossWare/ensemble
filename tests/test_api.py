@@ -595,7 +595,16 @@ def test_search_retrieve_rest_contract_owns_lexical_vector_retrieval(tmp_path):
         trace = trace_response.json()["trace"]
         assert trace["operation"] == "retrieval"
         assert trace["status"] in {"completed", "degraded"}
-        assert trace["stages"][0]["name"] == "lexical_vector_retrieval_and_fusion"
+        stage_names = [stage["name"] for stage in trace["stages"]]
+        assert stage_names == [
+            "lexical_retrieval", "query_embedding", "rrf_fusion",
+            "generation_filter_and_final_order", "retrieval_response", "reranking",
+        ]
+        assert all(stage["duration_ms"] >= 0 for stage in trace["stages"])
+        assert next(stage for stage in trace["stages"] if stage["name"] == "rrf_fusion")["algorithm"] == "rrf"
+        assert next(stage for stage in trace["stages"] if stage["name"] == "reranking")["status"] in {
+            "fallback", "not_requested",
+        }
 
 
 def test_graph_expansion_source_reads_have_document_and_index_rest_contracts(tmp_path):
