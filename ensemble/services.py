@@ -194,6 +194,7 @@ class SearchService:
         self.reranker = reranker
         self.vector_store = vector_store
         self.index_store = index_store
+        self.rrf_k = _rrf_constant()
         provider = configured_ranking_provider(reranker)
         self.search_with_status = RerankingDecorator(provider)(self._search_with_status)
 
@@ -377,7 +378,7 @@ class SearchService:
             vector_rank = vector_ranks.get(item.chunk.id)
             if lexical_rank is None and vector_rank is None:
                 continue
-            fusion = _rrf(lexical_rank) + _rrf(vector_rank)
+            fusion = _rrf(lexical_rank, self.rrf_k) + _rrf(vector_rank, self.rrf_k)
             hits.append(SearchHit(
                 document_id=item.document.id,
                 source_id=item.document.source_id,
@@ -416,9 +417,29 @@ class SearchService:
                 current_hits.append(hit)
             hits = current_hits
         results = sorted(
-            hits, key=lambda hit: (hit.fusion_score, hit.lexical_score, str(hit.chunk_id)),
-            reverse=True,
+            hits, key=lambda hit: (-hit.fusion_score, -hit.lexical_score, str(hit.chunk_id)),
         )[:limit]
+        fusion_diagnostics = {
+            "algorithm": "rrf",
+            "k": self.rrf_k,
+            "channels": {
+                "lexical": {"candidate_count": len(lexical_ranks)},
+                "vector": {"candidate_count": len(vector_ranks)},
+            },
+            "results": [
+                {
+                    "chunk_id": hit.chunk_id,
+                    "lexical_rank": lexical_ranks.get(hit.chunk_id),
+                    "vector_rank": vector_ranks.get(hit.chunk_id),
+                    "contributions": {
+                        "lexical": round(_rrf(lexical_ranks.get(hit.chunk_id), self.rrf_k), 8),
+                        "vector": round(_rrf(vector_ranks.get(hit.chunk_id), self.rrf_k), 8),
+                    },
+                    "score": round(hit.fusion_score, 8),
+                }
+                for hit in results
+            ],
+        }
         operational_channels = sum(
             1 for channel in channels.values()
             if channel["status"] in {"ok", "partial"}
@@ -442,6 +463,7 @@ class SearchService:
             "degraded": sorted(set(degraded)),
             "channels": channels,
             "retrieval": retrieval,
+            "fusion": fusion_diagnostics,
             "reranked": False,
         }
 
@@ -450,8 +472,16 @@ def _tokens(text: str) -> set[str]:
     return {token for token in re.findall(r"[^\W_]+", text.casefold()) if token}
 
 
+def _rrf_constant() -> int:
+    try:
+        configured = int(os.getenv("ENSEMBLE_RRF_K", "60"))
+    except (TypeError, ValueError):
+        return 60
+    return configured if 1 <= configured <= 10_000 else 60
+
+
 def _rank(scores: dict) -> dict:
-    ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    ordered = sorted(scores.items(), key=lambda item: (-item[1], str(item[0])))
     return {identifier: rank for rank, (identifier, _) in enumerate(ordered, start=1)}
 
 

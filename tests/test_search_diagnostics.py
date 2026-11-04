@@ -109,3 +109,40 @@ def test_hybrid_reports_collection_failure_without_discarding_document_vectors()
         assert body["channels"]["vector"]["collection_candidate_count"] == 0
         assert "vector_collection" in body["degraded"]
         assert body["results"]
+
+
+def test_hybrid_exposes_deterministic_rrf_contributions_and_configured_k(monkeypatch):
+    monkeypatch.setenv("ENSEMBLE_RRF_K", "20")
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        embedding_provider=FixedEmbeddings(),
+        vector_store=InMemoryVectorStore(),
+    )
+    with TestClient(app) as client:
+        _ingest(client)
+        response = client.post("/api/v1/search/hybrid", json={
+            "query": "independent lexical retrieval",
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["fusion"]["algorithm"] == "rrf"
+        assert body["fusion"]["k"] == 20
+        assert body["fusion"]["channels"]["lexical"]["candidate_count"] > 0
+        assert body["fusion"]["channels"]["vector"]["candidate_count"] > 0
+        diagnostics = body["fusion"]["results"]
+        assert diagnostics
+        first = diagnostics[0]
+        assert first["lexical_rank"] == 1
+        assert first["vector_rank"] == 1
+        assert first["contributions"]["lexical"] == 1 / 21
+        assert first["contributions"]["vector"] == 1 / 21
+        assert first["score"] == round(2 / 21, 8)
+
+
+def test_hybrid_rrf_uses_stable_identifier_ties():
+    from ensemble.services import _rank
+
+    assert _rank({"chunk-b": 1.0, "chunk-a": 1.0}) == {
+        "chunk-a": 1,
+        "chunk-b": 2,
+    }
