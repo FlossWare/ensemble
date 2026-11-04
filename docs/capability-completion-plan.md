@@ -119,7 +119,7 @@ Do not ship a rebuild operation that can silently lose acknowledged writes or re
 
 ### 9. Source adapters
 
-- Bounded same-origin crawl preview now enforces robots.txt, pins each connection to its validated DNS address, rejects cross-origin redirects, and caps page attempts, depth, response size, and total extracted characters. Durable crawl-ingestion jobs, retry/recovery, scheduled refresh, and Control Center crawl controls remain.
+- Bounded same-origin crawl preview enforces robots.txt, pins each connection to its validated DNS address, rejects cross-origin redirects, and caps page attempts, depth, response size, and total extracted characters. Durable SQLite crawl jobs now persist requests/results, run through a restart-recoverable worker, expose status/list/retry REST operations, and have Control Center queue/status/retry controls. The job currently persists crawl discovery results; ingestion remains an explicit separate operation. Durable per-page ingestion checkpoints and scheduled source refresh remain.
 - Add OCR only with a deliberate provider/runtime decision.
 - Provide source connector contracts without coupling core ingestion to individual vendors.
 

@@ -33,6 +33,8 @@ def test_control_panel_is_served_by_the_api():
         assert "Preview same-origin crawl" in response.text
         assert 'id="crawl-pages"' in response.text
         assert 'id="crawl-depth"' in response.text
+        assert "Queue durable crawl" in response.text
+        assert 'id="crawl-job-results"' in response.text
         script = client.get("/control.js")
         assert script.status_code == 200
         assert "/api/v1/ga/runs" in script.text

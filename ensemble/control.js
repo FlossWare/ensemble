@@ -95,6 +95,60 @@ crawlButton.addEventListener("click",async()=>{
  }finally{crawlButton.disabled=false;}
 });
 
+
+const crawlQueue=document.getElementById("crawl-queue");
+const crawlRetry=document.getElementById("crawl-retry");
+const crawlJobResults=document.getElementById("crawl-job-results");
+let activeCrawlJobId=null;
+async function readCrawlJob(jobId){
+ const response=await fetch("/api/v1/ingest/urls/crawl-jobs/"+encodeURIComponent(jobId));
+ const payload=await response.json();
+ if(!response.ok)throw new Error(typeof payload.detail==="string"?payload.detail:JSON.stringify(payload.detail));
+ return payload.job;
+}
+async function pollCrawlJob(jobId){
+ for(let attempt=0;attempt<120;attempt++){
+  const job=await readCrawlJob(jobId);
+  crawlJobResults.textContent=JSON.stringify(job,null,2);
+  if(job.status==="completed"||job.status==="failed"||job.status==="interrupted"){
+   crawlRetry.hidden=job.status!=="failed"&&job.status!=="interrupted";
+   status.textContent="Durable crawl "+job.status+": "+job.job_id;
+   return;
+  }
+  await new Promise(resolve=>setTimeout(resolve,1000));
+ }
+ status.textContent="Crawl remains queued or running. Its job is durable and can be checked later.";
+}
+crawlQueue.addEventListener("click",async()=>{
+ const requestedUri=uri.value.trim();
+ crawlQueue.disabled=true;
+ crawlRetry.hidden=true;
+ status.textContent="Queueing durable crawl job…";
+ try{
+  const result=await request("/api/v1/ingest/urls/crawl-jobs",{
+   uri:requestedUri,
+   max_pages:Number.parseInt(crawlPages.value,10),
+   max_depth:Number.parseInt(crawlDepth.value,10)
+  });
+  activeCrawlJobId=result.job.job_id;
+  crawlJobResults.textContent=JSON.stringify(result.job,null,2);
+  await pollCrawlJob(activeCrawlJobId);
+ }catch(error){
+  status.textContent="Could not queue or inspect crawl job: "+error.message;
+ }finally{crawlQueue.disabled=false;}
+});
+crawlRetry.addEventListener("click",async()=>{
+ if(!activeCrawlJobId)return;
+ crawlRetry.disabled=true;
+ try{
+  const result=await request("/api/v1/ingest/urls/crawl-jobs/"+encodeURIComponent(activeCrawlJobId)+"/retry",{});
+  crawlJobResults.textContent=JSON.stringify(result.job,null,2);
+  crawlRetry.hidden=true;
+  await pollCrawlJob(activeCrawlJobId);
+ }catch(error){status.textContent="Crawl retry failed: "+error.message;}
+ finally{crawlRetry.disabled=false;}
+});
+
 const refreshHealth=document.getElementById("refresh-health");
 const healthResult=document.getElementById("health-result");
 refreshHealth.addEventListener("click",async()=>{
