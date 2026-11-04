@@ -110,3 +110,21 @@ Still outstanding:
 - Rebuild worker and source snapshot/cursor handling.
 - Write-fence coordination and reconciliation of writes accepted during rebuild.
 - End-to-end active generation cutover and crash recovery.
+
+
+## Shadow document and chunk generation storage
+
+Implemented:
+- Versioned SQLite migration 0018 for generation-scoped document and chunk records.
+- Stable document identity within a generation and source/revision uniqueness.
+- Newest-revision selection is scoped to the shadow generation and does not alter active document state.
+- Generation-scoped chunk enumeration and lexical candidate search.
+- Shadow generation cleanup removes its document and chunk records without affecting active documents.
+- In-memory adapter mirrors generation isolation and revision selection.
+- Tests cover identical source/revision values in active and shadow data, newer revision selection, lexical lookup, and isolated cleanup.
+
+Still outstanding:
+- Tombstone/source-state propagation into shadow generations.
+- A durable rebuild worker that snapshots and populates document, lexical, and vector stores.
+- Write-fence coordination, concurrent-write reconciliation, and crash recovery.
+- Atomic activation across all retrieval data planes.

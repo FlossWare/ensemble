@@ -7,7 +7,7 @@ from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON, MetaData,
+    Boolean, Column, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, JSON, MetaData,
     String, Table, Text, UniqueConstraint, delete, func, insert, inspect, select, text, update,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -49,6 +49,44 @@ chunks = Table(
 Index("ix_ensemble_documents_current_source", documents.c.source_id, documents.c.is_current)
 Index("ix_ensemble_chunks_document", chunks.c.document_id)
 
+generation_documents = Table(
+    "ensemble_document_generation_records",
+    metadata,
+    Column("generation_id", String(64), primary_key=True),
+    Column("document_id", String(36), primary_key=True),
+    Column("source_id", String(1024), nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("title", String(2048), nullable=False),
+    Column("content", Text, nullable=False),
+    Column("metadata", JSON, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("is_current", Boolean, nullable=False),
+    UniqueConstraint("generation_id", "source_id", "revision", name="uq_generation_document_source_revision"),
+)
+generation_chunks = Table(
+    "ensemble_chunk_generation_records",
+    metadata,
+    Column("generation_id", String(64), primary_key=True),
+    Column("chunk_id", String(36), primary_key=True),
+    Column("document_id", String(36), nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("embedding", JSON, nullable=False),
+    Column("profile", String(64), nullable=False),
+    Column("start_offset", Integer, nullable=False),
+    Column("end_offset", Integer, nullable=False),
+    Column("header", Text, nullable=False),
+    ForeignKeyConstraint(
+        ["generation_id", "document_id"],
+        ["ensemble_document_generation_records.generation_id",
+         "ensemble_document_generation_records.document_id"],
+        ondelete="CASCADE",
+    ),
+    UniqueConstraint("generation_id", "document_id", "ordinal", name="uq_generation_chunk_document_ordinal"),
+)
+Index("ix_generation_documents_current_source", generation_documents.c.generation_id, generation_documents.c.source_id, generation_documents.c.is_current)
+Index("ix_generation_chunks_document", generation_chunks.c.generation_id, generation_chunks.c.document_id)
+
 
 @dataclass(frozen=True)
 class IndexedChunk:
@@ -64,15 +102,14 @@ class DocumentStore(Protocol):
     async def tombstone_source(self, source_id: str) -> None: ...
     async def all_chunks(self) -> list[IndexedChunk]: ...
     async def lexical_search(self, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]: ...
+    async def upsert_generation(self, generation_id: str, document: Document, chunks: list[Chunk]) -> Document: ...
+    async def generation_all_chunks(self, generation_id: str) -> list[IndexedChunk]: ...
+    async def generation_lexical_search(self, generation_id: str, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]: ...
+    async def delete_generation(self, generation_id: str) -> int: ...
 
 
 class InMemoryDocumentStore:
     """Non-durable adapter retained for isolated tests and development."""
-
-    def __init__(self):
-        self._documents: dict[tuple[str, int], Document] = {}
-        self._chunks: dict[UUID, list[Chunk]] = {}
-        self._tombstoned: set[str] = set()
 
     async def initialize(self) -> None:
         return None
@@ -128,6 +165,58 @@ class InMemoryDocumentStore:
         return sorted(matches, key=lambda pair: (-pair[1], str(pair[0].chunk.id)))[:limit]
 
 
+    def __init__(self):
+        self._documents: dict[tuple[str, int], Document] = {}
+        self._chunks: dict[UUID, list[Chunk]] = {}
+        self._tombstoned: set[str] = set()
+        self._generation_data: dict[str, dict[tuple[str, int], tuple[Document, list[Chunk]]]] = {}
+
+    async def upsert_generation(self, generation_id: str, document: Document, chunks: list[Chunk]) -> Document:
+        if not generation_id or len(generation_id) > 64:
+            raise ValueError("generation_id must contain 1-64 characters")
+        generation = self._generation_data.setdefault(generation_id, {})
+        key = (document.source_id, document.revision)
+        previous = generation.get(key)
+        if previous is not None:
+            document.id = previous[0].id
+            document.created_at = previous[0].created_at
+        generation[key] = (document, list(chunks))
+        latest = max(revision for source, revision in generation if source == document.source_id)
+        for (source, revision), (stored, _) in generation.items():
+            if source == document.source_id:
+                stored.metadata = dict(stored.metadata)
+                stored.metadata["_generation_current"] = revision == latest
+        return document
+
+    async def generation_all_chunks(self, generation_id: str) -> list[IndexedChunk]:
+        generation = self._generation_data.get(generation_id, {})
+        latest: dict[str, tuple[Document, list[Chunk]]] = {}
+        for (source_id, _revision), pair in generation.items():
+            current = latest.get(source_id)
+            if current is None or pair[0].revision > current[0].revision:
+                latest[source_id] = pair
+        return [
+            IndexedChunk(document, chunk)
+            for document, chunks_for_doc in latest.values()
+            for chunk in chunks_for_doc
+        ]
+
+    async def generation_lexical_search(self, generation_id: str, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]:
+        terms = {item["term"] for item in tokenize("lexical-v1", query)}
+        if not terms:
+            return []
+        matches = []
+        for item in await self.generation_all_chunks(generation_id):
+            content_terms = {token["term"] for token in tokenize("lexical-v1", item.chunk.content)}
+            overlap = len(terms & content_terms)
+            if overlap:
+                matches.append((item, overlap / len(terms)))
+        return sorted(matches, key=lambda pair: (-pair[1], str(pair[0].chunk.id)))[:limit]
+
+    async def delete_generation(self, generation_id: str) -> int:
+        return len(self._generation_data.pop(generation_id, {}))
+
+
 class SqlDocumentStore:
     """Durable SQLite store. Alternative persistence implementations belong to FlossWare proper."""
 
@@ -159,14 +248,14 @@ class SqlDocumentStore:
             raise RuntimeError(
                 "Ensemble database schema is not initialized; run 'alembic upgrade head'"
             )
-        missing = {"ensemble_documents", "ensemble_chunks", "ensemble_vector_collections", "ensemble_vector_records", "ensemble_index_sources", "ensemble_knowledge_records", "ensemble_graph_nodes", "ensemble_graph_edges", "ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources", "ensemble_ga_runs", "ensemble_ga_promotions", "ensemble_thompson_models", "ensemble_thompson_events", "ensemble_learning_outcomes", "ensemble_learning_artifacts", "ensemble_lexical_fts", "ensemble_transcript_checkpoints", "ensemble_index_generations", "ensemble_index_generation_control", "ensemble_vector_generation_records"} - set(tables)
+        missing = {"ensemble_documents", "ensemble_chunks", "ensemble_vector_collections", "ensemble_vector_records", "ensemble_index_sources", "ensemble_knowledge_records", "ensemble_graph_nodes", "ensemble_graph_edges", "ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources", "ensemble_ga_runs", "ensemble_ga_promotions", "ensemble_thompson_models", "ensemble_thompson_events", "ensemble_learning_outcomes", "ensemble_learning_artifacts", "ensemble_lexical_fts", "ensemble_transcript_checkpoints", "ensemble_index_generations", "ensemble_index_generation_control", "ensemble_vector_generation_records", "ensemble_document_generation_records", "ensemble_chunk_generation_records"} - set(tables)
         if missing:
             raise RuntimeError(
                 "Ensemble database schema is incomplete; run 'alembic upgrade head'"
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0017_vector_generation_records":
+        if revision != "0018_document_generation_records":
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )
@@ -324,6 +413,146 @@ class SqlDocumentStore:
             chunk.id = UUID(row["chunk_id"])
             result.append(IndexedChunk(document, chunk))
         return result
+
+
+    async def upsert_generation(self, generation_id: str, document: Document, chunks: list[Chunk]) -> Document:
+        from sqlalchemy.dialects.sqlite import insert as dialect_insert
+
+        if not generation_id or len(generation_id) > 64:
+            raise ValueError("generation_id must contain 1-64 characters")
+        async with self.engine.begin() as connection:
+            exists = await connection.scalar(text(
+                "SELECT COUNT(*) FROM ensemble_index_generations WHERE generation_id = :generation_id"
+            ), {"generation_id": generation_id})
+            if not exists:
+                raise ValueError("unknown index generation")
+            statement = dialect_insert(generation_documents).values(
+                generation_id=generation_id, document_id=str(document.id),
+                source_id=document.source_id, revision=document.revision,
+                title=document.title, content=document.content,
+                metadata=document.metadata, created_at=document.created_at,
+                is_current=False,
+            ).on_conflict_do_nothing(
+                index_elements=["generation_id", "source_id", "revision"]
+            )
+            await connection.execute(statement)
+            existing = (await connection.execute(
+                select(generation_documents).where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == document.source_id,
+                    generation_documents.c.revision == document.revision,
+                )
+            )).mappings().one()
+            document.id = UUID(existing["document_id"])
+            document.created_at = existing["created_at"]
+            await connection.execute(
+                generation_documents.update().where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.document_id == str(document.id),
+                ).values(
+                    title=document.title, content=document.content,
+                    metadata=document.metadata, is_current=False,
+                )
+            )
+            latest_revision = await connection.scalar(
+                select(func.max(generation_documents.c.revision)).where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == document.source_id,
+                )
+            )
+            await connection.execute(
+                generation_documents.update().where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == document.source_id,
+                ).values(is_current=False)
+            )
+            await connection.execute(
+                generation_documents.update().where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == document.source_id,
+                    generation_documents.c.revision == latest_revision,
+                ).values(is_current=True)
+            )
+            await connection.execute(delete(generation_chunks).where(
+                generation_chunks.c.generation_id == generation_id,
+                generation_chunks.c.document_id == str(document.id),
+            ))
+            if chunks:
+                await connection.execute(insert(generation_chunks), [{
+                    "generation_id": generation_id, "chunk_id": str(chunk.id),
+                    "document_id": str(document.id), "ordinal": chunk.ordinal,
+                    "content": chunk.content, "embedding": chunk.embedding,
+                    "profile": chunk.profile, "start_offset": chunk.start,
+                    "end_offset": chunk.end, "header": chunk.header,
+                } for chunk in chunks])
+        return document
+
+    async def generation_all_chunks(self, generation_id: str) -> list[IndexedChunk]:
+        statement = (
+            select(
+                generation_documents.c.document_id, generation_documents.c.source_id,
+                generation_documents.c.revision, generation_documents.c.title,
+                generation_documents.c.content.label("document_content"),
+                generation_documents.c.metadata, generation_documents.c.created_at,
+                generation_chunks.c.chunk_id, generation_chunks.c.ordinal,
+                generation_chunks.c.content.label("chunk_content"),
+                generation_chunks.c.embedding, generation_chunks.c.profile,
+                generation_chunks.c.start_offset, generation_chunks.c.end_offset,
+                generation_chunks.c.header,
+            )
+            .join(
+                generation_chunks,
+                (generation_documents.c.generation_id == generation_chunks.c.generation_id)
+                & (generation_documents.c.document_id == generation_chunks.c.document_id),
+            )
+            .where(
+                generation_documents.c.generation_id == generation_id,
+                generation_documents.c.is_current.is_(True),
+            )
+            .order_by(generation_documents.c.source_id, generation_chunks.c.ordinal)
+        )
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(statement)).mappings().all()
+        result = []
+        for row in rows:
+            document = Document(
+                row["source_id"], row["revision"], row["title"],
+                row["document_content"], row["metadata"],
+            )
+            document.id = UUID(row["document_id"])
+            document.created_at = row["created_at"]
+            chunk = Chunk(
+                document.id, row["ordinal"], row["chunk_content"], row["embedding"],
+                profile=row["profile"], start=row["start_offset"],
+                end=row["end_offset"], header=row["header"],
+            )
+            chunk.id = UUID(row["chunk_id"])
+            result.append(IndexedChunk(document, chunk))
+        return result
+
+    async def generation_lexical_search(self, generation_id: str, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]:
+        terms = {item["term"] for item in tokenize("lexical-v1", query)}
+        if not terms:
+            return []
+        matches = []
+        for item in await self.generation_all_chunks(generation_id):
+            content_terms = {token["term"] for token in tokenize("lexical-v1", item.chunk.content)}
+            overlap = len(terms & content_terms)
+            if overlap:
+                matches.append((item, overlap / len(terms)))
+        return sorted(matches, key=lambda pair: (-pair[1], str(pair[0].chunk.id)))[:limit]
+
+    async def delete_generation(self, generation_id: str) -> int:
+        async with self.engine.begin() as connection:
+            count = await connection.scalar(
+                select(func.count()).select_from(generation_documents).where(
+                    generation_documents.c.generation_id == generation_id
+                )
+            )
+            await connection.execute(delete(generation_documents).where(
+                generation_documents.c.generation_id == generation_id
+            ))
+        return int(count or 0)
 
     async def lexical_search(self, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]:
         terms = []
