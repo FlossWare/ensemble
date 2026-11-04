@@ -8,6 +8,9 @@ class InMemoryIndexStore:
     def __init__(self):
         self._sources: dict[str, dict[str, Any]] = {}
         self._generation_sources: dict[str, dict[str, dict[str, Any]]] = {}
+        self._generation_changes: dict[str, list[dict[str, Any]]] = {}
+        self._change_sequence = 0
+        self._write_fence_generation: str | None = None
         now = datetime.now(timezone.utc).isoformat()
         self._generations = {
             "generation-0001": {
@@ -26,6 +29,9 @@ class InMemoryIndexStore:
         return None
 
     async def record_revision(self, source_id: str, sequence: int, revision_id: str, profiles: dict[str, Any]) -> dict[str, Any]:
+        if self._write_fence_generation is not None:
+            current = self._sources.get(source_id)
+            return {"decision": "fenced", "source": dict(current) if current else None}
         current = self._sources.get(source_id)
         snapshot = dict(sorted(profiles.items()))
         if current is None:
@@ -50,9 +56,22 @@ class InMemoryIndexStore:
             decision = "duplicate" if current["revision_id"] == revision_id and current["profiles"] == snapshot else "conflict"
         else:
             decision = "superseded"
+        if decision == "accepted":
+            for generation in self._generations.values():
+                if generation["state"] in {"active", "building"}:
+                    self._change_sequence += 1
+                    self._generation_changes.setdefault(generation["generation_id"], []).append({
+                        "change_id": self._change_sequence, "generation_id": generation["generation_id"],
+                        "source_id": source_id, "high_sequence": sequence, "revision_id": revision_id,
+                        "profiles": snapshot, "tombstoned": False, "acknowledged": False,
+                        "created_at": current["updated_at"],
+                    })
         return {"decision": decision, "source": dict(current)}
 
     async def record_tombstone(self, source_id: str, sequence: int) -> dict[str, Any]:
+        if self._write_fence_generation is not None:
+            current = self._sources.get(source_id)
+            return {"decision": "fenced", "source": dict(current) if current else None}
         current = self._sources.get(source_id)
         now = datetime.now(timezone.utc).isoformat()
         if current is None:
@@ -70,28 +89,17 @@ class InMemoryIndexStore:
             decision = "tombstoned"
         else:
             decision = "superseded"
+        if decision == "tombstoned":
+            for generation in self._generations.values():
+                if generation["state"] in {"active", "building"}:
+                    self._change_sequence += 1
+                    self._generation_changes.setdefault(generation["generation_id"], []).append({
+                        "change_id": self._change_sequence, "generation_id": generation["generation_id"],
+                        "source_id": source_id, "high_sequence": current["high_sequence"],
+                        "revision_id": current["revision_id"], "profiles": current["profiles"],
+                        "tombstoned": True, "acknowledged": False, "created_at": current["updated_at"],
+                    })
         return {"decision": decision, "source": dict(current)}
-
-    async def restore_source(self, source_id: str, sequence: int) -> dict[str, Any]:
-        current = self._sources.get(source_id)
-        if current is None:
-            raise KeyError("unknown source")
-        if current.get("purged"):
-            raise RuntimeError("permanently purged sources cannot be restored")
-        if not current.get("tombstoned"):
-            raise RuntimeError("source is not soft-deleted")
-        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= current["high_sequence"]:
-            raise ValueError("restore sequence must exceed the current source sequence")
-        current.update(high_sequence=sequence, tombstoned=False,
-                       updated_at=datetime.now(timezone.utc).isoformat())
-        return dict(current)
-
-    async def mark_purged(self, source_id: str) -> None:
-        current = self._sources.get(source_id)
-        if current is None or not current.get("tombstoned"):
-            raise RuntimeError("only a soft-deleted source can be permanently purged")
-        current["purged"] = True
-        current["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     async def get_source(self, source_id: str) -> dict[str, Any] | None:
         value = self._sources.get(source_id)
@@ -189,6 +197,70 @@ class InMemoryIndexStore:
         ][:limit]
         return [dict(records[key]) for key in keys]
 
+    async def list_generation_changes_after(self, generation_id: str, after_change_id: int, limit: int) -> list[dict[str, Any]]:
+        if isinstance(after_change_id, bool) or not isinstance(after_change_id, int) or after_change_id < 0:
+            raise ValueError("after_change_id must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        return [dict(item) for item in self._generation_changes.get(generation_id, [])
+                if item["change_id"] > after_change_id][:limit]
+
+    async def acknowledge_generation_change(self, source_id: str, sequence: int, tombstoned: bool) -> int:
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("sequence must be a positive integer")
+        if not isinstance(tombstoned, bool):
+            raise ValueError("tombstoned must be a boolean")
+        acknowledged = 0
+        active_deleted = 0
+        for generation in self._generations.values():
+            if generation["state"] == "building":
+                for change in self._generation_changes.get(generation["generation_id"], []):
+                    if (change["source_id"] == source_id and change["high_sequence"] == sequence
+                            and change["tombstoned"] is tombstoned and not change.get("acknowledged", False)):
+                        change["acknowledged"] = True
+                        acknowledged += 1
+            elif generation["state"] == "active":
+                previous = self._generation_changes.get(generation["generation_id"], [])
+                remaining = [
+                    change for change in previous
+                    if not (change["source_id"] == source_id and change["high_sequence"] == sequence
+                            and change["tombstoned"] is tombstoned)
+                ]
+                active_deleted += len(previous) - len(remaining)
+                self._generation_changes[generation["generation_id"]] = remaining
+        return max(acknowledged, active_deleted)
+
+    async def generation_change_high_watermark(self, generation_id: str) -> int:
+        changes = self._generation_changes.get(generation_id, [])
+        return changes[-1]["change_id"] if changes else 0
+
+    async def acquire_generation_write_fence(self, generation_id: str, through_change_id: int) -> dict[str, Any]:
+        if self._write_fence_generation not in (None, generation_id):
+            raise RuntimeError("another generation owns the Index write fence")
+        generation = self._generations.get(generation_id)
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        pending = [
+            item for item in self._generation_changes.get(generation_id, [])
+            if not item.get("acknowledged", False)
+        ]
+        if pending:
+            raise RuntimeError("unacknowledged source mutations remain; do not fence generation writes")
+        high = await self.generation_change_high_watermark(generation_id)
+        if high != through_change_id:
+            raise RuntimeError("generation change journal advanced; reconcile before acquiring the write fence")
+        self._write_fence_generation = generation_id
+        return {"generation_id": generation_id, "through_change_id": high,
+                "acquired_at": datetime.now(timezone.utc).isoformat()}
+
+    async def release_generation_write_fence(self, generation_id: str) -> bool:
+        if self._write_fence_generation != generation_id:
+            return False
+        self._write_fence_generation = None
+        return True
+
     async def generation_status(self) -> dict[str, Any]:
         return {
             "active_generation_id": self._active_generation_id,
@@ -215,6 +287,16 @@ class InMemoryIndexStore:
             "created_at": now, "updated_at": now, "activated_at": None,
         }
         self._generations[generation_id] = value
+        pending = [
+            dict(item) for item in self._generation_changes.get(self._active_generation_id, [])
+            if not item.get("acknowledged", False)
+        ]
+        self._generation_changes[generation_id] = []
+        for item in pending:
+            self._change_sequence += 1
+            copied = dict(item)
+            copied.update(change_id=self._change_sequence, generation_id=generation_id, acknowledged=False)
+            self._generation_changes[generation_id].append(copied)
         return dict(value)
 
     async def record_generation_checkpoint(
@@ -222,8 +304,8 @@ class InMemoryIndexStore:
         checkpoint: dict[str, Any], sealed: bool = False,
     ) -> dict[str, Any]:
         import json
-        if capability not in {"index", "documents", "vectors", "memory", "knowledge"}:
-            raise ValueError("capability must be index, memory, or knowledge")
+        if capability not in {"index", "documents", "vectors", "memory", "knowledge", "index_reconciliation", "documents_reconciliation", "vectors_reconciliation", "memory_reconciliation", "knowledge_reconciliation"}:
+            raise ValueError("capability must be one of the five capability checkpoints or their reconciliation checkpoints")
         if not isinstance(checkpoint, dict):
             raise ValueError("checkpoint must be an object")
         try:
@@ -254,17 +336,26 @@ class InMemoryIndexStore:
         target = self._generations.get(generation_id)
         if target is None or target["state"] != "building":
             raise RuntimeError("target generation is not building")
-        if not all(target["checkpoints"].get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge")):
-            raise RuntimeError("index, documents, vectors, memory, and knowledge checkpoints must all be sealed")
+        if not all(target["checkpoints"].get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation", "documents_reconciliation", "vectors_reconciliation", "memory_reconciliation", "knowledge_reconciliation")):
+            raise RuntimeError("index, documents, vectors, memory, knowledge, and all five reconciliation checkpoints must all be sealed")
+        if self._write_fence_generation != generation_id:
+            raise RuntimeError("Index write fence must be held during generation activation")
+        high = await self.generation_change_high_watermark(generation_id)
+        if verification.get("reconciled_through_change_id") != high:
+            raise RuntimeError("generation change journal has not been fully reconciled")
         now = datetime.now(timezone.utc).isoformat()
-        self._generations[self._active_generation_id]["state"] = "retired"
-        self._generations[self._active_generation_id]["updated_at"] = now
+        previous_active_generation_id = self._active_generation_id
+        self._generations[previous_active_generation_id]["state"] = "retired"
+        self._generations[previous_active_generation_id]["updated_at"] = now
         target.update(
             state="active", verification=dict(verification),
             activated_at=now, updated_at=now,
         )
         self._active_generation_id = generation_id
         self._generation_epoch += 1
+        self._write_fence_generation = None
+        self._generation_changes[previous_active_generation_id] = []
+        self._generation_changes[generation_id] = []
         return {
             "active_generation_id": self._active_generation_id,
             "epoch": self._generation_epoch,
@@ -280,4 +371,6 @@ class InMemoryIndexStore:
             state="failed", verification={"failure": reason},
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
+        if self._write_fence_generation == generation_id:
+            self._write_fence_generation = None
         return dict(value)
