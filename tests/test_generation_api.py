@@ -102,6 +102,13 @@ def test_generation_api_runs_all_copy_and_reconciliation_passes_before_fence(tmp
 
 def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
     with _client(tmp_path) as client:
+        memory_name = "generation-memory"
+        memory_before = client.put(
+            f"/api/v1/memory/memories/{memory_name}",
+            json={"content": "memory before generation rebuild"},
+        )
+        assert memory_before.status_code == 200
+
         first = client.post("/api/v1/ingest/documents", json={
             "source_id": "generation-source-1",
             "revision": 1,
@@ -127,6 +134,12 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
             assert response.status_code == 200
             assert response.json()["status"] == "complete"
 
+        memory_during_build = client.put(
+            f"/api/v1/memory/memories/{memory_name}",
+            json={"content": "memory updated during generation rebuild"},
+        )
+        assert memory_during_build.status_code == 200
+
         for capability in ("index", "documents", "vectors", "knowledge", "memory"):
             response = client.post(
                 f"/api/v1/index/generations/generation-cutover-test/reconcile/{capability}",
@@ -140,6 +153,42 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
         activated = client.post("/api/v1/index/generations/generation-cutover-test/activate")
         assert activated.status_code == 200
         assert activated.json()["active_generation_id"] == "generation-cutover-test"
+
+        with sqlite3.connect(tmp_path / "generation-api.db") as connection:
+            memory_row = connection.execute(
+                "SELECT snapshot FROM ensemble_memory_generation_records "
+                "WHERE generation_id = ? AND name = ?",
+                ("generation-cutover-test", memory_name),
+            ).fetchone()
+        assert memory_row is not None
+        assert json.loads(memory_row[0])["content"] == "memory updated during generation rebuild"
+
+        memory_after_cutover = client.put(
+            f"/api/v1/memory/memories/{memory_name}",
+            json={"content": "memory updated after generation cutover"},
+        )
+        assert memory_after_cutover.status_code == 200
+        with sqlite3.connect(tmp_path / "generation-api.db") as connection:
+            memory_row = connection.execute(
+                "SELECT snapshot FROM ensemble_memory_generation_records "
+                "WHERE generation_id = ? AND name = ?",
+                ("generation-cutover-test", memory_name),
+            ).fetchone()
+        assert memory_row is not None
+        assert json.loads(memory_row[0])["content"] == "memory updated after generation cutover"
+
+        memory_deleted = client.delete(
+            f"/api/v1/memory/memories/{memory_name}",
+        )
+        assert memory_deleted.status_code == 200
+        with sqlite3.connect(tmp_path / "generation-api.db") as connection:
+            memory_row = connection.execute(
+                "SELECT snapshot FROM ensemble_memory_generation_records "
+                "WHERE generation_id = ? AND name = ?",
+                ("generation-cutover-test", memory_name),
+            ).fetchone()
+        assert memory_row is None
+
         retried = client.post("/api/v1/index/generations/generation-cutover-test/activate")
         assert retried.status_code == 200
         assert retried.json()["already_active"] is True
