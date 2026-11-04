@@ -354,6 +354,7 @@ def create_app(
     )
     search = SearchService(
         document_store, embeddings, active_reranker, active_vector_store, active_index_store,
+        active_thompson_store,
     )
     ranking_provider = configured_ranking_provider(active_reranker)
 

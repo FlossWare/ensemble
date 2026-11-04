@@ -7,6 +7,7 @@ import asyncio
 import copy
 import os
 import time
+import json
 from collections.abc import Sequence
 from uuid import uuid5, NAMESPACE_URL
 from .chunking import Chunker, chunk as chunk_text
@@ -15,6 +16,7 @@ from .models import Chunk, Document, DocumentIn, DocumentOut, SearchHit
 from .store import DocumentStore
 from .reranking import Reranker, RerankingDecorator, configured_ranking_provider
 from .vector_store import VectorStore
+from .rrf import reciprocal_rank_fusion, thompson_channel_weights
 
 
 def _retrieval_channel_timeout() -> float:
@@ -187,14 +189,19 @@ class SearchService:
     def __init__(
         self, store: DocumentStore, embeddings: EmbeddingProvider,
         reranker: Reranker | None = None, vector_store: VectorStore | None = None,
-        index_store: object | None = None,
+        index_store: object | None = None, thompson_store: object | None = None,
     ):
         self.store = store
         self.embeddings = embeddings
         self.reranker = reranker
         self.vector_store = vector_store
         self.index_store = index_store
+        self.thompson_store = thompson_store
         self.rrf_k = _rrf_constant()
+        self.rrf_weights = _rrf_weights()
+        self.rrf_weight_strategy = os.getenv("ENSEMBLE_RRF_WEIGHT_STRATEGY", "static").strip().lower()
+        if self.rrf_weight_strategy not in {"static", "thompson"}:
+            raise ValueError("ENSEMBLE_RRF_WEIGHT_STRATEGY must be static or thompson")
         provider = configured_ranking_provider(reranker)
         self.search_with_status = RerankingDecorator(provider)(self._search_with_status)
 
@@ -372,13 +379,31 @@ class SearchService:
 
         lexical_ranks = _rank(lexical_scores)
         vector_ranks = _rank(vector_scores)
+        ranked_channels = {
+            "lexical": [{"chunk_id": identifier} for identifier in lexical_ranks],
+            "vector": [{"chunk_id": identifier} for identifier in vector_ranks],
+        }
+        selected_weights = dict(self.rrf_weights)
+        weight_strategy = "static"
+        if self.rrf_weight_strategy == "thompson" and self.thompson_store is not None:
+            state = await self.thompson_store.get_state()
+            model_stats = state.get("models", {})
+            feedback = {
+                channel: model_stats.get(f"retrieval:{channel}", {})
+                for channel in ranked_channels
+            }
+            if any(stats.get("calls", 0) for stats in feedback.values()):
+                selected_weights = thompson_channel_weights(feedback)
+                weight_strategy = "thompson"
+        fused = reciprocal_rank_fusion(
+            ranked_channels, k=self.rrf_k, weights=selected_weights,
+        )
+        fused_by_id = {item.candidate_id: item for item in fused}
         hits: list[SearchHit] = []
         for item in indexed:
-            lexical_rank = lexical_ranks.get(item.chunk.id)
-            vector_rank = vector_ranks.get(item.chunk.id)
-            if lexical_rank is None and vector_rank is None:
+            fusion_result = fused_by_id.get(item.chunk.id)
+            if fusion_result is None:
                 continue
-            fusion = _rrf(lexical_rank, self.rrf_k) + _rrf(vector_rank, self.rrf_k)
             hits.append(SearchHit(
                 document_id=item.document.id,
                 source_id=item.document.source_id,
@@ -389,7 +414,7 @@ class SearchService:
                 text=item.chunk.content,
                 lexical_score=lexical_scores.get(item.chunk.id, 0.0),
                 vector_score=vector_scores.get(item.chunk.id, 0.0),
-                fusion_score=fusion,
+                fusion_score=fusion_result.score,
                 chunk_profile=item.chunk.profile,
                 chunk_start=item.chunk.start,
                 chunk_end=item.chunk.end,
@@ -420,8 +445,13 @@ class SearchService:
             hits, key=lambda hit: (-hit.fusion_score, -hit.lexical_score, str(hit.chunk_id)),
         )[:limit]
         fusion_diagnostics = {
-            "algorithm": "rrf",
+            "algorithm": "weighted_rrf" if any(weight != 1.0 for weight in selected_weights.values()) or weight_strategy == "thompson" else "rrf",
             "k": self.rrf_k,
+            "weight_strategy": weight_strategy,
+            "weights": {
+                channel: selected_weights.get(channel, 1.0)
+                for channel in ranked_channels
+            },
             "channels": {
                 "lexical": {"candidate_count": len(lexical_ranks)},
                 "vector": {"candidate_count": len(vector_ranks)},
@@ -429,11 +459,12 @@ class SearchService:
             "results": [
                 {
                     "chunk_id": hit.chunk_id,
-                    "lexical_rank": lexical_ranks.get(hit.chunk_id),
-                    "vector_rank": vector_ranks.get(hit.chunk_id),
+                    "lexical_rank": fused_by_id[hit.chunk_id].ranks.get("lexical"),
+                    "vector_rank": fused_by_id[hit.chunk_id].ranks.get("vector"),
+                    "ranks": dict(fused_by_id[hit.chunk_id].ranks),
                     "contributions": {
-                        "lexical": round(_rrf(lexical_ranks.get(hit.chunk_id), self.rrf_k), 8),
-                        "vector": round(_rrf(vector_ranks.get(hit.chunk_id), self.rrf_k), 8),
+                        channel: round(value, 8)
+                        for channel, value in fused_by_id[hit.chunk_id].contributions.items()
                     },
                     "score": round(hit.fusion_score, 8),
                 }
@@ -470,6 +501,20 @@ class SearchService:
 
 def _tokens(text: str) -> set[str]:
     return {token for token in re.findall(r"[^\W_]+", text.casefold()) if token}
+
+
+def _rrf_weights() -> dict[str, float]:
+    raw = os.getenv("ENSEMBLE_RRF_WEIGHTS", "{}")
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ENSEMBLE_RRF_WEIGHTS must be a JSON object") from exc
+    if not isinstance(value, dict):
+        raise ValueError("ENSEMBLE_RRF_WEIGHTS must be a JSON object")
+    for channel, weight in value.items():
+        if not isinstance(channel, str) or not channel.strip() or isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(float(weight)) or weight < 0:
+            raise ValueError("ENSEMBLE_RRF_WEIGHTS values must be finite non-negative numbers keyed by channel")
+    return {key: float(weight) for key, weight in value.items()}
 
 
 def _rrf_constant() -> int:
