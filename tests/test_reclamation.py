@@ -96,7 +96,7 @@ def test_reclamation_physically_removes_active_source_data_but_not_index_tombsto
         await documents.tombstone_source("source-1")
         await knowledge.tombstone("source-1")
         assert await documents.all_chunks() == []
-        assert await knowledge.get("source-1") is None
+        assert (await knowledge.get("source-1"))["tombstoned"] is True
         assert await vectors.query("test", [1.0, 0.0], 10) == []
 
         await index.mark_purged("source-1")
