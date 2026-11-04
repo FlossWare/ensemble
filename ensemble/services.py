@@ -4,6 +4,7 @@ import re
 import hashlib
 import math
 import asyncio
+import copy
 import os
 import time
 from collections.abc import Sequence
@@ -27,11 +28,27 @@ def _retrieval_channel_timeout() -> float:
 
 
 class DocumentService:
-    def __init__(self, store: DocumentStore, chunker: Chunker, embeddings: EmbeddingProvider, vector_store: VectorStore | None = None):
+    def __init__(
+        self, store: DocumentStore, chunker: Chunker, embeddings: EmbeddingProvider,
+        vector_store: VectorStore | None = None, index_store: object | None = None,
+    ):
         self.store = store
         self.chunker = chunker
         self.embeddings = embeddings
         self.vector_store = vector_store
+        self.index_store = index_store
+
+    async def _active_generation(self) -> str | None:
+        if self.index_store is None:
+            return None
+        status = await self.index_store.generation_status()
+        active_id = status.get("active_generation_id")
+        active = next((item for item in status.get("generations", [])
+                       if item.get("generation_id") == active_id), None)
+        verification = (active or {}).get("verification") or {}
+        if active and active.get("state") == "active" and verification.get("acknowledged_writes_verified") is True:
+            return active_id
+        return None
 
     async def ingest(self, request: DocumentIn, *, embed: bool = True, vector_collection: str | None = None) -> DocumentOut:
         document = Document(request.source_id, request.revision, request.title, request.content, request.metadata)
@@ -72,6 +89,11 @@ class DocumentService:
                 chunk.document_id = document.id
                 chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
             document = await self.store.save(document, chunks)
+        active_generation_id = await self._active_generation()
+        if active_generation_id is not None:
+            await self.store.upsert_generation(
+                active_generation_id, copy.deepcopy(document), copy.deepcopy(chunks),
+            )
         vector_indexed = False
         digest = hashlib.sha256(request.content.encode("utf-8")).hexdigest()
         if vector_collection and embed and self.vector_store is not None:
@@ -103,6 +125,13 @@ class DocumentService:
                         await self.vector_store.upsert(
                             vector_collection, model, dimensions, items[offset:offset + 256]
                         )
+                    if active_generation_id is not None:
+                        await self.vector_store.delete_generation_source(
+                            active_generation_id, document.source_id, name=vector_collection,
+                        )
+                        await self.vector_store.upsert_generation(
+                            active_generation_id, vector_collection, model, dimensions, items,
+                        )
                     vector_indexed = True
                 except Exception:
                     vector_indexed = False
@@ -129,11 +158,16 @@ class DocumentService:
 
 
 class SearchService:
-    def __init__(self, store: DocumentStore, embeddings: EmbeddingProvider, reranker: Reranker | None = None, vector_store: VectorStore | None = None):
+    def __init__(
+        self, store: DocumentStore, embeddings: EmbeddingProvider,
+        reranker: Reranker | None = None, vector_store: VectorStore | None = None,
+        index_store: object | None = None,
+    ):
         self.store = store
         self.embeddings = embeddings
         self.reranker = reranker
         self.vector_store = vector_store
+        self.index_store = index_store
         provider = configured_ranking_provider(reranker)
         self.search_with_status = RerankingDecorator(provider)(self._search_with_status)
 
@@ -162,7 +196,19 @@ class SearchService:
         if not query.strip():
             raise ValueError("query is required")
 
-        indexed = await self.store.all_chunks()
+        active_generation_id = None
+        if self.index_store is not None:
+            status_snapshot = await self.index_store.generation_status()
+            active_id = status_snapshot.get("active_generation_id")
+            active_row = next((item for item in status_snapshot.get("generations", [])
+                               if item.get("generation_id") == active_id), None)
+            verification = (active_row or {}).get("verification") or {}
+            if active_row and active_row.get("state") == "active" and verification.get("acknowledged_writes_verified") is True:
+                active_generation_id = active_id
+        indexed = (
+            await self.store.generation_all_chunks(active_generation_id)
+            if active_generation_id is not None else await self.store.all_chunks()
+        )
         lexical_scores: dict = {}
         vector_scores: dict = {}
         degraded: list[str] = []
@@ -175,9 +221,14 @@ class SearchService:
         # Keep channels independent: one failing must not suppress the other.
         lexical_started = time.perf_counter()
         try:
+            lexical_operation = (
+                self.store.generation_lexical_search(
+                    active_generation_id, query, limit=min(2000, max(200, limit * 4)),
+                ) if active_generation_id is not None else
+                self.store.lexical_search(query, limit=min(2000, max(200, limit * 4)))
+            )
             lexical_matches = await asyncio.wait_for(
-                self.store.lexical_search(query, limit=min(2000, max(200, limit * 4))),
-                timeout=_retrieval_channel_timeout(),
+                lexical_operation, timeout=_retrieval_channel_timeout(),
             )
             lexical_scores = {item.chunk.id: score for item, score in lexical_matches}
             channels["lexical"] = {
@@ -226,9 +277,14 @@ class SearchService:
                     if self.vector_store is not None:
                         collection_started = time.perf_counter()
                         try:
+                            vector_operation = (
+                                self.vector_store.query_generation(
+                                    active_generation_id, "transcript_text", query_vector, 200,
+                                ) if active_generation_id is not None else
+                                self.vector_store.query("transcript_text", query_vector, 200)
+                            )
                             vector_hits = await asyncio.wait_for(
-                                self.vector_store.query("transcript_text", query_vector, 200),
-                                timeout=_retrieval_channel_timeout(),
+                                vector_operation, timeout=_retrieval_channel_timeout(),
                             )
                             known_ids = {str(item.chunk.id): item.chunk.id for item in indexed}
                             collection_scores = {
