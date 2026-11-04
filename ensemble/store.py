@@ -109,6 +109,8 @@ class DocumentStore(Protocol):
     async def check_ready(self) -> None: ...
     async def save(self, document: Document, chunks: list[Chunk]) -> Document: ...
     async def tombstone_source(self, source_id: str) -> None: ...
+    async def restore_source(self, source_id: str) -> None: ...
+    async def reclaim_source(self, source_id: str) -> int: ...
     async def all_chunks(self) -> list[IndexedChunk]: ...
     async def lexical_search(self, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]: ...
     async def upsert_generation(self, generation_id: str, document: Document, chunks: list[Chunk]) -> Document: ...
@@ -145,6 +147,19 @@ class InMemoryDocumentStore:
 
     async def tombstone_source(self, source_id: str) -> None:
         self._tombstoned.add(source_id)
+
+    async def restore_source(self, source_id: str) -> None:
+        self._tombstoned.discard(source_id)
+
+    async def reclaim_source(self, source_id: str) -> int:
+        keys = [key for key in self._documents if key[0] == source_id]
+        selected = keys[:500]
+        document_ids = {self._documents[key].id for key in selected}
+        for key in selected:
+            del self._documents[key]
+        for document_id in document_ids:
+            self._chunks.pop(document_id, None)
+        return 501 if len(keys) > 500 else len(selected)
 
     async def all_chunks(self) -> list[IndexedChunk]:
         latest: dict[str, Document] = {}
@@ -402,6 +417,39 @@ class SqlDocumentStore:
                 update(self.documents).where(self.documents.c.source_id == source_id)
                 .values(is_current=False)
             )
+
+    async def restore_source(self, source_id: str) -> None:
+        async with self.engine.begin() as connection:
+            latest = (await connection.execute(
+                select(self.documents.c.id).where(self.documents.c.source_id == source_id)
+                .order_by(self.documents.c.revision.desc()).limit(1)
+            )).scalar_one_or_none()
+            await connection.execute(
+                update(self.documents).where(self.documents.c.source_id == source_id)
+                .values(is_current=False)
+            )
+            if latest is not None:
+                await connection.execute(
+                    update(self.documents).where(self.documents.c.id == latest)
+                    .values(is_current=True)
+                )
+
+    async def reclaim_source(self, source_id: str) -> int:
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM ensemble_lexical_fts WHERE source_id = :source_id"),
+                {"source_id": source_id},
+            )
+            document_ids = (await connection.execute(
+                select(self.documents.c.id).where(self.documents.c.source_id == source_id)
+                .order_by(self.documents.c.id).limit(501)
+            )).scalars().all()
+            more = len(document_ids) > 500
+            document_ids = document_ids[:500]
+            if document_ids:
+                await connection.execute(delete(self.chunks).where(self.chunks.c.document_id.in_(document_ids)))
+                await connection.execute(delete(self.documents).where(self.documents.c.id.in_(document_ids)))
+        return 501 if more else len(document_ids)
 
     async def all_chunks(self) -> list[IndexedChunk]:
         statement = (
