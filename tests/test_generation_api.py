@@ -45,8 +45,24 @@ def test_generation_api_runs_bounded_index_copy_and_fails_closed_on_fence(tmp_pa
         assert copied.json()["status"] == "complete"
         assert copied.json()["page_count"] == 0
 
+        for capability in ("documents", "vectors", "knowledge"):
+            response = client.post(
+                f"/api/v1/index/generations/generation-api-test/copy/{capability}",
+                json={"page_size": 10},
+            )
+            assert response.status_code == 200
+            assert response.json()["status"] == "complete"
+
+        for capability in ("index", "documents", "vectors", "knowledge"):
+            response = client.post(
+                f"/api/v1/index/generations/generation-api-test/reconcile/{capability}",
+                json={"page_size": 10},
+            )
+            assert response.status_code == 200
+            assert response.json()["status"] == "caught_up"
+
         fenced = client.post(
             "/api/v1/index/generations/generation-api-test/fence",
         )
         assert fenced.status_code == 409
-        assert "memory" in fenced.json()["detail"]
+        assert "memory source copy must be sealed" in fenced.json()["detail"]
