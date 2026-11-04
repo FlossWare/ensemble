@@ -463,3 +463,48 @@ def test_generation_fence_recovery_reopens_building_generation_and_invalidates_r
             await store.close()
 
     asyncio.run(scenario())
+
+
+
+def test_application_startup_recovers_interrupted_generation_fence(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-startup-recovery.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    async def leave_interrupted_cutover():
+        store = SqliteIndexStore(database_url)
+        await store.initialize()
+        await store.create_generation("startup-recovery-generation")
+        await store.record_generation_checkpoint(
+            "startup-recovery-generation", "index_reconciliation",
+            {"cursor": 0, "observed_high_watermark": 0}, sealed=True,
+        )
+        await store.acquire_generation_write_fence(
+            "startup-recovery-generation", through_change_id=0,
+        )
+        await store.close()
+
+    asyncio.run(leave_interrupted_cutover())
+
+    # The application lifespan is the production recovery path. Starting the
+    # app must release the abandoned fence and invalidate every sealed
+    # reconciliation checkpoint before accepting traffic.
+    with TestClient(create_app(database_url=database_url)):
+        pass
+
+    with sqlite3.connect(tmp_path / "generation-startup-recovery.db") as connection:
+        fence_count = connection.execute(
+            "SELECT COUNT(*) FROM ensemble_index_generation_write_fence"
+        ).fetchone()[0]
+        generation = connection.execute(
+            "SELECT state, checkpoints FROM ensemble_index_generations "
+            "WHERE generation_id = ?",
+            ("startup-recovery-generation",),
+        ).fetchone()
+
+    assert fence_count == 0
+    assert generation is not None
+    assert generation[0] == "building"
+    checkpoints = __import__("json").loads(generation[1])
+    assert checkpoints["index_reconciliation"]["sealed"] is False
