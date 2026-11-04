@@ -96,6 +96,8 @@ Implement durable index rebuilds that can safely coexist with writes:
 
 **Resumable document/chunk copy pass implemented:** the builder requires the Index source pass to be sealed, then pages the generation-scoped source manifest and copies each active source's current document/chunks into isolated shadow tables. Tombstones are applied to both shadow document and vector stores. The Documents checkpoint persists its own cursor and counts and seals on completion. This still requires reconciliation for source changes that race the bounded copy.
 
+**Resumable vector copy pass implemented:** the builder captures each active collection's model, dimensions, and record-key upper bound, then copies bounded pages into generation-scoped vector storage. Every record must resolve to a generation Index source; unattributed or unknown-source records fail closed, and tombstoned sources are skipped. The Vectors checkpoint records collection progress and counts and seals only after every captured collection completes.
+
 **Not yet implemented:** a durable rebuild worker that snapshots and populates document, lexical, and vector stores, write-fence coordination, concurrent-write reconciliation, automatic restart recovery, and atomic activation across retrieval data planes. Keep the rebuild API unavailable until those pieces exist.
 
 Do not ship a rebuild operation that can silently lose acknowledged writes or resurrect deleted content.
