@@ -81,3 +81,149 @@ def test_reranking_rest_reports_missing_provider():
             json={"query": "search relevance", "documents": ["candidate"]},
         )
         assert response.status_code == 503
+
+
+import asyncio
+from uuid import uuid4
+
+from ensemble.models import SearchHit
+from ensemble.reranking import RerankingDecorator
+
+
+class AsyncRankingProvider:
+    available = True
+
+    def status(self):
+        return {"provider": "test-http"}
+
+    async def score(self, query, documents):
+        return [float(index) for index, _ in enumerate(documents)]
+
+
+def _hit(text):
+    return SearchHit(
+        document_id=uuid4(), source_id="source", revision=1,
+        title=text, chunk_id=uuid4(), chunk_ordinal=0, text=text,
+        lexical_score=1.0, vector_score=0.0, fusion_score=1.0,
+    )
+
+
+def test_reranking_decorator_wraps_retriever_and_preserves_candidate_identity():
+    original = [_hit("first"), _hit("second")]
+
+    async def retrieve(query, limit=10, *, rerank=None):
+        return {
+            "ok": True, "status": "ok", "results": list(original),
+            "degraded": [], "reranked": False,
+        }
+
+    decorated = RerankingDecorator(AsyncRankingProvider())(retrieve)
+    result = asyncio.run(decorated("query", rerank=True))
+
+    assert result["ranking"]["status"] == "reranked"
+    assert result["ranking"]["provider"] == "test-http"
+    assert result["reranked"] is True
+    assert [hit.text for hit in result["results"]] == ["second", "first"]
+    assert {hit.chunk_id for hit in result["results"]} == {hit.chunk_id for hit in original}
+
+
+def test_reranking_decorator_falls_back_without_changing_baseline():
+    original = [_hit("first"), _hit("second")]
+
+    async def retrieve(query, limit=10, *, rerank=None):
+        return {
+            "ok": True, "status": "ok", "results": list(original),
+            "degraded": [], "reranked": False,
+        }
+
+    decorated = RerankingDecorator(None)(retrieve)
+    result = asyncio.run(decorated("query", rerank=True))
+
+    assert result["ranking"]["status"] == "fallback"
+    assert result["ranking"]["reason"] == "provider_unavailable"
+    assert result["reranked"] is False
+    assert [hit.chunk_id for hit in result["results"]] == [hit.chunk_id for hit in original]
+    assert "reranking" in result["degraded"]
+
+
+
+def test_http_ranking_provider_uses_bounded_contract_and_authorization():
+    import httpx
+    from ensemble.reranking import HttpRankingProvider
+
+    observed = {}
+
+    def handler(request):
+        observed["url"] = str(request.url)
+        observed["authorization"] = request.headers.get("authorization")
+        observed["payload"] = request.read()
+        return httpx.Response(200, json={"scores": [0.25, 0.9]})
+
+    provider = HttpRankingProvider(
+        "https://ranking.example/api", model="rank-v1",
+        api_key="test-secret", transport=httpx.MockTransport(handler),
+    )
+    scores = asyncio.run(provider.score("query", ["first", "second"]))
+
+    assert scores == [0.25, 0.9]
+    assert observed["url"] == "https://ranking.example/api/rerank"
+    assert observed["authorization"] == "Bearer test-secret"
+    assert b'"model":"rank-v1"' in observed["payload"]
+
+
+def test_http_ranking_provider_rejects_misaligned_scores():
+    import httpx
+    from ensemble.reranking import HttpRankingProvider
+
+    provider = HttpRankingProvider(
+        "https://ranking.example",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"scores": [1.0]})
+        ),
+    )
+    with pytest.raises(ValueError, match="score count"):
+        asyncio.run(provider.score("query", ["first", "second"]))
+
+
+def test_http_ranking_provider_rejects_non_finite_scores():
+    import httpx
+    from ensemble.reranking import HttpRankingProvider
+
+    provider = HttpRankingProvider(
+        "https://ranking.example",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"scores": ["nan"]})
+        ),
+    )
+    with pytest.raises(ValueError, match="finite"):
+        asyncio.run(provider.score("query", ["first"]))
+
+
+
+def test_hybrid_search_applies_ranking_decorator_after_retrieval():
+    from ensemble.embeddings import DisabledEmbeddingProvider
+
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        reranker=StubReranker(),
+        embedding_provider=DisabledEmbeddingProvider(),
+    )
+    with TestClient(app) as client:
+        for source_id, content in (
+            ("short-candidate", "retrieval relevance"),
+            ("long-candidate", "retrieval relevance with additional context about ranking quality and candidate selection"),
+        ):
+            response = client.post("/api/v1/ingest/documents", json={
+                "source_id": source_id, "revision": 1,
+                "title": source_id, "content": content,
+            })
+            assert response.status_code == 201
+
+        response = client.post("/api/v1/search/hybrid", json={
+            "query": "retrieval relevance", "limit": 10, "rerank": True,
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ranking"]["status"] == "reranked"
+        assert body["ranking"]["provider"] == "local-cross-encoder"
+        assert body["reranked"] is True
