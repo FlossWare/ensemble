@@ -192,7 +192,7 @@ class InMemoryCrawlJobStore:
     async def check_ready(self) -> None: return None
     async def close(self) -> None: return None
 
-    async def enqueue(self, uri: str, max_pages: int, max_depth: int) -> dict[str, Any]:
+    async def enqueue(self, uri: str, max_pages: int, max_depth: int, *, auto_ingest: bool = False, schedule_id: str | None = None) -> dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         job_id = uuid.uuid4().hex
         self._jobs[job_id] = {
