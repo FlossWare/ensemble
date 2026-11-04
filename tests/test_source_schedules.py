@@ -44,7 +44,12 @@ def test_source_schedule_can_be_paused_and_resumed():
 
 
 def test_scheduled_source_refresh_crawls_and_ingests_automatically(monkeypatch):
-    async def fake_crawl(uri, max_pages=10, max_depth=1):
+    async def fake_crawl(uri, max_pages=10, max_depth=1, trace=None):
+        if callable(trace):
+            await trace({
+                "name": "scheduled_page_fetch", "status": "completed",
+                "duration_ms": 0.1, "page": 1,
+            })
         return {
             "ok": True, "start_uri": uri, "page_count": 1,
             "pages": [{
@@ -88,6 +93,15 @@ def test_scheduled_source_refresh_crawls_and_ingests_automatically(monkeypatch):
         assert job["auto_ingest"] is True
         assert job["ingestion"]["status"] == "completed"
         assert job["ingestion"]["pages"][0]["status"] == "completed"
+        trace_id = job["result"]["execution_trace_id"]
+        trace_response = client.get(f"/api/v1/execution-traces/{trace_id}")
+        assert trace_response.status_code == 200
+        trace = trace_response.json()["trace"]
+        assert trace["operation"] == "crawl_job"
+        assert trace["status"] == "completed"
+        assert [stage["name"] for stage in trace["stages"]] == [
+            "scheduled_page_fetch", "crawl_job_execution", "automatic_ingestion",
+        ]
 
 
 def test_source_schedule_api_rejects_too_frequent_refresh(monkeypatch):

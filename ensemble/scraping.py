@@ -329,8 +329,17 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1, *, trace:
             5.0, max(0.0, float(rules.crawl_delay(CRAWLER_AGENT) or rules.crawl_delay("*") or 0))
         ),
     )
+    initial_policy_started = time.perf_counter()
     if not rules.can_fetch(CRAWLER_AGENT, start_uri):
+        await record_stage(
+            "initial_page_policy", "failed", initial_policy_started,
+            reason="robots_disallowed",
+        )
         raise ScrapeError("robots_disallowed", "robots.txt disallows crawling the requested URI", 403)
+    await record_stage(
+        "initial_page_policy", "completed", initial_policy_started,
+        allowed=True,
+    )
 
     first_started = time.perf_counter()
     try:
@@ -374,9 +383,14 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1, *, trace:
             )
             continue
         attempts += 1
-        page_started = time.perf_counter()
         if crawl_delay:
+            delay_started = time.perf_counter()
             await asyncio.sleep(crawl_delay)
+            await record_stage(
+                "crawl_delay", "completed", delay_started,
+                depth=depth, delay_seconds=crawl_delay,
+            )
+        page_started = time.perf_counter()
         try:
             page = await preview_uri(target, allowed_origin=origin)
         except ScrapeError as exc:
