@@ -51,6 +51,8 @@ class KnowledgeStore(Protocol):
     async def put(self, record: dict[str, Any]) -> str: ...
     async def get(self, source_id: str) -> dict[str, Any] | None: ...
     async def tombstone(self, source_id: str) -> None: ...
+    async def restore(self, source_id: str) -> None: ...
+    async def reclaim_source(self, source_id: str) -> int: ...
     async def upsert_generation(self, generation_id: str, record: dict[str, Any]) -> str: ...
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> None: ...
     async def get_generation(self, generation_id: str, source_id: str) -> dict[str, Any] | None: ...
@@ -98,7 +100,7 @@ class SqliteKnowledgeStore:
             row = (await connection.execute(
                 select(knowledge_records).where(knowledge_records.c.source_id == source_id)
             )).mappings().first()
-        if row is None:
+        if row is None or row["tombstoned"]:
             return None
         return {
             "source_id": row["source_id"],
@@ -214,14 +216,30 @@ class InMemoryKnowledgeStore:
         }
         return digest
 
+    async def restore(self, source_id: str) -> None:
+        async with self.engine.begin() as connection:
+            await connection.execute(knowledge_records.update().where(knowledge_records.c.source_id == source_id).values(tombstoned=False, updated_at=datetime.now(timezone.utc)))
+
+    async def reclaim_source(self, source_id: str) -> int:
+        async with self.engine.begin() as connection:
+            result = await connection.execute(knowledge_records.delete().where(knowledge_records.c.source_id == source_id))
+        return result.rowcount or 0
+
     async def get(self, source_id: str) -> dict[str, Any] | None:
         import copy
         record = self._records.get(source_id)
-        return copy.deepcopy(record) if record else None
+        return copy.deepcopy(record) if record and not record.get("tombstoned") else None
 
     async def tombstone(self, source_id: str) -> None:
         if source_id in self._records:
             self._records[source_id]["tombstoned"] = True
+
+    async def restore(self, source_id: str) -> None:
+        if source_id in self._records:
+            self._records[source_id]["tombstoned"] = False
+
+    async def reclaim_source(self, source_id: str) -> int:
+        return int(self._records.pop(source_id, None) is not None)
 
     async def upsert_generation(self, generation_id: str, record: dict[str, Any]) -> str:
         import copy
