@@ -119,7 +119,7 @@ Do not ship a rebuild operation that can silently lose acknowledged writes or re
 
 ### 9. Source adapters
 
-- Complete bounded website crawling with robots policy, DNS-to-connection binding, redirect and response limits, and durable refresh jobs.
+- Bounded same-origin crawl preview now enforces robots.txt, pins each connection to its validated DNS address, rejects cross-origin redirects, and caps page attempts, depth, response size, and total extracted characters. Durable crawl-ingestion jobs, retry/recovery, scheduled refresh, and Control Center crawl controls remain.
 - Add OCR only with a deliberate provider/runtime decision.
 - Provide source connector contracts without coupling core ingestion to individual vendors.
 

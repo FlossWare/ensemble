@@ -129,7 +129,15 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <input id="uri" type="url" required placeholder="https://example.org/docs">
 <button type="submit">Preview page</button>
 </form>
+<div class="inline-fields">
+<label for="crawl-pages">Crawl request limit (1-20)</label>
+<input id="crawl-pages" type="number" min="1" max="20" value="10">
+<label for="crawl-depth">Crawl depth (0-3)</label>
+<input id="crawl-depth" type="number" min="0" max="3" value="1">
+<button id="crawl-preview" type="button">Preview same-origin crawl</button>
+</div>
 <p id="status">Preview first. Ingestion is a separate explicit action.</p>
+<pre id="crawl-results">No crawl preview run. Crawling is preview-only.</pre>
 <section id="preview" hidden>
 <h2 id="title"></h2><p id="metadata"></p><pre id="body"></pre><h3>Discovered links (not crawled)</h3><div id="links"></div>
 <button id="ingest" type="button">Ingest this page</button>

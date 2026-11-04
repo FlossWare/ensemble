@@ -72,6 +72,29 @@ ingest.addEventListener("click",async()=>{
  }catch(error){status.textContent="Ingestion failed: "+error.message;ingest.disabled=false;}
 });
 
+const crawlButton=document.getElementById("crawl-preview");
+const crawlPages=document.getElementById("crawl-pages");
+const crawlDepth=document.getElementById("crawl-depth");
+const crawlResults=document.getElementById("crawl-results");
+crawlButton.addEventListener("click",async()=>{
+ const requestedUri=uri.value.trim();
+ const maxPages=Number.parseInt(crawlPages.value,10);
+ const maxDepth=Number.parseInt(crawlDepth.value,10);
+ crawlButton.disabled=true;
+ status.textContent="Checking robots policy and crawling bounded same-origin pages…";
+ try{
+  const result=await request("/api/v1/ingest/urls/crawl-preview",{
+   uri:requestedUri,max_pages:maxPages,max_depth:maxDepth
+  });
+  if(uri.value.trim()!==requestedUri){status.textContent="URI changed. Run a fresh crawl preview.";return;}
+  crawlResults.textContent=JSON.stringify(result,null,2);
+  status.textContent="Crawl preview complete: "+result.page_count+" pages, "+result.attempted_pages+" attempts. Nothing was ingested.";
+ }catch(error){
+  crawlResults.textContent="Crawl preview failed: "+error.message;
+  status.textContent="Crawl preview failed.";
+ }finally{crawlButton.disabled=false;}
+});
+
 const refreshHealth=document.getElementById("refresh-health");
 const healthResult=document.getElementById("health-result");
 refreshHealth.addEventListener("click",async()=>{
