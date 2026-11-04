@@ -83,16 +83,17 @@ Implemented:
 - Versioned SQLite migration for durable index-generation metadata and a singleton active-generation pointer.
 - Monotonically increasing active-generation epoch for compare-and-swap cutover.
 - Database constraint allowing at most one generation in the building state.
-- Independent sealed checkpoints for Index, Memory, and Knowledge.
-- Cutover guard requiring all three checkpoints sealed plus explicit acknowledged-write and tombstone verification.
+- Independent sealed checkpoints for Index, Documents, Vectors, Memory, and Knowledge.
+- Cutover guard requiring all five checkpoints sealed plus explicit acknowledged-write and tombstone verification.
 - Atomic active-pointer update and active/retired state transition in one SQLite transaction.
 - In-memory adapter with matching lifecycle and cutover rules.
 
 Not yet implemented:
-- Shadow generation storage for actual document/chunk/vector retrieval data.
+- Durable rebuild orchestration across the Index, document/chunk, and vector shadow stores.
 - Write fences coordinated with every ingestion and tombstone writer.
 - Reconciliation of writes accepted while the generation is being built.
 - Restart recovery for interrupted rebuilds and uncertain cutover.
+- Memory and Knowledge generation snapshots and reconciliation.
 - Public rebuild operations. These remain intentionally unavailable until the data-plane guarantees are implemented.
 
 

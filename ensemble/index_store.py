@@ -139,7 +139,7 @@ class SqliteIndexStore:
         self, generation_id: str, capability: str,
         checkpoint: dict[str, Any], sealed: bool = False,
     ) -> dict[str, Any]:
-        if capability not in {"index", "memory", "knowledge"}:
+        if capability not in {"index", "documents", "vectors", "memory", "knowledge"}:
             raise ValueError("capability must be index, memory, or knowledge")
         if not isinstance(checkpoint, dict):
             raise ValueError("checkpoint must be an object")
@@ -191,8 +191,8 @@ class SqliteIndexStore:
             if target is None or target["state"] != "building":
                 raise RuntimeError("target generation is not building")
             checkpoints = target["checkpoints"] or {}
-            if not all(checkpoints.get(name, {}).get("sealed") is True for name in ("index", "memory", "knowledge")):
-                raise RuntimeError("index, memory, and knowledge checkpoints must all be sealed")
+            if not all(checkpoints.get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge")):
+                raise RuntimeError("index, documents, vectors, memory, and knowledge checkpoints must all be sealed")
             changed = await connection.execute(generation_control.update().where(
                 generation_control.c.singleton_id == 1,
                 generation_control.c.active_generation_id == expected_active_generation_id,

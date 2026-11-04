@@ -197,7 +197,7 @@ class InMemoryIndexStore:
         checkpoint: dict[str, Any], sealed: bool = False,
     ) -> dict[str, Any]:
         import json
-        if capability not in {"index", "memory", "knowledge"}:
+        if capability not in {"index", "documents", "vectors", "memory", "knowledge"}:
             raise ValueError("capability must be index, memory, or knowledge")
         if not isinstance(checkpoint, dict):
             raise ValueError("checkpoint must be an object")
@@ -229,8 +229,8 @@ class InMemoryIndexStore:
         target = self._generations.get(generation_id)
         if target is None or target["state"] != "building":
             raise RuntimeError("target generation is not building")
-        if not all(target["checkpoints"].get(name, {}).get("sealed") is True for name in ("index", "memory", "knowledge")):
-            raise RuntimeError("index, memory, and knowledge checkpoints must all be sealed")
+        if not all(target["checkpoints"].get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge")):
+            raise RuntimeError("index, documents, vectors, memory, and knowledge checkpoints must all be sealed")
         now = datetime.now(timezone.utc).isoformat()
         self._generations[self._active_generation_id]["state"] = "retired"
         self._generations[self._active_generation_id]["updated_at"] = now

@@ -1113,7 +1113,7 @@ def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verifi
                 {"acknowledged_writes_verified": True, "tombstones_verified": True},
             )
 
-        for capability in ("index", "memory", "knowledge"):
+        for capability in ("index", "documents", "vectors", "memory", "knowledge"):
             await store.record_generation_checkpoint(
                 "generation-0002", capability,
                 {"cursor": capability + "-complete"}, sealed=True,
@@ -1155,7 +1155,7 @@ def test_in_memory_generation_registry_enforces_single_build_and_cutover():
         await store.create_generation("generation-0002")
         with pytest.raises(RuntimeError, match="already in progress"):
             await store.create_generation("generation-0003")
-        for capability in ("index", "memory", "knowledge"):
+        for capability in ("index", "documents", "vectors", "memory", "knowledge"):
             await store.record_generation_checkpoint(
                 "generation-0002", capability, {"cursor": "done"}, sealed=True,
             )
