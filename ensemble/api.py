@@ -3229,15 +3229,78 @@ def create_app(
         }
 
     @app.post("/api/v1/search/retrieve", tags=["search"])
-    async def search_retrieve(search_request: SearchIn):
-        """Execute the Search capability's lexical/vector retrieval contract."""
+    async def search_retrieve(search_request: SearchIn, request: Request):
+        """Execute lexical/vector retrieval and capture its real execution trace."""
+        trace_id = uuid4().hex
+        started = time.perf_counter()
+        created = False
         try:
-            return await search.search_with_status(
+            await active_execution_trace_store.create({
+                "trace_id": trace_id,
+                "request_id": trace_id,
+                "operation": "retrieval",
+                "status": "running",
+                "started_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                "completed_at": None,
+                "duration_ms": None,
+                "attributes": {
+                    "query_key": hashlib.sha256(search_request.query.encode("utf-8")).hexdigest(),
+                    "limit": search_request.limit,
+                    "rerank_requested": search_request.rerank,
+                },
+                "stages": [],
+                "error_category": None,
+            })
+            created = True
+        except Exception:
+            pass
+        try:
+            result = await search.search_with_status(
                 search_request.query, search_request.limit, rerank=search_request.rerank
             )
+            fusion = result.get("fusion") or {}
+            channels = fusion.get("channels") or {}
+            if created:
+                try:
+                    await active_execution_trace_store.record_stage(trace_id, {
+                        "name": "lexical_vector_retrieval_and_fusion",
+                        "status": "completed",
+                        "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                        "candidate_count": len(result.get("results", [])),
+                        "channel_candidate_counts": {
+                            name: details.get("candidate_count", 0)
+                            for name, details in channels.items() if isinstance(details, dict)
+                        },
+                        "fusion_algorithm": fusion.get("algorithm"),
+                        "rrf_k": fusion.get("k"),
+                        "degraded": result.get("degraded", []),
+                    })
+                    await active_execution_trace_store.finish(
+                        trace_id,
+                        "degraded" if result.get("degraded") else "completed",
+                        (time.perf_counter() - started) * 1000,
+                    )
+                except Exception:
+                    pass
+            result["execution_trace_id"] = trace_id
+            return result
         except ValueError as exc:
+            if created:
+                try:
+                    await active_execution_trace_store.finish(
+                        trace_id, "failed", (time.perf_counter() - started) * 1000, type(exc).__name__,
+                    )
+                except Exception:
+                    pass
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
+            if created:
+                try:
+                    await active_execution_trace_store.finish(
+                        trace_id, "failed", (time.perf_counter() - started) * 1000, type(exc).__name__,
+                    )
+                except Exception:
+                    pass
             raise HTTPException(status_code=502, detail="search retrieval failed") from exc
 
     @app.post("/api/v1/search/hybrid", tags=["search"])
