@@ -99,7 +99,11 @@ Branch `integration/source-lifecycle-mainline-2026-11-04` is in progress and not
 - The reclamation worker removes active materialized data and marks the Index source permanently purged only after all stores report completion. Purge marking is retry-safe.
 - `GET /api/v1/index/reclamation` reports queue counts; `POST /api/v1/index/reclamation/run` triggers a bounded pass.
 - Document publication and source tombstones are required to follow Index lifecycle state. Untracked standalone vector mutations are rejected while a generation is building.
-- Latest verified integration CI: **205 passed, 1 skipped**.
+- Generation recovery fails closed for missing or unexpected generation states. Application startup releases an abandoned fence, invalidates reconciliation checkpoints, and remains idempotent on repeated startup.
+- Activation rejects incomplete checkpoints. Injected failure during the activation transaction preserves the previous active pointer, generation state, epoch, and write fence.
+- Memory generation snapshots reconcile updates and deletions during rebuild and continue mirroring writes and deletes after activation.
+- Vector generation mirroring reflects the persisted base Vector state. A failed active-generation mirror leaves the Index journal unacknowledged for retry; non-embedded revisions remove stale vectors from both stores.
+- Latest verified integration CI: **212 passed, 1 skipped**.
 
 ## Partition isolation implementation
 

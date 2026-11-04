@@ -79,10 +79,10 @@ Merged into `main` via [PR #42](https://github.com/FlossWare/ensemble/pull/42):
 - The active generation pointer now drives lexical/vector retrieval. Document writes, vector writes, Knowledge publication, Index manifest changes, Memory snapshots, and tombstones keep the active generation current after cutover.
 - The existing FTS5/BM25 lexical scoring path is preserved; active-generation candidate IDs constrain returned results.
 - Activation retries are idempotent after a lost response. Restart recovery releases an abandoned fence and reopens reconciliation checkpoints so subsequent writes can be reconciled.
-- CI has verified end-to-end copy, reconciliation, activation, retrieval, post-activation document/Knowledge/vector writes, tombstones, Memory snapshot reconciliation, idempotent activation retry, and fence recovery. The latest verified integration run passed 203 tests with 1 skipped.
+- CI has verified end-to-end copy, reconciliation, activation, retrieval, post-activation document/Knowledge/vector writes, tombstones, Memory snapshot reconciliation and active-generation mirroring, idempotent activation retry, startup fence recovery (including repeated startup), incomplete-activation rejection, transaction rollback under injected activation failure, and retry after active-generation Vector mirror failure. The latest verified integration run passed 212 tests with 1 skipped.
 
 Remaining follow-up:
-- Expand failure-injection coverage across capability writes, interrupted ingestion, and repeated recovery.
+- Continue failure-injection coverage across the remaining capability write paths and interrupted ingestion. Repeated startup recovery and atomic activation rollback are now covered.
 - Extend durable operation tracking to long-running rebuild and non-transcript ingestion jobs.
 - Keep activation fail-closed if any capability checkpoint, journal acknowledgement, or tombstone verification is missing.
 
