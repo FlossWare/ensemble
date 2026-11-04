@@ -9,6 +9,8 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
 
+from .partitioning import PartitionedAsyncEngine
+
 
 reclamation_metadata = MetaData()
 reclamation_jobs = Table(
@@ -42,7 +44,7 @@ class SqliteReclamationStore:
         )
         if make_url(self.database_url).get_backend_name() != "sqlite":
             raise ValueError("Ensemble reclamation persistence supports SQLite only")
-        self.engine: AsyncEngine = create_async_engine(self.database_url, pool_pre_ping=True)
+        self.engine: AsyncEngine = PartitionedAsyncEngine(self.database_url, pool_pre_ping=True)
 
     async def initialize(self) -> None:
         async with self.engine.connect() as connection:
