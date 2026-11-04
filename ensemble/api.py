@@ -2779,6 +2779,8 @@ def create_app(
             graph_expansion["duration_ms"] = round(
                 (time.perf_counter() - graph_started) * 1000, 3
             )
+            if isinstance(result.get("fusion"), dict):
+                result["fusion"]["results"] = result["fusion"].get("results", [])[:search_request.limit]
             result["graph_expansion"] = graph_expansion
             if graph_expansion.get("timed_out"):
                 result["degraded"].append("graph_timeout")
