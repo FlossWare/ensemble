@@ -454,6 +454,15 @@ class SqliteMemoryStore:
                 set_={"snapshot": snapshot, "updated_at": now},
             ))
 
+    async def get_memory_generation_snapshot(
+        self, generation_id: str, name: str,
+    ) -> dict[str, Any] | None:
+        async with self.engine.connect() as connection:
+            return await connection.scalar(select(memory_generation_records.c.snapshot).where(
+                memory_generation_records.c.generation_id == generation_id,
+                memory_generation_records.c.name == validate_memory_name(name),
+            ))
+
     async def list_memory_generation_changes_after(
         self, generation_id: str, after_change_id: int, limit: int,
     ) -> list[dict[str, Any]]:
