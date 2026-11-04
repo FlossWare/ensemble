@@ -408,6 +408,49 @@ class SqliteVectorStore:
         scored.sort(key=lambda item: (-item["score"], item["id"]))
         return scored[:top_k]
 
+    async def list_records_for_source(
+        self, name: str, source_id: str, limit: int = 10000,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(source_id, str) or not source_id:
+            raise ValueError("source_id is required")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        statement = select(
+            records.c.record_id, records.c.embedding,
+            records.c.document, records.c.metadata,
+        ).where(
+            records.c.collection_name == name,
+            or_(
+                func.json_extract(records.c.metadata, "$.source_id") == source_id,
+                func.json_extract(records.c.metadata, "$.url") == source_id,
+            ),
+        ).order_by(records.c.record_id).limit(limit + 1)
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(statement)).mappings().all()
+        if len(rows) > limit:
+            raise RuntimeError("source has too many vector records for one reconciliation page")
+        return [{
+            "id": row["record_id"], "embedding": row["embedding"],
+            "document": row["document"], "metadata": row["metadata"],
+        } for row in rows]
+
+    async def delete_generation_source(
+        self, generation_id: str, source_id: str, name: str | None = None,
+    ) -> int:
+        statement = delete(generation_records).where(
+            generation_records.c.generation_id == generation_id,
+            *([generation_records.c.collection_name == name] if name is not None else []),
+            or_(
+                func.json_extract(generation_records.c.metadata, "$.source_id") == source_id,
+                func.json_extract(generation_records.c.metadata, "$.url") == source_id,
+            ),
+        )
+        async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
+            result = await connection.execute(statement)
+        return int(result.rowcount or 0)
+
     async def update_generation_metadata(
         self, generation_id: str, name: str, items: list[dict[str, Any]],
     ) -> int:
