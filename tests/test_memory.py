@@ -225,6 +225,12 @@ def test_memory_knowledge_ingest_is_idempotent_and_reconcile_marks_stale():
         )
         assert hybrid.status_code == 200
         assert hybrid.json()["results"]
+        fused = hybrid.json()["results"][0]
+        assert fused["fusion"]["algorithm"] == "rrf"
+        assert fused["fusion"]["k"] == 60
+        assert fused["fusion"]["ranks"]
+        assert fused["fusion"]["contributions"]
+        assert fused["score"] > 0
 
         reconciled = http.post(
             "/api/v1/memory/sources/reconcile",

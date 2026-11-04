@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
 
 from .partitioning import PartitionedAsyncEngine
+from .ranking import fuse as rrf_fuse
 
 
 MEMORY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -218,6 +219,37 @@ def _chunk_markdown(content: str, max_chunk_size: int = 2000) -> list[dict[str, 
         chunks.append({"header": header, "start_line": start_line, "end_line": len(lines),
                        "content": value, "size": len(value)})
     return chunks
+
+
+
+def _fuse_memory_results(keyword_results, semantic_results, top_k, k=60):
+    """Fuse Memory's lexical and semantic rankings without comparing raw scores."""
+    ranked = {"keyword": [], "semantic": []}
+    identities, raw, ranks = {}, {}, {}
+    for channel, results in (("keyword", keyword_results), ("semantic", semantic_results)):
+        for rank, item in enumerate(results, 1):
+            name, section = item["file"], item.get("section", "full")
+            key = json.dumps([name, section], ensure_ascii=False, separators=(",", ":"))
+            identities[key] = (name, section)
+            raw.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
+            raw[key][channel + "_score"] = float(item["score"])
+            ranks.setdefault(key, {})[channel] = rank
+            ranked[channel].append({"key": key, "rank": rank})
+    if not ranked["keyword"] and not ranked["semantic"]:
+        return []
+    fused = rrf_fuse(ranked, top_k=top_k, k=k)
+    return [{
+        "file": identities[item["key"]][0],
+        "section": identities[item["key"]][1],
+        "score": item["score"],
+        "keyword_score": raw[item["key"]]["keyword_score"],
+        "semantic_score": raw[item["key"]]["semantic_score"],
+        "fusion": {
+            "algorithm": "rrf", "k": k,
+            "ranks": ranks[item["key"]],
+            "contributions": item["contributions"],
+        },
+    } for item in fused]
 
 
 def _keyword_search(documents: list[tuple[str, str]], active_knowledge: set[str], keywords: list[str], limit: int) -> list[dict[str, Any]]:
@@ -641,24 +673,11 @@ class SqliteMemoryStore:
     async def search_hybrid(self, query: str, top_k: int = 10) -> list[dict[str, Any]]:
         if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 100:
             raise ValueError("top_k must be an integer between 1 and 100")
-        keywords = query.casefold().split() if isinstance(query, str) else []
-        keyword_results = await self.search(keywords, limit=100)
-        semantic_results = await self.search_semantic(query, top_k=top_k)
-        merged: dict[tuple[str, str], dict[str, float]] = {}
-        for item in keyword_results:
-            key = (item["file"], item.get("section", "full"))
-            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
-            merged[key]["keyword_score"] = item["score"]
-        for item in semantic_results:
-            key = (item["file"], item.get("section", "full"))
-            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
-            merged[key]["semantic_score"] = item["score"]
-        results = [{
-            "file": name, "section": section,
-            "score": 0.4 * scores["keyword_score"] + 0.6 * scores["semantic_score"],
-            "keyword_score": scores["keyword_score"], "semantic_score": scores["semantic_score"],
-        } for (name, section), scores in merged.items()]
-        return sorted(results, key=lambda item: (-item["score"], item["file"], item["section"]))[:top_k]
+        if not isinstance(query, str) or not query.strip():
+            return []
+        keyword_results = await self.search(query.casefold().split(), limit=100)
+        semantic_results = await self.search_semantic(query, top_k=100)
+        return _fuse_memory_results(keyword_results, semantic_results, top_k)
 
     async def ingest_claude_markdown(self, source_path: str, content: str, sha256: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         scope, meta = _validate_ingest(source_path, content, sha256, metadata)
@@ -883,23 +902,11 @@ class InMemoryMemoryStore:
     async def search_hybrid(self, query: str, top_k: int = 10) -> list[dict[str, Any]]:
         if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 100:
             raise ValueError("top_k must be an integer between 1 and 100")
-        keyword_results = await self.search(query.casefold().split() if isinstance(query, str) else [], limit=100)
-        semantic_results = await self.search_semantic(query, top_k=top_k)
-        merged: dict[tuple[str, str], dict[str, float]] = {}
-        for item in keyword_results:
-            key = (item["file"], item.get("section", "full"))
-            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
-            merged[key]["keyword_score"] = item["score"]
-        for item in semantic_results:
-            key = (item["file"], item.get("section", "full"))
-            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
-            merged[key]["semantic_score"] = item["score"]
-        results = [{
-            "file": name, "section": section,
-            "score": 0.4 * scores["keyword_score"] + 0.6 * scores["semantic_score"],
-            "keyword_score": scores["keyword_score"], "semantic_score": scores["semantic_score"],
-        } for (name, section), scores in merged.items()]
-        return sorted(results, key=lambda item: (-item["score"], item["file"], item["section"]))[:top_k]
+        if not isinstance(query, str) or not query.strip():
+            return []
+        keyword_results = await self.search(query.casefold().split(), limit=100)
+        semantic_results = await self.search_semantic(query, top_k=100)
+        return _fuse_memory_results(keyword_results, semantic_results, top_k)
 
     async def ingest_claude_markdown(self, source_path: str, content: str, sha256: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         scope, meta = _validate_ingest(source_path, content, sha256, metadata)
