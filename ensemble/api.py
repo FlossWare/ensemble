@@ -268,6 +268,9 @@ def create_app(
             await document_store.initialize()
             await active_vector_store.initialize()
             await active_index_store.initialize()
+            recover_fence = getattr(active_index_store, "recover_generation_write_fence", None)
+            if callable(recover_fence):
+                await recover_fence()
             await active_knowledge_store.initialize()
             await active_graph_store.initialize()
             await active_memory_store.initialize()

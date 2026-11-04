@@ -255,6 +255,18 @@ class InMemoryIndexStore:
         return {"generation_id": generation_id, "through_change_id": high,
                 "acquired_at": datetime.now(timezone.utc).isoformat()}
 
+    async def recover_generation_write_fence(self) -> dict[str, Any]:
+        generation_id = self._write_fence_generation
+        if generation_id is None:
+            return {"recovered": False, "reason": "no_fence"}
+        generation = self._generations.get(generation_id)
+        if generation and generation["state"] == "active":
+            raise RuntimeError("active generation unexpectedly retains a write fence")
+        self._write_fence_generation = None
+        return {"recovered": True, "generation_id": generation_id,
+                "reason": "interrupted_activation",
+                "generation_state": generation["state"] if generation else "missing"}
+
     async def release_generation_write_fence(self, generation_id: str) -> bool:
         if self._write_fence_generation != generation_id:
             return False

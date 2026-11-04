@@ -502,6 +502,13 @@ class IndexGenerationBuilder:
             generation_id, through_change_id=high_watermark,
         )
         try:
+            # Recheck Memory after acquiring the shared fence. A Memory write
+            # that began just before acquisition may have committed meanwhile.
+            memory_after_fence = await self.memory_store.memory_generation_change_high_watermark(generation_id)
+            pending_after_fence = await self.memory_store.pending_memory_generation_changes(generation_id)
+            expected_memory = reconciliation_values["memory_reconciliation"][1]
+            if memory_after_fence != expected_memory or pending_after_fence:
+                raise RuntimeError("Memory changed while acquiring the write fence; release and reconcile again")
             for capability, (value, expected) in reconciliation_values.items():
                 await self.index_store.record_generation_checkpoint(
                     generation_id, capability,
