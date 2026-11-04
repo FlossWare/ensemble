@@ -510,6 +510,8 @@ class SqlDocumentStore:
         if not generation_id or len(generation_id) > 64:
             raise ValueError("generation_id must contain 1-64 characters")
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             exists = await connection.scalar(text(
                 "SELECT COUNT(*) FROM ensemble_index_generations WHERE generation_id = :generation_id"
             ), {"generation_id": generation_id})
