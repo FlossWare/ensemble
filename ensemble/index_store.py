@@ -97,6 +97,7 @@ class IndexStore(Protocol):
     async def restore_source(self, source_id: str, sequence: int) -> dict[str, Any]: ...
     async def mark_purged(self, source_id: str) -> None: ...
     async def get_source(self, source_id: str) -> dict[str, Any] | None: ...
+    async def get_sources(self, source_ids: list[str]) -> dict[str, dict[str, Any]]: ...
     async def list_sources(self, limit: int) -> list[dict[str, Any]]: ...
     async def source_key_upper_bound(self) -> str | None: ...
     async def list_sources_after(self, cursor: str | None, upper_bound: str | None, limit: int) -> list[dict[str, Any]]: ...
@@ -742,6 +743,17 @@ class SqliteIndexStore:
             ).values(purged=True, updated_at=datetime.now(timezone.utc)))
             if changed.rowcount != 1:
                 raise RuntimeError("only a soft-deleted source can be permanently purged")
+
+    async def get_sources(self, source_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not source_ids:
+            return {}
+        if any(not isinstance(source_id, str) or not source_id for source_id in source_ids):
+            raise ValueError("source_ids must contain non-empty strings")
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(select(sources).where(
+                sources.c.source_id.in_(source_ids)
+            ))).mappings().all()
+        return {row["source_id"]: _as_source(row) for row in rows}
 
     async def list_sources(self, limit: int) -> list[dict[str, Any]]:
         async with self.engine.connect() as connection:
