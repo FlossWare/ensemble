@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 
 from ensemble.api import create_app
 from ensemble.index_store import SqliteIndexStore
+from ensemble.memory_store import SqliteMemoryStore
+from ensemble.rebuild import IndexGenerationBuilder
 
 
 def _client(tmp_path):
@@ -361,3 +363,56 @@ def test_generation_fence_recovery_fails_closed_for_unexpected_generation_state(
             "WHERE singleton_id = 1"
         ).fetchone()
     assert fence == ("recovery-candidate",)
+
+
+
+def test_memory_generation_reconciliation_replays_updates_and_deletions(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-memory.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    async def scenario():
+        index = SqliteIndexStore(database_url)
+        memory = SqliteMemoryStore(database_url)
+        await index.initialize()
+        await memory.initialize()
+        try:
+            await memory.write("rebuild-memory", "before rebuild")
+            await index.create_generation("memory-reconciliation-test")
+            builder = IndexGenerationBuilder(index, memory_store=memory)
+
+            copied_index = await builder.copy_index_sources("memory-reconciliation-test")
+            assert copied_index["status"] == "complete"
+            copied_memory = await builder.copy_memory_page("memory-reconciliation-test")
+            assert copied_memory["status"] == "complete"
+            assert await memory.get_memory_generation_snapshot(
+                "memory-reconciliation-test", "rebuild-memory",
+            )["content"] == "before rebuild"
+
+            await memory.write("rebuild-memory", "updated during rebuild")
+            updated = await builder.reconcile_memory_changes_page(
+                "memory-reconciliation-test",
+            )
+            assert updated["status"] == "caught_up"
+            snapshot = await memory.get_memory_generation_snapshot(
+                "memory-reconciliation-test", "rebuild-memory",
+            )
+            assert snapshot["content"] == "updated during rebuild"
+
+            await memory.delete("rebuild-memory")
+            deleted = await builder.reconcile_memory_changes_page(
+                "memory-reconciliation-test",
+            )
+            assert deleted["status"] == "caught_up"
+            assert await memory.get_memory_generation_snapshot(
+                "memory-reconciliation-test", "rebuild-memory",
+            ) is None
+            assert await memory.pending_memory_generation_changes(
+                "memory-reconciliation-test",
+            ) == 0
+        finally:
+            await memory.close()
+            await index.close()
+
+    asyncio.run(scenario())
