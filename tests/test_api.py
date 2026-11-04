@@ -546,6 +546,14 @@ def test_knowledge_publication_enters_hybrid_search_and_graph(tmp_path):
         assert result.status_code == 200
         hit = next(item for item in result.json()["results"] if item["source_id"] == "rfc-entity")
         assert hit["graph_score"] > 0
+        fusion = result.json()["fusion"]
+        assert fusion["channels"]["graph"]["candidate_count"] > 0
+        graph_diagnostic = next(
+            item for item in fusion["results"]
+            if item["chunk_id"] == hit["chunk_id"]
+        )
+        assert graph_diagnostic["graph_rank"] is not None
+        assert graph_diagnostic["contributions"]["graph"] > 0
         assert result.json()["graph_expansion"]["candidate_sources"] == 1
         assert result.json()["graph_expansion"]["duration_ms"] >= 0
         assert result.json()["channels"]["lexical"]["duration_ms"] >= 0

@@ -29,10 +29,16 @@ def reciprocal_rank_fusion(
     consume additional rank positions. Candidate payloads are taken from the first
     channel (in mapping insertion order) that supplies the identity.
     """
+    if not isinstance(ranked_channels, Mapping):
+        raise ValueError("ranked_channels must be a mapping of channel names to ranked candidates")
+    if weights is not None and not isinstance(weights, Mapping):
+        raise ValueError("weights must be a mapping")
     if isinstance(k, bool) or not isinstance(k, int) or not 1 <= k <= 10_000:
         raise ValueError("k must be an integer between 1 and 10000")
     if not isinstance(identity_key, str) or not identity_key.strip():
         raise ValueError("identity_key must be a non-empty string")
+    if any(not isinstance(channel, str) or not channel.strip() for channel in ranked_channels):
+        raise ValueError("channel names must be non-empty strings")
     configured = dict(weights or {})
     unknown = set(configured) - set(ranked_channels)
     if unknown:
@@ -48,6 +54,8 @@ def reciprocal_rank_fusion(
     ranks_by_id: dict[str, dict[str, int]] = {}
     contributions_by_id: dict[str, dict[str, float]] = {}
     for channel, ranked in ranked_channels.items():
+        if not isinstance(ranked, Sequence) or isinstance(ranked, (str, bytes, bytearray)):
+            raise ValueError(f"ranked candidates for channel {channel} must be a sequence")
         seen: set[str] = set()
         rank = 0
         for candidate in ranked:
@@ -95,9 +103,13 @@ def thompson_channel_weights(
     """
     sampler = rng or random.Random()
     weights: dict[str, float] = {}
+    if not isinstance(channel_stats, Mapping):
+        raise ValueError("channel_stats must be a mapping")
     for channel, stats in sorted(channel_stats.items()):
         if not isinstance(channel, str) or not channel.strip():
             raise ValueError("channel names must be non-empty strings")
+        if not isinstance(stats, Mapping):
+            raise ValueError(f"statistics for channel {channel} must be a mapping")
         successes, failures = stats.get("successes", 0), stats.get("failures", 0)
         for name, value in (("successes", successes), ("failures", failures)):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:

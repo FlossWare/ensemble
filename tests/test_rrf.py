@@ -77,3 +77,21 @@ def test_rrf_normalizes_uuid_candidate_identity():
         "lexical": [{"chunk_id": identity}],
     })
     assert fused[0].candidate_id == str(identity)
+
+
+
+def test_rrf_supports_empty_channels_and_cross_channel_deduplication():
+    fused = reciprocal_rank_fusion({
+        "lexical": [],
+        "vector": [{"chunk_id": "shared"}, {"chunk_id": "vector-only"}],
+        "graph": [{"chunk_id": "shared"}],
+    })
+    assert [item.candidate_id for item in fused] == ["shared", "vector-only"]
+    assert fused[0].ranks == {"vector": 1, "graph": 1}
+
+
+def test_rrf_rejects_non_mapping_channels_and_non_sequence_lists():
+    with pytest.raises(ValueError):
+        reciprocal_rank_fusion([])
+    with pytest.raises(ValueError):
+        reciprocal_rank_fusion({"lexical": "not-a-ranked-list"})

@@ -164,7 +164,7 @@ def test_hybrid_supports_static_weighted_rrf(monkeypatch):
         assert response.status_code == 200
         fusion = response.json()["fusion"]
         assert fusion["weight_strategy"] == "static"
-        assert fusion["weights"] == {"lexical": 2.0, "vector": 0.5}
+        assert fusion["weights"] == {"lexical": 2.0, "vector": 0.5, "graph": 1.0}
         assert fusion["algorithm"] == "weighted_rrf"
 
 
