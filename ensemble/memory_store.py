@@ -373,6 +373,11 @@ class SqliteMemoryStore:
         }
 
     async def _journal_generation_change(self, connection: Any, name: str) -> int:
+        from sqlalchemy import inspect
+        names = await connection.run_sync(lambda conn: inspect(conn).get_table_names())
+        if "ensemble_index_generations" not in names:
+            # Memory-only stores can be used without the Ensemble Index schema.
+            return 0
         from .index_store import generations
         targets = (await connection.execute(select(generations.c.generation_id).where(
             generations.c.state == "building"
