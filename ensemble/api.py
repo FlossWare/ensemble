@@ -347,8 +347,9 @@ def create_app(
         )
         if decision["decision"] not in {"accepted", "duplicate"}:
             raise HTTPException(
-                status_code=409,
+                status_code=503 if decision["decision"] == "fenced" else 409,
                 detail="source revision rejected: " + decision["decision"],
+                headers={"Retry-After": "1"} if decision["decision"] == "fenced" else None,
             )
         result = await documents.ingest(
             request, embed=embed, vector_collection=vector_collection
@@ -361,6 +362,9 @@ def create_app(
             result.metadata = {**result.metadata, "graph_entities_indexed": linked}
         except Exception:
             result.metadata = {**result.metadata, "graph_entities_indexed": 0, "graph_degraded": True}
+        await active_index_store.acknowledge_generation_change(
+            request.source_id, request.revision, tombstoned=False,
+        )
         return result, decision["decision"]
 
     async def expand_graph_results(query: str, entities: list[dict[str, Any]], results: list[SearchHit], limit: int):
@@ -591,6 +595,8 @@ def create_app(
         if not isinstance(profiles, dict) or not profiles:
             raise HTTPException(status_code=400, detail="profiles must be a non-empty object")
         decision = await active_index_store.record_revision(source_id, sequence, revision_id, profiles)
+        if decision["decision"] == "fenced":
+            raise HTTPException(status_code=503, detail="Index writes are temporarily fenced for generation cutover", headers={"Retry-After": "1"})
         if decision["decision"] not in {"accepted", "duplicate"}:
             return {"ok": True, "decision": decision["decision"], "source_id": source_id, "stored": False}
         chunk_profile = profiles.get("chunking", "window-v1")
@@ -630,6 +636,9 @@ def create_app(
             )
         except Exception:
             graph_entities = 0
+        await active_index_store.acknowledge_generation_change(
+            source_id, sequence, tombstoned=False,
+        )
         return {
             "ok": True, "decision": decision["decision"], "source_id": source_id,
             "stored": True, "content_sha256": digest,
@@ -652,8 +661,14 @@ def create_app(
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         decision = await active_index_store.record_tombstone(source_id, sequence)
+        if decision["decision"] == "fenced":
+            raise HTTPException(status_code=503, detail="Index writes are temporarily fenced for generation cutover", headers={"Retry-After": "1"})
         if decision.get("source", {}).get("tombstoned"):
             await tombstone_indexed_source(source_id)
+            if decision["decision"] == "tombstoned":
+                await active_index_store.acknowledge_generation_change(
+                    source_id, sequence, tombstoned=True,
+                )
         return {"ok": True, "decision": decision["decision"], "source_id": source_id}
 
     @app.get("/api/v1/index/reclamation", tags=["index"])
@@ -724,7 +739,25 @@ def create_app(
         if not isinstance(profiles, dict) or not profiles:
             raise HTTPException(status_code=400, detail="profiles must be a non-empty object")
         result = await active_index_store.record_revision(source_id, sequence, revision_id, profiles)
+        if result["decision"] == "fenced":
+            raise HTTPException(status_code=503, detail="Index writes are temporarily fenced for generation cutover", headers={"Retry-After": "1"})
         return {"ok": True, **result}
+
+    @app.post("/api/v1/index/changes/acknowledge", tags=["index"])
+    async def index_change_acknowledge(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        sequence = payload.get("revision_sequence")
+        tombstoned = payload.get("tombstoned", False)
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
+        if not isinstance(tombstoned, bool):
+            raise HTTPException(status_code=400, detail="tombstoned must be a boolean")
+        acknowledged = await active_index_store.acknowledge_generation_change(
+            source_id, sequence, tombstoned=tombstoned,
+        )
+        return {"ok": True, "acknowledged": acknowledged}
 
     @app.post("/api/v1/index/tombstones", tags=["index"])
     async def index_tombstone(payload: dict[str, Any]):
@@ -735,8 +768,14 @@ def create_app(
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         result = await active_index_store.record_tombstone(source_id, sequence)
+        if result["decision"] == "fenced":
+            raise HTTPException(status_code=503, detail="Index writes are temporarily fenced for generation cutover", headers={"Retry-After": "1"})
         if result.get("source", {}).get("tombstoned"):
             await tombstone_indexed_source(source_id)
+            if result["decision"] == "tombstoned":
+                await active_index_store.acknowledge_generation_change(
+                    source_id, sequence, tombstoned=True,
+                )
         return {"ok": True, **result}
 
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])

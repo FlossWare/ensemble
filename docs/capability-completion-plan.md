@@ -98,7 +98,19 @@ Implement durable index rebuilds that can safely coexist with writes:
 
 **Resumable vector copy pass implemented:** the builder captures each active collection's model, dimensions, and record-key upper bound, then copies bounded pages into generation-scoped vector storage. Every record must resolve to a generation Index source; unattributed or unknown-source records fail closed, and tombstoned sources are skipped. The Vectors checkpoint records collection progress and counts and seals only after every captured collection completes.
 
-**Not yet implemented:** a durable rebuild worker that snapshots and populates document, lexical, and vector stores, write-fence coordination, concurrent-write reconciliation, automatic restart recovery, and atomic activation across retrieval data planes. Keep the rebuild API unavailable until those pieces exist.
+**Durable Index change journal implemented:** migration 0021 records each accepted revision and tombstone in the same SQLite transaction as the authoritative Index mutation. Migration 0022 adds an explicit end-to-end acknowledgement marker. The owning ingestion/tombstone workflow marks the change acknowledged only after its required materializations complete. A new generation inherits any still-pending mutations from the active generation, closing the race where ingestion began just before rebuild creation. The journal supports bounded keyset replay; pending changes block replay and final fencing. The in-memory adapter mirrors the behavior.
+
+**Final Index write fence implemented:** the Index can acquire a durable fence only when the caller's reconciled journal cursor matches the current journal high-water mark and no unacknowledged source mutations remain. While held, new Index revisions and tombstones are rejected with a retryable response. Generation activation now requires the fence, a matching reconciled watermark, and sealed checkpoints for Index, Documents, Vectors, Memory, Knowledge, and Index reconciliation. Aborting a build releases the fence.
+
+**Acknowledgement REST contract implemented:** `POST /api/v1/index/changes/acknowledge` marks a source revision or tombstone complete after dependent capability writes have succeeded. The lower-level Index revision route does not acknowledge by itself; callers composing Index and other capability routes must acknowledge only after the full operation completes.
+
+**Document/chunk reconciliation implemented:** acknowledged journal entries can be replayed into shadow Documents and Chunks using the latest active source revision. The builder verifies that the active document revision matches the reconciled Index source, applies generation tombstones, and persists an independent keyset checkpoint. A missing or mismatched active document fails closed.
+
+**Vector reconciliation implemented:** acknowledged changes are replayed per active vector collection. Reconciliation removes the old shadow records for that source before copying current active records, and applies tombstones across collections. SQLite uses source-scoped JSON metadata lookup; a source with more than 10,000 vector records fails closed rather than being partially copied. The in-memory adapter mirrors the behavior.
+
+**Knowledge reconciliation implemented:** migration 0023 adds generation-scoped Knowledge records. The builder copies Knowledge records alongside the bounded Index source manifest, verifies revision parity, and replays acknowledged revisions and tombstones with an independent durable checkpoint. SQLite and in-memory adapters support the same lifecycle.
+
+**Still not complete:** Memory materialization reconciliation, REST rebuild orchestration, and restart recovery for a process that stops while the durable fence is held. The final fence and activation require all five capability reconciliation checkpoints, including Memory, so the rebuild API remains unavailable until those requirements are satisfied.
 
 Do not ship a rebuild operation that can silently lose acknowledged writes or resurrect deleted content.
 
