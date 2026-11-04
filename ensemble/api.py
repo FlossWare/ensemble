@@ -663,12 +663,54 @@ def create_app(
         decision = await active_index_store.record_tombstone(source_id, sequence)
         if decision["decision"] == "fenced":
             raise HTTPException(status_code=503, detail="Index writes are temporarily fenced for generation cutover", headers={"Retry-After": "1"})
-        if decision["decision"] == "tombstoned":
+        if decision.get("source", {}).get("tombstoned"):
             await tombstone_indexed_source(source_id)
-            await active_index_store.acknowledge_generation_change(
-                source_id, sequence, tombstoned=True,
-            )
+            if decision["decision"] == "tombstoned":
+                await active_index_store.acknowledge_generation_change(
+                    source_id, sequence, tombstoned=True,
+                )
         return {"ok": True, "decision": decision["decision"], "source_id": source_id}
+
+    @app.get("/api/v1/index/reclamation", tags=["index"])
+    async def index_reclamation_status():
+        return {"ok": True, "jobs": await active_reclamation_store.status()}
+
+    @app.post("/api/v1/index/sources/{source_id}/restore", tags=["index"])
+    async def index_restore_source(source_id: str, payload: dict[str, Any]):
+        sequence = payload.get("revision_sequence")
+        if not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        current = await active_index_store.get_source(source_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="unknown source")
+        if current.get("purged"):
+            raise HTTPException(status_code=409, detail="permanently purged sources cannot be restored")
+        if not current.get("tombstoned"):
+            raise HTTPException(status_code=409, detail="source is not soft-deleted")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= current["high_sequence"]:
+            raise HTTPException(status_code=400, detail="revision_sequence must exceed the current source sequence")
+        try:
+            await document_store.restore_source(source_id)
+            await active_knowledge_store.restore(source_id)
+            await active_vector_store.restore_source(source_id)
+            source = await active_index_store.restore_source(source_id, sequence)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="unknown source") from exc
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "source": source}
+
+    @app.post("/api/v1/index/sources/{source_id}/purge", tags=["index"])
+    async def index_purge_source(source_id: str):
+        source = await active_index_store.get_source(source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="unknown source")
+        try:
+            await active_index_store.mark_purged(source_id)
+            await active_reclamation_store.enqueue(source_id)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "source_id": source_id, "purge": "queued"}
 
     @app.get("/api/v1/index/health", tags=["index"])
     async def index_health():
@@ -728,13 +770,12 @@ def create_app(
         result = await active_index_store.record_tombstone(source_id, sequence)
         if result["decision"] == "fenced":
             raise HTTPException(status_code=503, detail="Index writes are temporarily fenced for generation cutover", headers={"Retry-After": "1"})
-        if result["decision"] == "tombstoned":
-            await document_store.tombstone_source(source_id)
-            await active_knowledge_store.tombstone(source_id)
-            await active_vector_store.delete_superseded("knowledge_chunks", source_id, "")
-            await active_index_store.acknowledge_generation_change(
-                source_id, sequence, tombstoned=True,
-            )
+        if result.get("source", {}).get("tombstoned"):
+            await tombstone_indexed_source(source_id)
+            if result["decision"] == "tombstoned":
+                await active_index_store.acknowledge_generation_change(
+                    source_id, sequence, tombstoned=True,
+                )
         return {"ok": True, **result}
 
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
