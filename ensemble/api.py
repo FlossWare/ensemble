@@ -872,6 +872,9 @@ def create_app(
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         await document_store.tombstone_source(source_id)
+        active_generation = await active_generation_id()
+        if active_generation is not None:
+            await document_store.tombstone_generation_source(active_generation, source_id)
         return {"ok": True, "source_id": source_id}
 
     @app.post("/api/v1/documents/records", tags=["documents"])
