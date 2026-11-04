@@ -223,6 +223,7 @@ def test_bounded_crawl_emits_real_page_and_policy_trace_stages(monkeypatch):
         "page_fetch_and_extraction", "crawl_summary",
     ]
     assert stages[0]["policy_applied"] is True
-    assert stages[1]["page"] == 1
-    assert stages[1]["characters"] == 4
-    assert stages[2]["page_count"] == 1
+    assert stages[1]["allowed"] is True
+    assert stages[2]["page"] == 1
+    assert stages[2]["characters"] == 4
+    assert stages[3]["page_count"] == 1
