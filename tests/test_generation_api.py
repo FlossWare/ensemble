@@ -509,3 +509,40 @@ def test_application_startup_recovers_interrupted_generation_fence(tmp_path):
     assert generation[0] == "building"
     checkpoints = json.loads(generation[1])
     assert checkpoints["index_reconciliation"]["sealed"] is False
+
+
+
+def test_activation_rejects_incomplete_generation_without_changing_active_pointer(tmp_path):
+    with _client(tmp_path) as client:
+        before = client.get("/api/v1/index/generations")
+        assert before.status_code == 200
+        active_before = before.json()["active_generation_id"]
+        epoch_before = before.json()["epoch"]
+
+        created = client.post(
+            "/api/v1/index/generations",
+            json={"generation_id": "incomplete-activation"},
+        )
+        assert created.status_code == 200
+
+        rejected = client.post(
+            "/api/v1/index/generations/incomplete-activation/activate",
+        )
+        assert rejected.status_code == 409
+        missing = rejected.json()["detail"]["missing_checkpoints"]
+        assert {
+            "index", "documents", "vectors", "memory", "knowledge",
+            "index_reconciliation", "documents_reconciliation",
+            "vectors_reconciliation", "memory_reconciliation",
+            "knowledge_reconciliation",
+        }.issubset(set(missing))
+
+        after = client.get("/api/v1/index/generations")
+        assert after.status_code == 200
+        assert after.json()["active_generation_id"] == active_before
+        assert after.json()["epoch"] == epoch_before
+        target = next(
+            item for item in after.json()["generations"]
+            if item["generation_id"] == "incomplete-activation"
+        )
+        assert target["state"] == "building"
