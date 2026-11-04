@@ -94,3 +94,29 @@ def test_source_schedule_api_rejects_too_frequent_refresh(monkeypatch):
             "uri": "https://example.com/", "interval_seconds": 30,
         })
         assert response.status_code == 400
+
+def test_source_schedule_does_not_overlap_an_active_scheduled_crawl():
+    async def scenario():
+        crawl_store = InMemoryCrawlJobStore()
+        schedules = InMemorySourceScheduleStore(crawl_store)
+        schedule = await schedules.create(
+            "https://example.com/docs", 3600, 5, 2, run_immediately=True,
+        )
+        assert await schedules.dispatch_due() == 1
+        first_job_id = (await schedules.get(schedule["schedule_id"]))["last_job_id"]
+        claimed = await crawl_store.claim_next()
+        assert claimed["job_id"] == first_job_id
+
+        # The interval is still due, but the previous scheduled crawl is
+        # running. Do not enqueue another copy of the same source refresh.
+        assert await schedules.dispatch_due() == 0
+        assert (await schedules.get(schedule["schedule_id"]))["last_job_id"] == first_job_id
+
+        await crawl_store.complete(first_job_id, {"ok": True, "page_count": 1})
+        assert await schedules.dispatch_due() == 1
+        second_job_id = (await schedules.get(schedule["schedule_id"]))["last_job_id"]
+        assert second_job_id != first_job_id
+        second_job = await crawl_store.get(second_job_id)
+        assert second_job["schedule_id"] == schedule["schedule_id"]
+
+    asyncio.run(scenario())

@@ -148,6 +148,16 @@ class SqliteSourceScheduleStore:
                 ).order_by(schedules.c.next_run_at.asc()).limit(limit)
             )).mappings().all()
             for row in rows:
+                active_job = (await connection.execute(
+                    select(crawl_jobs.c.job_id).where(
+                        crawl_jobs.c.schedule_id == row["schedule_id"],
+                        crawl_jobs.c.status.in_({"pending", "running"}),
+                    ).limit(1)
+                )).first()
+                if active_job is not None:
+                    # Keep the schedule due. It will dispatch promptly after
+                    # the previous scheduled crawl finishes.
+                    continue
                 job_id = uuid.uuid4().hex
                 next_run = now + timedelta(seconds=row["interval_seconds"])
                 changed = await connection.execute(update(schedules).where(
@@ -226,6 +236,15 @@ class InMemorySourceScheduleStore:
             key=lambda item: item["next_run_at"],
         )[:limit]
         for item in due:
+            existing = await self.crawl_store.list(limit=200)
+            if any(
+                job.get("schedule_id") == item["schedule_id"]
+                and job.get("status") in {"pending", "running"}
+                for job in existing
+            ):
+                # Leave next_run_at due so dispatch resumes after the active
+                # scheduled crawl finishes.
+                continue
             job = await self.crawl_store.enqueue(
                 item["uri"], item["max_pages"], item["max_depth"],
                 auto_ingest=True, schedule_id=item["schedule_id"],
