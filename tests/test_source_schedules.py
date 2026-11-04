@@ -108,6 +108,10 @@ def test_source_schedule_does_not_overlap_an_active_scheduled_crawl():
         )
         assert await schedules.dispatch_due() == 1
         first_job_id = (await schedules.get(schedule["schedule_id"]))["last_job_id"]
+        # Force the interval due while the first job is pending and then running.
+        schedules._items[schedule["schedule_id"]]["next_run_at"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+        ).isoformat()
         # Pending work must also suppress a duplicate dispatch.
         assert await schedules.dispatch_due() == 0
         claimed = await crawl_store.claim_next()
