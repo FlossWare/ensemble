@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, delete, func, or_, select, text
+from sqlalchemy import and_, Boolean, Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, delete, func, or_, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -437,7 +437,7 @@ class SqliteVectorStore:
     async def delete_generation_source(
         self, generation_id: str, source_id: str, name: str | None = None,
     ) -> int:
-        statement = delete(generation_records).where(
+        match = and_(
             generation_records.c.generation_id == generation_id,
             *([generation_records.c.collection_name == name] if name is not None else []),
             or_(
@@ -448,8 +448,25 @@ class SqliteVectorStore:
         async with self.engine.begin() as connection:
             from .index_store import assert_generation_writes_open
             await assert_generation_writes_open(connection)
-            result = await connection.execute(statement)
-        return int(result.rowcount or 0)
+            rows = (await connection.execute(
+                select(generation_records.c.collection_name, generation_records.c.record_id)
+                .where(match)
+                .order_by(generation_records.c.collection_name, generation_records.c.record_id)
+                .limit(501)
+            )).all()
+            more = len(rows) > 500
+            selected: dict[str, list[str]] = {}
+            for collection_name, record_id in rows[:500]:
+                selected.setdefault(collection_name, []).append(record_id)
+            deleted = 0
+            for collection_name, record_ids in selected.items():
+                result = await connection.execute(delete(generation_records).where(
+                    generation_records.c.generation_id == generation_id,
+                    generation_records.c.collection_name == collection_name,
+                    generation_records.c.record_id.in_(record_ids),
+                ))
+                deleted += result.rowcount or 0
+        return 501 if more else int(deleted)
 
     async def update_generation_metadata(
         self, generation_id: str, name: str, items: list[dict[str, Any]],

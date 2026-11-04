@@ -5,7 +5,7 @@ import json
 import os
 from typing import Any, Protocol
 
-from sqlalchemy import Column, ForeignKey, JSON, MetaData, String, Table, select
+from sqlalchemy import Column, ForeignKey, JSON, MetaData, String, Table, delete, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -111,26 +111,20 @@ class SqliteGraphStore:
         """Remove source-owned graph edges and source nodes, retaining shared entities."""
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise ValueError("source_id must contain 1-512 characters")
+        source_node_ids = select(nodes.c.id).where(
+            nodes.c.node_type == "source",
+            func.json_extract(nodes.c.properties, "$.source_id") == source_id,
+        )
         async with self.engine.begin() as connection:
-            source_rows = (await connection.execute(
-                select(nodes).where(nodes.c.node_type == "source")
-            )).mappings().all()
-            source_node_ids = {
-                row["id"] for row in source_rows
-                if (row["properties"] or {}).get("source_id") == source_id
-            }
-            edge_rows = (await connection.execute(select(edges))).mappings().all()
-            edge_ids = [
-                row["id"] for row in edge_rows
-                if row["source_id"] in source_node_ids
-                or row["target_id"] in source_node_ids
-                or (row["properties"] or {}).get("source_id") == source_id
-            ]
-            if edge_ids:
-                await connection.execute(edges.delete().where(edges.c.id.in_(edge_ids)))
-            if source_node_ids:
-                await connection.execute(nodes.delete().where(nodes.c.id.in_(source_node_ids)))
-        return len(edge_ids) + len(source_node_ids)
+            edge_result = await connection.execute(delete(edges).where(or_(
+                edges.c.source_id.in_(source_node_ids),
+                edges.c.target_id.in_(source_node_ids),
+                func.json_extract(edges.c.properties, "$.source_id") == source_id,
+            )))
+            node_result = await connection.execute(delete(nodes).where(
+                nodes.c.id.in_(source_node_ids),
+            ))
+        return int(edge_result.rowcount or 0) + int(node_result.rowcount or 0)
 
     async def get_node(self, node_id: str) -> dict[str, Any] | None:
         async with self.engine.connect() as connection:

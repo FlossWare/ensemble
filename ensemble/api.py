@@ -261,6 +261,7 @@ def create_app(
                     await active_graph_store.reclaim_source(source_id)
                     # A permanent purge must remove source payloads from every
                     # retained generation, not merely hide them behind tombstones.
+                    generation_reclaimed = []
                     for generation in generation_status.get("generations", []):
                         generation_id = generation.get("generation_id")
                         if not generation_id:
@@ -268,15 +269,17 @@ def create_app(
                         # These stores are required participants in permanent purge.
                         # Never silently skip a missing adapter operation and mark the
                         # Index source purged while generation payloads still exist.
-                        await document_store.reclaim_generation_source(generation_id, source_id)
-                        await active_knowledge_store.reclaim_generation_source(generation_id, source_id)
-                        await active_vector_store.delete_generation_source(generation_id, source_id)
+                        generation_reclaimed.extend([
+                            await document_store.reclaim_generation_source(generation_id, source_id),
+                            await active_knowledge_store.reclaim_generation_source(generation_id, source_id),
+                            await active_vector_store.delete_generation_source(generation_id, source_id),
+                        ])
                     reclaimed = [
                         await document_store.reclaim_source(source_id),
                         await active_knowledge_store.reclaim_source(source_id),
                         await active_vector_store.reclaim_source(source_id),
                     ]
-                    if any(count > 500 for count in reclaimed):
+                    if any(count > 500 for count in [*generation_reclaimed, *reclaimed]):
                         # A full page means there may be more rows. Retry the
                         # idempotent source cleanup in another bounded pass.
                         await active_reclamation_store.retry(source_id, "additional reclamation pages remain")

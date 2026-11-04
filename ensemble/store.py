@@ -664,14 +664,16 @@ class SqlDocumentStore:
         return inserted.rowcount or 0
 
     async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int:
-        """Physically remove a purged source's generation documents and chunks."""
+        """Remove one bounded page of a purged source's generation documents and chunks."""
         async with self.engine.begin() as connection:
             document_ids = (await connection.execute(
                 select(generation_documents.c.document_id).where(
                     generation_documents.c.generation_id == generation_id,
                     generation_documents.c.source_id == source_id,
-                )
+                ).order_by(generation_documents.c.document_id).limit(501)
             )).scalars().all()
+            more = len(document_ids) > 500
+            document_ids = document_ids[:500]
             if document_ids:
                 await connection.execute(delete(generation_chunks).where(
                     generation_chunks.c.generation_id == generation_id,
@@ -679,9 +681,9 @@ class SqlDocumentStore:
                 ))
                 await connection.execute(delete(generation_documents).where(
                     generation_documents.c.generation_id == generation_id,
-                    generation_documents.c.source_id == source_id,
+                    generation_documents.c.document_id.in_(document_ids),
                 ))
-        return len(document_ids)
+        return 501 if more else len(document_ids)
 
     async def delete_generation(self, generation_id: str) -> int:
         async with self.engine.begin() as connection:
