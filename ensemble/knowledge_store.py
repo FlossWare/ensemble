@@ -86,6 +86,8 @@ class SqliteKnowledgeStore:
             "updated_at": datetime.now(timezone.utc),
         }
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             statement = sqlite_insert(knowledge_records).values(**values)
             await connection.execute(statement.on_conflict_do_update(
                 index_elements=["source_id"],
@@ -118,6 +120,8 @@ class SqliteKnowledgeStore:
 
     async def tombstone(self, source_id: str) -> None:
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             await connection.execute(
                 knowledge_records.update().where(
                     knowledge_records.c.source_id == source_id
@@ -126,10 +130,14 @@ class SqliteKnowledgeStore:
 
     async def restore(self, source_id: str) -> None:
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             await connection.execute(knowledge_records.update().where(knowledge_records.c.source_id == source_id).values(tombstoned=False, updated_at=datetime.now(timezone.utc)))
 
     async def reclaim_source(self, source_id: str) -> int:
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             result = await connection.execute(knowledge_records.delete().where(knowledge_records.c.source_id == source_id))
         return result.rowcount or 0
 
@@ -156,6 +164,8 @@ class SqliteKnowledgeStore:
             "updated_at": datetime.now(timezone.utc),
         }
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             exists = await connection.scalar(
                 text("SELECT COUNT(*) FROM ensemble_index_generations WHERE generation_id = :generation_id"),
                 {"generation_id": generation_id},
@@ -175,6 +185,8 @@ class SqliteKnowledgeStore:
 
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> None:
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             await connection.execute(knowledge_generation_records.update().where(
                 knowledge_generation_records.c.generation_id == generation_id,
                 knowledge_generation_records.c.source_id == source_id,

@@ -319,6 +319,8 @@ class SqlDocumentStore:
         from sqlalchemy.dialects.sqlite import insert as dialect_insert
 
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             # The unique source/revision constraint plus ON CONFLICT makes retries
             # and concurrent submissions converge on one stable document identity.
             statement = dialect_insert(self.documents).values(
@@ -415,6 +417,8 @@ class SqlDocumentStore:
 
     async def tombstone_source(self, source_id: str) -> None:
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             await connection.execute(
                 update(self.documents).where(self.documents.c.source_id == source_id)
                 .values(is_current=False)
@@ -422,6 +426,8 @@ class SqlDocumentStore:
 
     async def restore_source(self, source_id: str) -> None:
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             latest = (await connection.execute(
                 select(self.documents.c.id).where(self.documents.c.source_id == source_id)
                 .order_by(self.documents.c.revision.desc()).limit(1)
@@ -438,6 +444,8 @@ class SqlDocumentStore:
 
     async def reclaim_source(self, source_id: str) -> int:
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             await connection.execute(
                 text("DELETE FROM ensemble_lexical_fts WHERE source_id = :source_id"),
                 {"source_id": source_id},

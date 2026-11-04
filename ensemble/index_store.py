@@ -75,6 +75,14 @@ generation_write_fence = Table(
     Column("acquired_at", DateTime(timezone=True), nullable=False),
 )
 
+async def assert_generation_writes_open(connection: Any) -> None:
+    fence = (await connection.execute(select(generation_write_fence).where(
+        generation_write_fence.c.singleton_id == 1
+    ))).mappings().first()
+    if fence is not None:
+        raise RuntimeError("writes are fenced during generation cutover")
+
+
 
 class IndexStore(Protocol):
     async def initialize(self) -> None: ...

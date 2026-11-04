@@ -208,6 +208,8 @@ class SqliteVectorStore:
     async def upsert(self, name: str, model: str, dimensions: int, items: list[dict[str, Any]]) -> int:
         from sqlalchemy import select as sql_select
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             await connection.execute(
                 sqlite_insert(collections).values(
                     name=name, model=model, dimensions=dimensions,
@@ -246,6 +248,8 @@ class SqliteVectorStore:
         if not items:
             return 0
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             updated = 0
             for item in items:
                 result = await connection.execute(
@@ -259,6 +263,8 @@ class SqliteVectorStore:
 
     async def delete_superseded(self, name: str, url: str, keep_sha256: str) -> int:
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             rows = (await connection.execute(
                 select(records.c.record_id, records.c.metadata).where(records.c.collection_name == name)
             )).all()
@@ -283,6 +289,8 @@ class SqliteVectorStore:
 
     async def reclaim_source(self, source_id: str) -> int:
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             source_match = records.c.metadata["source_id"].as_string() == source_id
             url_match = records.c.metadata["url"].as_string() == source_id
             rows = (await connection.execute(
@@ -330,6 +338,8 @@ class SqliteVectorStore:
         if not generation_id or len(generation_id) > 64:
             raise ValueError("generation_id must contain 1-64 characters")
         async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
             generation = await connection.scalar(
                 text("SELECT COUNT(*) FROM ensemble_index_generations WHERE generation_id = :generation_id"),
                 {"generation_id": generation_id},
@@ -397,6 +407,24 @@ class SqliteVectorStore:
             })
         scored.sort(key=lambda item: (-item["score"], item["id"]))
         return scored[:top_k]
+
+    async def update_generation_metadata(
+        self, generation_id: str, name: str, items: list[dict[str, Any]],
+    ) -> int:
+        if not items:
+            return 0
+        async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
+            updated = 0
+            for item in items:
+                result = await connection.execute(generation_records.update().where(
+                    generation_records.c.generation_id == generation_id,
+                    generation_records.c.collection_name == name,
+                    generation_records.c.record_id == item["id"],
+                ).values(metadata=item["metadata"]))
+                updated += result.rowcount or 0
+        return updated
 
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:
         async with self.engine.begin() as connection:
