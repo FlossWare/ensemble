@@ -1,5 +1,7 @@
 import asyncio
 import sqlite3
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config
@@ -9,7 +11,7 @@ from ensemble.knowledge_store import SqliteKnowledgeStore
 from ensemble.memory_store import InMemoryMemoryStore
 from ensemble.models import Chunk, Document
 from ensemble.reclamation import SqliteReclamationStore
-from ensemble.store import SqlDocumentStore
+from ensemble.store import SqlDocumentStore, generation_documents
 from ensemble.vector_store import SqliteVectorStore
 
 
@@ -149,3 +151,72 @@ def test_reclamation_physically_removes_active_source_data_but_not_index_tombsto
 
     asyncio.run(exercise())
 
+
+
+def test_generation_source_reclamation_is_bounded_and_retryable(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-reclaim-pages.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    index = SqliteIndexStore(database_url)
+    documents = SqlDocumentStore(database_url)
+    vectors = SqliteVectorStore(database_url)
+
+    async def exercise():
+        await index.initialize()
+        await documents.initialize()
+        await vectors.initialize()
+        await index.create_generation("bounded-reclaim")
+
+        now = datetime.now(timezone.utc)
+        rows = [{
+            "generation_id": "bounded-reclaim",
+            "document_id": str(uuid4()),
+            "source_id": "large-source",
+            "revision": revision,
+            "title": "Large source",
+            "content": f"revision {revision}",
+            "metadata": {},
+            "created_at": now,
+            "is_current": False,
+        } for revision in range(1, 502)]
+        async with documents.engine.begin() as connection:
+            await connection.execute(generation_documents.insert(), rows)
+
+        vector_items = [{
+            "id": f"large-vector-{index:04d}",
+            "embedding": [1.0, 0.0],
+            "document": "large source vector",
+            "metadata": {"source_id": "large-source"},
+        } for index in range(501)]
+        await vectors.upsert_generation(
+            "bounded-reclaim", "bounded-reclaim-vectors",
+            "test-model", 2, vector_items,
+        )
+
+        # 501 is the explicit "more pages remain" sentinel after deleting 500.
+        assert await documents.reclaim_generation_source(
+            "bounded-reclaim", "large-source",
+        ) == 501
+        assert await documents.reclaim_generation_source(
+            "bounded-reclaim", "large-source",
+        ) == 1
+        assert await documents.reclaim_generation_source(
+            "bounded-reclaim", "large-source",
+        ) == 0
+
+        assert await vectors.delete_generation_source(
+            "bounded-reclaim", "large-source",
+        ) == 501
+        assert await vectors.delete_generation_source(
+            "bounded-reclaim", "large-source",
+        ) == 1
+        assert await vectors.delete_generation_source(
+            "bounded-reclaim", "large-source",
+        ) == 0
+
+        await vectors.close()
+        await documents.close()
+        await index.close()
+
+    asyncio.run(exercise())
