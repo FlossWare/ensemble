@@ -3,8 +3,8 @@
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0016_transcript_jobs"
-down_revision = "0015_transcript_checkpoints"
+revision = "0018_transcript_jobs"
+down_revision = "0017_partition_metadata"
 branch_labels = None
 depends_on = None
 
