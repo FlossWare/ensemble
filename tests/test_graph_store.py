@@ -27,3 +27,39 @@ def test_sqlite_graph_store_persists_nodes_edges_and_traversal(tmp_path):
         await reopened.close()
 
     asyncio.run(scenario())
+
+
+def test_graph_source_reclamation_removes_owned_edges_and_source_nodes(tmp_path):
+    async def scenario():
+        url = "sqlite+aiosqlite:///" + str(tmp_path / "graph-reclaim.db")
+        store = SqliteGraphStore(url)
+        async with store.engine.begin() as connection:
+            await connection.run_sync(graph_metadata.create_all)
+        await store.initialize()
+
+        source = await store.add_node(
+            "source", {"source_id": "source-to-purge", "revision": 3}, "source-node",
+        )
+        entity = await store.add_node(
+            "entity", {"entity_type": "concept", "normalized": "shared"}, "shared-entity",
+        )
+        await store.add_edge(
+            source["id"], entity["id"], "mentions",
+            {"source_id": "source-to-purge", "revision": 3}, "owned-mention",
+        )
+        unrelated = await store.add_node(
+            "source", {"source_id": "unrelated-source", "revision": 1}, "unrelated-source-node",
+        )
+        await store.add_edge(
+            unrelated["id"], entity["id"], "mentions",
+            {"source_id": "unrelated-source", "revision": 1}, "unrelated-mention",
+        )
+
+        reclaimed = await store.reclaim_source("source-to-purge")
+        assert reclaimed == 2
+        assert await store.get_node("source-node") is None
+        assert await store.get_node("shared-entity") is not None
+        assert [edge["id"] for edge in await store.query_edges()] == ["unrelated-mention"]
+        await store.close()
+
+    asyncio.run(scenario())
