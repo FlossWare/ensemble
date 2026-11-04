@@ -749,11 +749,15 @@ class SqliteIndexStore:
             return {}
         if any(not isinstance(source_id, str) or not source_id for source_id in source_ids):
             raise ValueError("source_ids must contain non-empty strings")
+        result: dict[str, dict[str, Any]] = {}
         async with self.engine.connect() as connection:
-            rows = (await connection.execute(select(sources).where(
-                sources.c.source_id.in_(source_ids)
-            ))).mappings().all()
-        return {row["source_id"]: _as_source(row) for row in rows}
+            for offset in range(0, len(source_ids), 500):
+                batch = source_ids[offset:offset + 500]
+                rows = (await connection.execute(select(sources).where(
+                    sources.c.source_id.in_(batch)
+                ))).mappings().all()
+                result.update({row["source_id"]: _as_source(row) for row in rows})
+        return result
 
     async def list_sources(self, limit: int) -> list[dict[str, Any]]:
         async with self.engine.connect() as connection:
