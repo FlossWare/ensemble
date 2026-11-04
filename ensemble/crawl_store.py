@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from sqlalchemy import Column, DateTime, Integer, JSON, MetaData, String, Text, select, update
+from sqlalchemy import Column, DateTime, Integer, JSON, MetaData, String, Table, Text, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.engine import make_url
 
