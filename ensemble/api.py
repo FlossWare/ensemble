@@ -924,7 +924,9 @@ def create_app(
                 "required_checkpoints": list(required),
                 "missing_checkpoints": missing,
                 "activation_ready": building is not None and not missing,
-                "blocked_capabilities": ["memory"] if any(name.startswith("memory") for name in missing) else [],
+                "blocked_capabilities": sorted({
+                    name.removesuffix("_reconciliation") for name in missing
+                }),
             },
         }
 
