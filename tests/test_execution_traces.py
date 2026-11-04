@@ -99,3 +99,42 @@ def test_in_memory_trace_store_enforces_retention_limit(monkeypatch):
         ]
 
     asyncio.run(scenario())
+
+
+
+def test_document_ingestion_trace_contains_real_materialization_stages(tmp_path):
+    from alembic import command
+    from alembic.config import Config
+    from ensemble.api import create_app
+
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'trace-ingestion.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+
+    with TestClient(create_app(database_url=database_url)) as client:
+        response = client.post("/api/v1/ingest/documents", json={
+            "source_id": "trace-stage-source",
+            "revision": 1,
+            "title": "Trace stages",
+            "content": "Chunking, embedding, persistence, and vector indexing are distinct ingestion stages.",
+        })
+        assert response.status_code == 201
+        trace_id = response.json()["metadata"]["execution_trace_id"]
+        detail = client.get(f"/api/v1/execution-traces/{trace_id}")
+        assert detail.status_code == 200
+        stages = detail.json()["trace"]["stages"]
+        names = [stage["name"] for stage in stages]
+        assert names == [
+            "index_revision",
+            "chunking",
+            "embedding",
+            "document_persistence",
+            "document_generation_mirror",
+            "vector_indexing_and_generation_mirror",
+            "document_materialization",
+            "graph_entity_linking",
+            "generation_acknowledgement",
+        ]
+        assert all(stage["duration_ms"] >= 0 for stage in stages)
+        assert next(stage for stage in stages if stage["name"] == "chunking")["chunk_count"] == 1

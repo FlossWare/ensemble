@@ -52,13 +52,30 @@ class DocumentService:
             return active_id
         return None
 
-    async def ingest(self, request: DocumentIn, *, embed: bool = True, vector_collection: str | None = None) -> DocumentOut:
+    async def ingest(self, request: DocumentIn, *, embed: bool = True, vector_collection: str | None = None, trace: object | None = None) -> DocumentOut:
+        async def record_stage(name: str, status: str, started: float, **details: object) -> None:
+            if not callable(trace):
+                return
+            try:
+                await trace({
+                    "name": name, "status": status,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    **details,
+                })
+            except Exception:
+                # Trace persistence must never become a document-ingestion dependency.
+                pass
+
         document = Document(request.source_id, request.revision, request.title, request.content, request.metadata)
         document.id = uuid5(NAMESPACE_URL, f"ensemble:document:{request.source_id}:{request.revision}")
+        stage_started = time.perf_counter()
         records = chunk_text(request.chunk_profile, request.source_id, request.content, request.media_type)
         if not records:
+            await record_stage("chunking", "failed", stage_started, error_category="EmptyDocument")
             raise ValueError("document content contains no usable text")
+        await record_stage("chunking", "completed", stage_started, chunk_count=len(records))
         texts = [record["text"] for record in records]
+        stage_started = time.perf_counter()
         if embed and self.embeddings.available:
             try:
                 vectors = []
@@ -74,6 +91,12 @@ class DocumentService:
             vectors = [[] for _ in texts]
         if len(vectors) != len(texts):
             raise RuntimeError("embedding provider returned an unexpected vector count")
+        await record_stage(
+            "embedding", "completed" if embed and self.embeddings.available else "skipped",
+            stage_started, embedded_count=sum(bool(vector) for vector in vectors),
+            requested=bool(embed), provider_available=bool(self.embeddings.available),
+        )
+        stage_started = time.perf_counter()
         chunks = [
             Chunk(
                 document.id, record["index"], record["text"], vectors[index],
@@ -93,11 +116,18 @@ class DocumentService:
                 chunk.document_id = document.id
                 chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
             document = await self.store.save(document, chunks)
+        await record_stage("document_persistence", "completed", stage_started, chunk_count=len(chunks))
+        stage_started = time.perf_counter()
         active_generation_id = await self._active_generation()
         if active_generation_id is not None:
             await self.store.upsert_generation(
                 active_generation_id, copy.deepcopy(document), copy.deepcopy(chunks),
             )
+        await record_stage(
+            "document_generation_mirror", "completed" if active_generation_id is not None else "skipped",
+            stage_started, generation_active=active_generation_id is not None,
+        )
+        stage_started = time.perf_counter()
         vector_indexed = False
         digest = hashlib.sha256(request.content.encode("utf-8")).hexdigest()
         if vector_collection and self.vector_store is not None:
@@ -171,6 +201,13 @@ class DocumentService:
                         active_generation_id, vector_collection,
                         collection["model"], collection["dimensions"], persisted,
                     )
+        await record_stage(
+            "vector_indexing_and_generation_mirror",
+            "completed" if vector_indexed else ("skipped" if not vector_collection or self.vector_store is None else "degraded"),
+            stage_started, vector_indexed=vector_indexed,
+            collection_configured=bool(vector_collection),
+            generation_mirrored=active_generation_id is not None,
+        )
         return DocumentOut(
             id=document.id,
             source_id=document.source_id,

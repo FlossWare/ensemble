@@ -723,6 +723,7 @@ def create_app(
                     "document": document.model_dump(mode="json"),
                     "embed": embed,
                     "vector_collection": vector_collection,
+                    "execution_trace_id": trace_id if trace_created else None,
                 },
             )
             result = DocumentOut.model_validate(result)
@@ -1289,10 +1290,20 @@ def create_app(
                     status_code=409,
                     detail="document writes require a matching current Index revision",
                 )
+            trace_id = payload.get("execution_trace_id")
+            trace_callback = None
+            if isinstance(trace_id, str) and re.fullmatch(r"[0-9a-f]{32}", trace_id):
+                async def trace_callback(stage: dict[str, Any]) -> None:
+                    try:
+                        await active_execution_trace_store.record_stage(trace_id, stage)
+                    except Exception:
+                        # Trace storage is best-effort; it cannot block ingestion.
+                        pass
             result = await documents.ingest(
                 document,
                 embed=payload.get("embed", True),
                 vector_collection=payload.get("vector_collection"),
+                trace=trace_callback,
             )
             return result
         except ChunkingError as exc:
