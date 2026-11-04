@@ -235,6 +235,7 @@ class InMemorySourceScheduleStore:
              if item["enabled"] and datetime.fromisoformat(item["next_run_at"]) <= now),
             key=lambda item: item["next_run_at"],
         )[:limit]
+        dispatched = 0
         for item in due:
             previous = (
                 await self.crawl_store.get(item["last_job_id"])
@@ -253,4 +254,5 @@ class InMemorySourceScheduleStore:
                 next_run_at=(now + timedelta(seconds=item["interval_seconds"])).isoformat(),
                 updated_at=now.isoformat(),
             )
-        return len(due)
+            dispatched += 1
+        return dispatched

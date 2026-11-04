@@ -40,11 +40,12 @@ def test_control_panel_is_served_by_the_api():
         assert "Schedule automatic refresh" in response.text
         assert "Chunking Workbench" in response.text
         assert "Pipeline Inspector" in response.text
+        assert 'id="crawl-schedules"' in response.text
+        script = client.get("/control.js")
+        assert script.status_code == 200
         assert "/api/v1/graph/ready" in script.text
         assert "/api/v1/vector/ready" in script.text
         assert "/api/v1/memory/ready" in script.text
-        assert 'id="crawl-schedules"' in response.text
-        script = client.get("/control.js")
         assert script.status_code == 200
         assert "/api/v1/ga/runs" in script.text
         assert "Approve for export" in script.text
