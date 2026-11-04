@@ -117,6 +117,13 @@ class InMemoryIndexStore:
         value = self._sources.get(source_id)
         return dict(value) if value else None
 
+    async def get_sources(self, source_ids: list[str]) -> dict[str, dict[str, Any]]:
+        return {
+            source_id: dict(self._sources[source_id])
+            for source_id in set(source_ids)
+            if source_id in self._sources
+        }
+
     async def list_sources(self, limit: int) -> list[dict[str, Any]]:
         return [dict(self._sources[key]) for key in sorted(self._sources)[:limit]]
 
