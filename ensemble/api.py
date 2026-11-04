@@ -321,10 +321,10 @@ def create_app(
                 raw = os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip()
                 if raw:
                     token_map = json.loads(raw)
-                    partitions = sorted({
+                    partitions = ["default", *sorted({
                         partition for principal in token_map.values()
                         for partition in principal.get("partitions", [])
-                    })
+                    })]
                 else:
                     partitions = ["default"]
                 for partition_id in partitions:
