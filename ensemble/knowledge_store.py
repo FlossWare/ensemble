@@ -102,7 +102,7 @@ class SqliteKnowledgeStore:
             row = (await connection.execute(
                 select(knowledge_records).where(knowledge_records.c.source_id == source_id)
             )).mappings().first()
-        if row is None or row["tombstoned"]:
+        if row is None:
             return None
         return {
             "source_id": row["source_id"],
@@ -230,7 +230,7 @@ class InMemoryKnowledgeStore:
     async def get(self, source_id: str) -> dict[str, Any] | None:
         import copy
         record = self._records.get(source_id)
-        return copy.deepcopy(record) if record and not record.get("tombstoned") else None
+        return copy.deepcopy(record) if record else None
 
     async def tombstone(self, source_id: str) -> None:
         if source_id in self._records:
