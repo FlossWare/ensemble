@@ -1,3 +1,5 @@
+import sqlite3
+
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
@@ -131,6 +133,24 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
         assert before.status_code == 200
         assert any(hit["source_id"] == "generation-source-1" for hit in before.json()["results"])
 
+        knowledge = client.post("/api/v1/knowledge/records", json={
+            "source_id": "generation-knowledge-source",
+            "revision_sequence": 1,
+            "revision_id": "knowledge-revision-1",
+            "title": "Generation Knowledge",
+            "content": "knowledge content remains available after generation cutover",
+            "provenance": {"origin": "test", "locator": "test://generation-knowledge-source"},
+            "profiles": {"chunking": "window-v1", "media_type": "text/plain"},
+        })
+        assert knowledge.status_code == 200
+        with sqlite3.connect(tmp_path / "generation-api.db") as connection:
+            knowledge_row = connection.execute(
+                "SELECT tombstoned FROM ensemble_knowledge_generation_records "
+                "WHERE generation_id = ? AND source_id = ?",
+                ("generation-cutover-test", "generation-knowledge-source"),
+            ).fetchone()
+        assert knowledge_row == (0,)
+
         second = client.post("/api/v1/ingest/documents", json={
             "source_id": "generation-source-2",
             "revision": 1,
@@ -210,6 +230,19 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
         })
         assert tombstone.status_code == 200
         assert tombstone.json()["cleanup"]["status"] == "complete"
+
+        knowledge_tombstone = client.post("/api/v1/index/tombstones", json={
+            "source_id": "generation-knowledge-source", "revision_sequence": 2,
+        })
+        assert knowledge_tombstone.status_code == 200
+        assert knowledge_tombstone.json()["cleanup"]["status"] == "complete"
+        with sqlite3.connect(tmp_path / "generation-api.db") as connection:
+            knowledge_row = connection.execute(
+                "SELECT tombstoned FROM ensemble_knowledge_generation_records "
+                "WHERE generation_id = ? AND source_id = ?",
+                ("generation-cutover-test", "generation-knowledge-source"),
+            ).fetchone()
+        assert knowledge_row == (1,)
 
         after_delete = client.post("/api/v1/search/retrieve", json={
             "query": "searchable content", "limit": 10, "rerank": False,
