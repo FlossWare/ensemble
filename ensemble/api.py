@@ -44,6 +44,7 @@ from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
 from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
 from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
+from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryReclamationStore
 from .config import settings_from_env, resolve_database_url
 from .partitioning import partition_scope_middleware
 
@@ -221,6 +222,45 @@ def create_app(
         else SqliteTranscriptCheckpointStore(database_url)
     )
 
+    active_reclamation_store = (
+        InMemoryReclamationStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteReclamationStore(database_url)
+    )
+
+    async def reclaim_due_sources() -> int:
+        jobs = await active_reclamation_store.claim_due(100)
+        for job in jobs:
+            source_id = job["source_id"]
+            try:
+                # The authoritative Index tombstone is retained. Only active
+                # materialized data is reclaimed; generation tombstones remain.
+                reclaimed = [
+                    await document_store.reclaim_source(source_id),
+                    await active_knowledge_store.reclaim_source(source_id),
+                    await active_vector_store.reclaim_source(source_id),
+                ]
+                if any(count > 500 for count in reclaimed):
+                    # A full page means there may be more rows. Retry the
+                    # idempotent source cleanup in another bounded pass.
+                    await active_reclamation_store.retry(source_id, "additional reclamation pages remain")
+                else:
+                    await active_reclamation_store.complete(source_id)
+            except Exception as exc:
+                await active_reclamation_store.retry(source_id, f"{type(exc).__name__}: {exc}")
+        return len(jobs)
+
+    async def reclamation_worker() -> None:
+        while True:
+            try:
+                processed = await reclaim_due_sources()
+                await asyncio.sleep(1 if processed else 15)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A transient queue/database failure must not permanently stop
+                # reclamation for this application process.
+                await asyncio.sleep(15)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         try:
@@ -236,9 +276,19 @@ def create_app(
             await active_learning_store.initialize()
             await active_transcript_store.initialize()
             await active_transcript_store.recover_interrupted()
-            yield
+            await active_reclamation_store.initialize()
+            worker_task = asyncio.create_task(reclamation_worker())
+            try:
+                yield
+            finally:
+                worker_task.cancel()
+                try:
+                    await worker_task
+                except asyncio.CancelledError:
+                    pass
+                await active_reclamation_store.close()
+                await active_transcript_store.close()
         finally:
-            await active_transcript_store.close()
             await active_learning_store.close()
             await active_thompson_store.close()
             await active_ga_store.close()
