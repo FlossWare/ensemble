@@ -43,6 +43,7 @@ def _record(row: Any) -> dict[str, Any]:
 
 class CrawlJobStore(Protocol):
     async def initialize(self) -> None: ...
+    async def check_ready(self) -> None: ...
     async def close(self) -> None: ...
     async def enqueue(self, uri: str, max_pages: int, max_depth: int) -> dict[str, Any]: ...
     async def claim_next(self) -> dict[str, Any] | None: ...
@@ -69,6 +70,10 @@ class SqliteCrawlJobStore:
             names = await connection.run_sync(lambda conn: __import__("sqlalchemy").inspect(conn).get_table_names())
         if "ensemble_crawl_jobs" not in names:
             raise RuntimeError("crawl job schema is not initialized; run 'alembic upgrade head'")
+
+    async def check_ready(self) -> None:
+        async with self.engine.connect() as connection:
+            await connection.execute(select(crawl_jobs.c.job_id).limit(1))
 
     async def close(self) -> None:
         await self.engine.dispose()
@@ -179,6 +184,7 @@ class InMemoryCrawlJobStore:
         self._jobs: dict[str, dict[str, Any]] = {}
 
     async def initialize(self) -> None: return None
+    async def check_ready(self) -> None: return None
     async def close(self) -> None: return None
 
     async def enqueue(self, uri: str, max_pages: int, max_depth: int) -> dict[str, Any]:

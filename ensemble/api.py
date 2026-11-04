@@ -852,13 +852,14 @@ def create_app(
         try:
             await document_store.check_ready()
             await active_memory_store.check_ready()
+            await active_crawl_store.check_ready()
         except Exception as exc:
             raise HTTPException(status_code=503, detail="persistence unavailable") from exc
         return {
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning"],
+            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning", "crawl_jobs"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])

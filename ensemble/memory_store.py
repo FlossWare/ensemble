@@ -546,7 +546,11 @@ class SqliteMemoryStore:
     async def check_ready(self) -> None:
         async with self.engine.connect() as connection:
             await connection.execute(select(1))
-            await connection.execute(select(memories.c.name).limit(1))
+            for table in (
+                memories, entries, memory_sources,
+                memory_generation_records, memory_generation_changes,
+            ):
+                await connection.execute(select(table).limit(1))
 
     async def read(self, name: str) -> str | None:
         validate_memory_name(name)

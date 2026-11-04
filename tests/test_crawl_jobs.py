@@ -131,3 +131,11 @@ def test_crawl_job_ingestion_is_checkpointed_per_source_and_retrievable(monkeypa
         assert replay.status_code == 200
         assert replay.json()["ingestion"]["pages"][0]["revision"] == 1
         assert replay.json()["ingestion"]["pages"][0]["status"] == "completed"
+
+
+def test_crawl_job_readiness_is_part_of_service_readiness():
+    app = create_app(store=InMemoryDocumentStore(), crawl_store=InMemoryCrawlJobStore())
+    with TestClient(app) as client:
+        response = client.get("/ready")
+    assert response.status_code == 200
+    assert "crawl_jobs" in response.json()["capabilities"]
