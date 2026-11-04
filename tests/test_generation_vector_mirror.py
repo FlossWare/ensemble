@@ -110,6 +110,31 @@ def test_vector_generation_mirror_failure_keeps_index_change_unacknowledged(tmp_
             )
             assert len(generation_vectors) == 1
             assert generation_vectors[0]["metadata"]["source_id"] == "vector-mirror-source"
+
+            # A newer revision accepted without embeddings must remove stale
+            # vectors from both the base and active-generation stores.
+            second_profiles = {"chunking": "window-v1", "media_type": "text/plain"}
+            second_decision = await index.record_revision(
+                "vector-mirror-source", 2, "revision-2", second_profiles,
+            )
+            assert second_decision["decision"] == "accepted"
+            second_request = DocumentIn(
+                source_id="vector-mirror-source", revision=2,
+                title="Vector mirror without embeddings",
+                content="new revision intentionally has no embedding",
+                chunk_profile="window-v1", media_type="text/plain",
+            )
+            result = await service.ingest(
+                second_request, embed=False, vector_collection="generation_test",
+            )
+            assert result.vector_indexed is False
+            await index.acknowledge_generation_change(
+                "vector-mirror-source", 2, False,
+            )
+            assert await vectors.query("generation_test", [1.0, 0.0], 10) == []
+            assert await vectors.query_generation(
+                "vector-mirror-active", "generation_test", [1.0, 0.0], 10,
+            ) == []
         finally:
             await index.close()
             await vectors.close()
