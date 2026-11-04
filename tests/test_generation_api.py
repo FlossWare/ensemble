@@ -29,7 +29,7 @@ def test_generation_api_creates_build_and_reports_missing_capabilities(tmp_path)
         assert "memory_reconciliation" in build["missing_checkpoints"]
 
 
-def test_generation_api_runs_bounded_index_copy_and_fails_closed_on_fence(tmp_path):
+def test_generation_api_runs_all_copy_and_reconciliation_passes_before_fence(tmp_path):
     with _client(tmp_path) as client:
         created = client.post(
             "/api/v1/index/generations",
@@ -45,7 +45,7 @@ def test_generation_api_runs_bounded_index_copy_and_fails_closed_on_fence(tmp_pa
         assert copied.json()["status"] == "complete"
         assert copied.json()["page_count"] == 0
 
-        for capability in ("documents", "vectors", "knowledge"):
+        for capability in ("documents", "vectors", "knowledge", "memory"):
             response = client.post(
                 f"/api/v1/index/generations/generation-api-test/copy/{capability}",
                 json={"page_size": 10},
@@ -53,7 +53,7 @@ def test_generation_api_runs_bounded_index_copy_and_fails_closed_on_fence(tmp_pa
             assert response.status_code == 200
             assert response.json()["status"] == "complete"
 
-        for capability in ("index", "documents", "vectors", "knowledge"):
+        for capability in ("index", "documents", "vectors", "knowledge", "memory"):
             response = client.post(
                 f"/api/v1/index/generations/generation-api-test/reconcile/{capability}",
                 json={"page_size": 10},
@@ -64,5 +64,7 @@ def test_generation_api_runs_bounded_index_copy_and_fails_closed_on_fence(tmp_pa
         fenced = client.post(
             "/api/v1/index/generations/generation-api-test/fence",
         )
-        assert fenced.status_code == 409
-        assert "memory source copy must be sealed" in fenced.json()["detail"]
+        assert fenced.status_code == 200
+        assert fenced.json()["generation_id"] == "generation-api-test"
+        status = client.get("/api/v1/index/generations")
+        assert status.json()["build"]["activation_ready"] is True
