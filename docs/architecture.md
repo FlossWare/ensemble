@@ -127,3 +127,15 @@ Do not create a separate phase or framework for a concern that belongs inside th
 ## 12. Test Harness
 
 Ensemble includes a Test Harness contract for synthetic injection, deterministic replay, and controlled fault scenarios through the canonical REST API. It is disabled by default and restricted to a dedicated test deployment and database until end-to-end partition enforcement exists. The harness must use existing ingestion and deletion contracts, retain per-operation outcomes, and never write directly to persistence tables. See [Test Harness](test-harness.md) for its lifecycle, route family, safety requirements, and implementation sequence.
+
+## Data partitions
+
+Ensemble uses **physical SQLite database isolation** for data partitions. The existing configured database remains the `default` partition. Each named partition receives a separate SQLite file beneath the configured database directory at `partitions/<sha256(partition-id)>.db`; the raw partition identifier is not used as a filesystem path. This keeps source identifiers, memory names, graph identities, vector collections, indexes, transcript checkpoints, learning state, and generation metadata independent without relying on query-time filters.
+
+The REST boundary derives the principal and authorized partition set from a Bearer credential. Configure `ENSEMBLE_PARTITION_TOKENS` as a JSON object keyed by the lowercase SHA-256 digest of each token. Each value contains a `subject` and a non-empty `partitions` array. The optional `X-Ensemble-Partition` header selects among those authorized partitions; it never grants access by itself. If a principal has one authorized partition, it is selected automatically. If the token map is configured, API requests require a valid Bearer token. Set `ENSEMBLE_AUTH_REQUIRED=1` to fail closed when authentication is required but no token map is configured.
+
+When no token map is configured, local single-partition mode is limited to `default`; a caller cannot select another partition by supplying a header. The public liveness/readiness and documentation routes remain available without a token. Keep the listener on loopback in this mode.
+
+All SQLite-backed capabilities resolve their database connection from the authenticated request scope. Internal REST calls propagate the selected partition and credential. A new named partition is provisioned by applying the same Alembic migration chain to its empty database on first use, then recording and checking the partition identity. Existing default-partition data is not copied into named partitions.
+
+The in-memory adapters are test/development adapters and are not a multi-partition persistence option. Do not use them for a deployment that enables partition credentials.

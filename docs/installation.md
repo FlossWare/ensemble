@@ -56,3 +56,37 @@ sudo systemctl start ensemble
 ```
 
 Back up the configured persistence root while Ensemble is stopped, or use a SQLite-consistent backup procedure. Do not blindly copy a live SQLite database file.
+
+## Configure authenticated partitions
+
+The default installation remains local-only and uses the existing `default` SQLite database. To enable named partitions, create a high-entropy Bearer token for each principal and place only its SHA-256 digest in the service environment file. For example:
+
+```bash
+TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+printf '%s\\n' "$TOKEN"
+printf '%s' "$TOKEN" | sha256sum
+```
+
+Keep the token secret for the client and store the digest in `ENSEMBLE_PARTITION_TOKENS`:
+
+```ini
+ENSEMBLE_AUTH_REQUIRED=1
+ENSEMBLE_PARTITION_TOKENS={"<sha256-token-digest>":{"subject":"client-a","partitions":["workspace-a"]}}
+```
+
+The client sends `Authorization: Bearer <token>`. If its token authorizes multiple partitions, it also sends `X-Ensemble-Partition: <partition-id>`. The partition header is a selector, not an access credential. A token can list multiple authorized partitions.
+
+The existing database remains the `default` partition. Named partitions are created as separate SQLite databases under `<database-directory>/partitions/` and are migrated automatically on first use. Back up the entire persistence root, including the `partitions` directory. Do not move or rename individual partition database files.
+
+If the token map is configured, API requests without valid credentials are rejected. The health/readiness endpoints remain public. The Control Center's authenticated-session workflow is being completed separately; use authenticated REST clients for protected operations until that work is finished.
+
+## Partition-aware backup and restore
+
+Use the repository scripts rather than copying a live SQLite file. They stop the systemd service when it is active, checkpoint and integrity-check every database, and include the entire persistence root (the default database plus every named partition):
+
+```bash
+sudo bash scripts/backup-persistence.sh /path/to/backups/ensemble.tar.gz
+sudo bash scripts/restore-persistence.sh /path/to/backups/ensemble.tar.gz
+```
+
+The backup script prints a SHA-256 checksum. The restore script validates archive paths, checks SQLite integrity and partition identity markers before replacing anything, and retains the previous persistence root as a rollback directory. If using a custom persistence root or service name, set `ENSEMBLE_PERSISTENCE_ROOT` and `ENSEMBLE_SERVICE_NAME` for the command. Keep backups outside the persistence root.

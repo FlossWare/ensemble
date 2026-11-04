@@ -22,7 +22,7 @@ from ensemble.transcript_store import transcript_metadata
 from ensemble.config import resolve_database_url
 
 config = context.config
-configured_url = os.getenv("ENSEMBLE_DATABASE_URL")
+configured_url = config.attributes.get("database_url") or os.getenv("ENSEMBLE_DATABASE_URL")
 ini_url = config.get_main_option("sqlalchemy.url")
 if configured_url is None and ini_url != "sqlite+aiosqlite:///./.ensemble/ensemble.db":
     configured_url = ini_url

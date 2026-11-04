@@ -10,6 +10,8 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
 
+from .partitioning import PartitionedAsyncEngine
+
 
 graph_metadata = MetaData()
 nodes = Table(
@@ -52,7 +54,7 @@ class SqliteGraphStore:
         self.database_url = database_url or os.getenv("ENSEMBLE_DATABASE_URL", "sqlite+aiosqlite:///./.ensemble/ensemble.db")
         if make_url(self.database_url).get_backend_name() != "sqlite":
             raise ValueError("Ensemble graph persistence supports SQLite only")
-        self.engine: AsyncEngine = create_async_engine(self.database_url, pool_pre_ping=True)
+        self.engine = PartitionedAsyncEngine(self.database_url, pool_pre_ping=True)
 
     async def initialize(self) -> None:
         async with self.engine.connect() as connection:

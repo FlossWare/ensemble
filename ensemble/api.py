@@ -14,6 +14,7 @@ from uuid import uuid4
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.openapi.utils import get_openapi
 from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chunk as chunk_text, describe_profiles as describe_chunk_profiles
 from .embeddings import EmbeddingProvider, MAX_BODY_BYTES as MAX_EMBED_BODY_BYTES, configured_embedding_provider, validate_embedding_request
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
@@ -43,6 +44,7 @@ from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
 from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
 from .config import settings_from_env, resolve_database_url
+from .partitioning import partition_scope_middleware
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -176,6 +178,8 @@ def create_app(
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
     document_store = store or SqlDocumentStore(database_url)
+    if isinstance(document_store, InMemoryDocumentStore) and os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip():
+        raise ValueError("partition authentication requires durable SQLite-backed stores; in-memory adapters are test-only")
     embeddings = embedding_provider or configured_embedding_provider()
     active_reranker = reranker or configured_reranker()
     active_vector_store = vector_store or (
@@ -249,6 +253,26 @@ def create_app(
         description="REST-first memory, knowledge, and retrieval platform.",
         lifespan=lifespan,
     )
+    app.middleware("http")(partition_scope_middleware)
+
+    def openapi_with_partition_auth():
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title, version=app.version,
+            description=app.description, routes=app.routes,
+        )
+        schemes = schema.setdefault("components", {}).setdefault("securitySchemes", {})
+        schemes["BearerAuth"] = {"type": "http", "scheme": "bearer", "bearerFormat": "opaque"}
+        for path, methods in schema.get("paths", {}).items():
+            if path.startswith("/api/v1/"):
+                for operation in methods.values():
+                    if isinstance(operation, dict) and "responses" in operation:
+                        operation["security"] = [{"BearerAuth": []}]
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = openapi_with_partition_auth
     documents = DocumentService(document_store, Chunker(), embeddings, active_vector_store)
     search = SearchService(document_store, embeddings, active_reranker, active_vector_store)
 

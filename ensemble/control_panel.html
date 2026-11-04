@@ -18,6 +18,11 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <body>
 <h1>Ensemble Control Center</h1>
 <p><a href="/docs">REST API</a></p>
+<section id="partition-session">
+<h2>Authenticated partition session</h2>
+<p class="muted">Credentials stay in this browser tab's session storage. The partition name selects only a partition authorized by the token.</p>
+<div class="toolbar"><input id="partition-token" type="password" autocomplete="off" placeholder="Bearer token"><input id="partition-id" type="text" maxlength="128" placeholder="Partition (optional for single-partition tokens)"><button id="connect-partition" type="button">Connect</button><button id="clear-partition" type="button">Clear</button><span id="partition-session-status">Local default session.</span></div>
+</section>
 <section><h2>Platform status</h2><button id="refresh-health" type="button">Refresh readiness</button><pre id="health-result">Not checked.</pre></section>
 <section id="capability-explorer">
 <h2>Capability Explorer</h2>

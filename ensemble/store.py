@@ -16,6 +16,7 @@ from sqlalchemy.engine import make_url
 from .tokenization import tokenize
 
 from .models import Chunk, Document
+from .partitioning import PartitionedAsyncEngine
 
 
 metadata = MetaData()
@@ -142,10 +143,7 @@ class SqlDocumentStore:
         if url.database not in (None, "", ":memory:"):
             Path(url.database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
 
-        self.engine: AsyncEngine = create_async_engine(
-            self.database_url,
-            pool_pre_ping=True,
-        )
+        self.engine = PartitionedAsyncEngine(self.database_url, pool_pre_ping=True)
         self.metadata = metadata
         self.documents = documents
         self.chunks = chunks
@@ -159,14 +157,14 @@ class SqlDocumentStore:
             raise RuntimeError(
                 "Ensemble database schema is not initialized; run 'alembic upgrade head'"
             )
-        missing = {"ensemble_documents", "ensemble_chunks", "ensemble_vector_collections", "ensemble_vector_records", "ensemble_index_sources", "ensemble_knowledge_records", "ensemble_graph_nodes", "ensemble_graph_edges", "ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources", "ensemble_ga_runs", "ensemble_ga_promotions", "ensemble_thompson_models", "ensemble_thompson_events", "ensemble_learning_outcomes", "ensemble_learning_artifacts", "ensemble_lexical_fts", "ensemble_transcript_checkpoints"} - set(tables)
+        missing = {"ensemble_documents", "ensemble_chunks", "ensemble_vector_collections", "ensemble_vector_records", "ensemble_index_sources", "ensemble_knowledge_records", "ensemble_graph_nodes", "ensemble_graph_edges", "ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources", "ensemble_ga_runs", "ensemble_ga_promotions", "ensemble_thompson_models", "ensemble_thompson_events", "ensemble_learning_outcomes", "ensemble_learning_artifacts", "ensemble_lexical_fts", "ensemble_transcript_checkpoints", "ensemble_partition_metadata"} - set(tables)
         if missing:
             raise RuntimeError(
                 "Ensemble database schema is incomplete; run 'alembic upgrade head'"
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0016_generation_lifecycle":
+        if revision != "0017_partition_metadata":
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )

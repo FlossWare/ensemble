@@ -2,7 +2,7 @@
 
 Ensemble is a standalone, REST-first platform for reusable intelligence capabilities. It provides shared Memory, Knowledge, Graph, ingestion, indexing, retrieval, and context capabilities to applications and AI clients.
 
-Ensemble is the product and implementation boundary. It does not depend on any client application or optional model provider to run.
+Ensemble is the product and implementation boundary. It does not depend on Claude Code, Codex, Cursor, Crush, MCP, or any other client to run.
 
 ## Architecture
 
@@ -10,9 +10,7 @@ Ensemble is the product and implementation boundary. It does not depend on any c
 - REST is the canonical contract for external consumers and capability-to-capability communication.
 - Capabilities are independently addressable through REST contracts, even when co-located in one deployment.
 - Implementations are composed and decorated behind stable contracts.
-- Model access is a first-class Ensemble capability with provider-neutral contracts and provider-specific adapters.
-- EnMaaS is the identified enterprise model-gateway integration direction; model access is not tied to a particular client.
-- Embedding, ranking, and generation providers are pluggable; provider implementations do not define the API contract.
+- Providers are pluggable; embedding and ranking implementations do not define the API contract.
 - Retrieval is independently usable; generation is optional and provider-backed.
 - MCP is an optional adapter over REST capabilities. It contains no duplicate business logic.
 - Ensemble uses SQLite for its own persistence. Alternative persistence implementations and shared infrastructure belong to FlossWare proper.
@@ -60,7 +58,7 @@ All source ingestion uses the canonical /api/v1/ingest/... namespace: documents,
 
 This repository contains the Ensemble platform only.
 
-Client-specific integrations belong in separate consumer repositories. They consume Ensemble contracts without becoming part of the platform. The broader FlossWare ecosystem is not part of this repository's scope.
+Client-specific integrations belong in separate consumer repositories (for example, ensemble-claude, ensemble-codex, ensemble-cursor, and ensemble-crush). The broader FlossWare ecosystem is not part of this repository's scope.
 
 Ensemble has no runtime dependency on other applications' data stores or process internals. Any required import or migration must use an explicitly designed, supported interface or export/import contract. Data migration is separate from implementing Ensemble's capabilities.
 
