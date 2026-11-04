@@ -5,14 +5,25 @@ import hashlib
 import math
 import asyncio
 import os
+import time
 from collections.abc import Sequence
 from uuid import uuid5, NAMESPACE_URL
 from .chunking import Chunker, chunk as chunk_text
 from .embeddings import EmbeddingProvider, MAX_TEXTS as MAX_EMBEDDING_BATCH
 from .models import Chunk, Document, DocumentIn, DocumentOut, SearchHit
 from .store import DocumentStore
-from .reranking import Reranker
+from .reranking import Reranker, RerankingDecorator, configured_ranking_provider
 from .vector_store import VectorStore
+
+
+def _retrieval_channel_timeout() -> float:
+    try:
+        configured = float(os.getenv("ENSEMBLE_RETRIEVAL_CHANNEL_TIMEOUT", "5"))
+    except (TypeError, ValueError):
+        configured = 5.0
+    if not math.isfinite(configured):
+        configured = 5.0
+    return min(60.0, max(0.05, configured))
 
 
 class DocumentService:
@@ -123,6 +134,8 @@ class SearchService:
         self.embeddings = embeddings
         self.reranker = reranker
         self.vector_store = vector_store
+        provider = configured_ranking_provider(reranker)
+        self.search_with_status = RerankingDecorator(provider)(self._search_with_status)
 
     async def lexical_search(self, query: str, limit: int = 10) -> list[SearchHit]:
         candidates = await self.search_with_status(
@@ -143,47 +156,136 @@ class SearchService:
     async def search(self, query: str, limit: int = 10) -> list[SearchHit]:
         return (await self.search_with_status(query, limit))["results"]
 
-    async def search_with_status(
+    async def _search_with_status(
         self, query: str, limit: int = 10, *, include_vector: bool = True, rerank: bool | None = None
     ) -> dict:
         if not query.strip():
             raise ValueError("query is required")
-        indexed = await self.store.all_chunks()
-        if not indexed:
-            return {
-                "ok": True, "results": [], "degraded": [],
-                "retrieval": "lexical", "reranked": False,
-            }
 
-        lexical_matches = await self.store.lexical_search(query, limit=min(2000, max(200, limit * 4)))
-        lexical_scores = {
-            item.chunk.id: score for item, score in lexical_matches
-        }
+        indexed = await self.store.all_chunks()
+        lexical_scores: dict = {}
         vector_scores: dict = {}
         degraded: list[str] = []
-        if include_vector and self.embeddings.available:
-            try:
-                query_vector = (await self.embeddings.embed([query], mode="query"))[0]
-                if self.vector_store is not None:
-                    vector_hits = await self.vector_store.query("transcript_text", query_vector, 200)
-                    known_ids = {str(item.chunk.id): item.chunk.id for item in indexed}
-                    vector_scores = {
-                        known_ids[hit["id"]]: float(hit["score"])
-                        for hit in vector_hits if hit["id"] in known_ids and float(hit["score"]) > 0
-                    }
-                # Keep document chunks outside the transcript collection in the
-                # vector candidate set as well; the collection is one source, not
-                # a replacement for the document-store vector channel.
-                for item in indexed:
-                    if item.chunk.embedding:
-                        score = _cosine(query_vector, item.chunk.embedding)
-                        if score > 0:
-                            vector_scores[item.chunk.id] = max(
-                                vector_scores.get(item.chunk.id, 0.0), score
-                            )
-            except Exception:
-                # Preserve lexical results when the embedding dependency is degraded.
+        channels = {
+            "lexical": {"status": "not_run", "available": False, "candidate_count": 0},
+            "vector": {"status": "disabled", "available": False, "candidate_count": 0,
+                       "collection_candidate_count": 0, "document_candidate_count": 0},
+        }
+
+        # Keep channels independent: one failing must not suppress the other.
+        lexical_started = time.perf_counter()
+        try:
+            lexical_matches = await asyncio.wait_for(
+                self.store.lexical_search(query, limit=min(2000, max(200, limit * 4))),
+                timeout=_retrieval_channel_timeout(),
+            )
+            lexical_scores = {item.chunk.id: score for item, score in lexical_matches}
+            channels["lexical"] = {
+                "status": "ok", "available": True,
+                "candidate_count": len(lexical_scores),
+                "duration_ms": round((time.perf_counter() - lexical_started) * 1000, 3),
+            }
+        except Exception as exc:
+            channels["lexical"] = {
+                "status": "unavailable", "available": False,
+                "candidate_count": 0, "error": "lexical search failed",
+                "duration_ms": round((time.perf_counter() - lexical_started) * 1000, 3),
+            }
+            degraded.append("lexical_timeout" if isinstance(exc, TimeoutError) else "lexical")
+
+        if include_vector:
+            if not self.embeddings.available:
+                channels["vector"] = {
+                    "status": "unavailable", "available": False,
+                    "candidate_count": 0, "collection_candidate_count": 0,
+                    "document_candidate_count": 0, "error": "embedding provider unavailable",
+                }
                 degraded.append("embeddings")
+            else:
+                collection_error = False
+                vector_started = time.perf_counter()
+                embedding_ms = 0.0
+                collection_ms = 0.0
+                document_scan_ms = 0.0
+                try:
+                    embedding_started = time.perf_counter()
+                    embedded = await asyncio.wait_for(
+                        self.embeddings.embed([query], mode="query"),
+                        timeout=_retrieval_channel_timeout(),
+                    )
+                    embedding_ms = round((time.perf_counter() - embedding_started) * 1000, 3)
+                    if not isinstance(embedded, list) or len(embedded) != 1:
+                        raise RuntimeError("embedding provider returned an invalid query vector")
+                    query_vector = embedded[0]
+                    if not isinstance(query_vector, (list, tuple)) or not query_vector:
+                        raise RuntimeError("embedding provider returned an empty query vector")
+                    if any(not math.isfinite(float(value)) for value in query_vector):
+                        raise RuntimeError("embedding provider returned a non-finite query vector")
+
+                    collection_scores: dict = {}
+                    if self.vector_store is not None:
+                        collection_started = time.perf_counter()
+                        try:
+                            vector_hits = await asyncio.wait_for(
+                                self.vector_store.query("transcript_text", query_vector, 200),
+                                timeout=_retrieval_channel_timeout(),
+                            )
+                            known_ids = {str(item.chunk.id): item.chunk.id for item in indexed}
+                            collection_scores = {
+                                known_ids[hit["id"]]: float(hit["score"])
+                                for hit in vector_hits
+                                if hit.get("id") in known_ids
+                                and math.isfinite(float(hit.get("score", 0.0)))
+                                and float(hit.get("score", 0.0)) > 0
+                            }
+                        except Exception as exc:
+                            collection_error = True
+                            collection_timeout = isinstance(exc, TimeoutError)
+                        finally:
+                            collection_ms = round((time.perf_counter() - collection_started) * 1000, 3)
+
+                    document_started = time.perf_counter()
+                    document_scores: dict = {}
+                    for item in indexed:
+                        if item.chunk.embedding:
+                            score = _cosine(query_vector, item.chunk.embedding)
+                            if score > 0:
+                                document_scores[item.chunk.id] = score
+                    document_scan_ms = round((time.perf_counter() - document_started) * 1000, 3)
+                    vector_scores = dict(collection_scores)
+                    for identifier, score in document_scores.items():
+                        vector_scores[identifier] = max(vector_scores.get(identifier, 0.0), score)
+
+                    vector_status = "partial" if collection_error else "ok"
+                    channels["vector"] = {
+                        "status": vector_status, "available": True,
+                        "candidate_count": len(vector_scores),
+                        "collection_candidate_count": len(collection_scores),
+                        "document_candidate_count": len(document_scores),
+                        "duration_ms": round((time.perf_counter() - vector_started) * 1000, 3),
+                        "embedding_ms": embedding_ms,
+                        "collection_ms": collection_ms,
+                        "document_scan_ms": document_scan_ms,
+                    }
+                    if collection_error:
+                        channels["vector"]["error"] = (
+                            "vector collection query timed out; document vectors remain available"
+                            if collection_timeout else
+                            "vector collection query failed; document vectors remain available"
+                        )
+                        degraded.append("vector_collection_timeout" if collection_timeout else "vector_collection")
+                except Exception as exc:
+                    channels["vector"] = {
+                        "status": "unavailable", "available": False,
+                        "candidate_count": 0, "collection_candidate_count": 0,
+                        "document_candidate_count": 0,
+                        "error": "query embedding or vector search failed",
+                        "duration_ms": round((time.perf_counter() - vector_started) * 1000, 3),
+                        "embedding_ms": embedding_ms,
+                        "collection_ms": collection_ms,
+                        "document_scan_ms": document_scan_ms,
+                    }
+                    degraded.append("embeddings_timeout" if isinstance(exc, TimeoutError) else "embeddings")
 
         lexical_ranks = _rank(lexical_scores)
         vector_ranks = _rank(vector_scores)
@@ -220,41 +322,30 @@ class SearchService:
             hits, key=lambda hit: (hit.fusion_score, hit.lexical_score, str(hit.chunk_id)),
             reverse=True,
         )[:limit]
-        reranked = False
-        rerank_enabled = (
-            os.getenv("ENSEMBLE_RERANK_ENABLED", "0").strip() == "1"
-            if rerank is None else rerank
+        operational_channels = sum(
+            1 for channel in channels.values()
+            if channel["status"] in {"ok", "partial"}
         )
-        if rerank_enabled and results:
-            if self.reranker is None or not self.reranker.available:
-                degraded.append("reranking")
-            else:
-                candidates = results[:min(30, len(results))]
-                try:
-                    scores = await asyncio.to_thread(
-                        self.reranker.score, query,
-                        [candidate.text[:4000] for candidate in candidates],
-                    )
-                    if len(scores) != len(candidates) or any(not math.isfinite(float(score)) for score in scores):
-                        raise RuntimeError("reranker returned invalid or misaligned scores")
-                    scored = [
-                        candidate.model_copy(update={"rerank_score": float(score)})
-                        for candidate, score in zip(candidates, scores)
-                    ]
-                    results = [
-                        item for _, item in sorted(
-                            enumerate(scored), key=lambda pair: (-pair[1].rerank_score, pair[0])
-                        )
-                    ] + results[len(candidates):]
-                    reranked = True
-                except Exception:
-                    degraded.append("reranking")
+        status = (
+            "unavailable" if operational_channels == 0
+            else "partial" if degraded else "ok"
+        )
+        if vector_scores:
+            retrieval = "hybrid"
+        elif channels["lexical"]["available"]:
+            retrieval = "lexical"
+        elif channels["vector"]["available"]:
+            retrieval = "vector"
+        else:
+            retrieval = "unavailable"
         return {
-            "ok": True,
+            "ok": operational_channels > 0,
+            "status": status,
             "results": results,
-            "degraded": degraded,
-            "retrieval": "hybrid" if vector_scores else "lexical",
-            "reranked": reranked,
+            "degraded": sorted(set(degraded)),
+            "channels": channels,
+            "retrieval": retrieval,
+            "reranked": False,
         }
 
 

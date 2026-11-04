@@ -31,12 +31,12 @@ These items are implemented foundations, not claims that every operational requi
 
 ### 1. Complete hybrid retrieval
 
-- Retrieve from the shared document/chunk index populated by Knowledge, transcripts, and documents; finish independent channel diagnostics and external ranking fallback.
+- Retrieve from the shared document/chunk index populated by Knowledge, transcripts, and documents; independent lexical/vector channel diagnostics and candidate counts are implemented. The optional ranking-provider adapter and reusable reranking decorator are now implemented; calibrated channel weighting, bounded retrieval deadlines/cancellation, and full trace provenance remain.
 - Preserve source identity, revision, scope, and provenance through candidate fusion and reranking.
 - Define deterministic fusion, deduplication, and stable tie-breaking.
-- Make partial-success and degraded-dependency behavior explicit.
-- Ensure a failed or partial retrieval is never represented as a successful empty result.
-- Add bounded retrieval deadlines and cancellation behavior (remaining).
+- Make partial-success and degraded-dependency behavior explicit. Search responses now distinguish healthy, partial, and unavailable retrieval, preserve a healthy channel when its peer fails, and report vector collection failures separately from usable document-chunk vectors.
+- Ensure a failed or partial retrieval is never represented as a successful empty result. The response now includes per-channel status, availability, candidate counts, and stable degraded dependency identifiers.
+- Add bounded retrieval deadlines and cancellation behavior. Per-channel deadlines are implemented with `ENSEMBLE_RETRIEVAL_CHANNEL_TIMEOUT` (default 5 seconds, clamped to 50 ms–60 seconds). Graph expansion has its own `ENSEMBLE_RETRIEVAL_GRAPH_TIMEOUT` (default 2 seconds, clamped to 50 ms–30 seconds). Timed-out channels degrade independently and preserve usable peer-channel results. Channel diagnostics now report elapsed time, including embedding, external vector lookup, local document-vector scan, and Graph expansion.
 - Ensure retrieval scope is enforced consistently across all channels (requires authentication/partition enforcement).
 
 ### 2. Complete transcript ingestion lifecycle
@@ -104,7 +104,7 @@ Do not ship a rebuild operation that can silently lose acknowledged writes or re
 
 - Decide when exact vector scans cease to be acceptable and implement an appropriate local index when justified.
 - Complete model identity, revision, dimensions, normalization, and provider readiness reporting.
-- Make embedding and reranking availability/degradation visible in capability health.
+- Make embedding and reranking provider configuration/availability/degradation visible in capability health; remote ranking health is configuration-reported and actual provider failures are surfaced per request.
 - Keep hardware-specific acceleration optional and report backend selection accurately.
 
 ### 9. Source adapters
