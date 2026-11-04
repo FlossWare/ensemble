@@ -59,6 +59,12 @@ class InMemoryIndexStore:
         if decision == "accepted":
             for generation in self._generations.values():
                 if generation["state"] in {"active", "building"}:
+                    if generation["state"] == "active" and generation.get("verification", {}).get("acknowledged_writes_verified") is True:
+                        self._generation_sources.setdefault(generation["generation_id"], {})[source_id] = {
+                            "source_id": source_id, "high_sequence": sequence,
+                            "revision_id": revision_id, "profiles": snapshot,
+                            "tombstoned": False, "updated_at": current["updated_at"],
+                        }
                     self._change_sequence += 1
                     self._generation_changes.setdefault(generation["generation_id"], []).append({
                         "change_id": self._change_sequence, "generation_id": generation["generation_id"],
@@ -92,6 +98,12 @@ class InMemoryIndexStore:
         if decision == "tombstoned":
             for generation in self._generations.values():
                 if generation["state"] in {"active", "building"}:
+                    if generation["state"] == "active" and generation.get("verification", {}).get("acknowledged_writes_verified") is True:
+                        self._generation_sources.setdefault(generation["generation_id"], {})[source_id] = {
+                            "source_id": source_id, "high_sequence": current["high_sequence"],
+                            "revision_id": current["revision_id"], "profiles": current["profiles"],
+                            "tombstoned": True, "updated_at": current["updated_at"],
+                        }
                     self._change_sequence += 1
                     self._generation_changes.setdefault(generation["generation_id"], []).append({
                         "change_id": self._change_sequence, "generation_id": generation["generation_id"],
