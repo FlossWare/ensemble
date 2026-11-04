@@ -77,19 +77,17 @@ Not yet implemented:
 
 SQLite is the only persistence implementation in this repository. FTS5 provides the lexical index. Embeddings are stored as JSON and scored by exact scan in the application; this is not a scalable approximate-nearest-neighbor vector index.
 
-## Generation rebuild and cutover integration branch
+## Generation rebuild and cutover (merged on main)
 
-The integration branch `integration/generation-mainline-2026-11-04` contains the generation rebuild/cutover implementation; it has not yet been merged into `main`.
+[PR #42](https://github.com/FlossWare/ensemble/pull/42) merged as `4c607ffd33f27f96b07d4fac58db20cd8b3afe95`.
 
-Implemented in this branch:
 - Durable generation-scoped Memory snapshots and a mutation journal, including writes, append-once entries, deletes, imported Markdown metadata, and stale-source reconciliation.
 - Bounded REST copy and reconciliation operations for Index, Documents, Vectors, Memory, and Knowledge.
 - A shared write fence enforced inside Index, Documents, Vectors, Knowledge, and Memory write transactions; startup recovery releases an abandoned fence and reopens all reconciliation checkpoints.
 - Active-generation retrieval for lexical and vector candidates, with FTS5/BM25 scoring retained.
 - Post-activation document/vector/Knowledge writes, Index manifest changes, Memory snapshots, and tombstones are reflected in the active generation.
-- Activation is retry-safe when the original response is lost.
-
-The end-to-end cutover tests cover initial ingestion, bounded copy, independent reconciliation, fencing, activation, retrieval from the new generation, post-activation document/Knowledge/vector writes, metadata updates, pruning, tombstone removal, activation retry after a lost response, Memory snapshot updates, restart recovery of an abandoned fence, and Index-authoritative filtering before downstream cleanup. The integration head `7c2fa457732bef9e2ec4c3f1b0d5cde8aae5e7a7` passed **203 tests, 1 skipped**. Consolidated PR [#42](https://github.com/FlossWare/ensemble/pull/42) is open against `main`; merge is pending review and required PR checks.
+- Activation is retry-safe when the original response is lost; retrieval checks authoritative Index revision and tombstone state.
+- Merge CI passed **204 tests, 1 skipped**.
 
 ## Partition isolation implementation
 

@@ -16,7 +16,7 @@ Complete the intended Ensemble platform as a standalone, client-independent REST
 - Do not create tests merely to mirror POC tests. Defer systematic test expansion until the capability set is substantially complete.
 - Update implementation status and this plan as capabilities become usable, not merely when routes or stubs exist.
 
-## Completed in the current review branch
+## Completed on main
 
 - All supported document, lexical, transcript, PDF, URL, and Knowledge ingestion paths now pass through Index revision decisions.
 - Knowledge publication writes the durable document/chunk index, Knowledge provenance record, and optional knowledge_chunks vectors.
@@ -72,7 +72,7 @@ Remaining:
 
 ### 5. Index generation rebuild and cutover
 
-Implemented on `integration/generation-mainline-2026-11-04` (not yet merged):
+Merged into `main` via [PR #42](https://github.com/FlossWare/ensemble/pull/42):
 - REST operations create and inspect a rebuild, perform bounded copy passes for Index, Documents, Vectors, Memory, and Knowledge, reconcile each capability, acquire the write fence, activate, and abort.
 - Memory now has generation-scoped durable snapshots and a mutation journal. Memory writes are blocked while the shared cutover fence is held.
 - The Index journal tracks acknowledged mutations. Completed document/Knowledge writes and source tombstones acknowledge only after the corresponding stores are updated.
@@ -81,9 +81,9 @@ Implemented on `integration/generation-mainline-2026-11-04` (not yet merged):
 - Activation retries are idempotent after a lost response. Restart recovery releases an abandoned fence and reopens reconciliation checkpoints so subsequent writes can be reconciled.
 - CI has verified end-to-end copy, reconciliation, activation, retrieval, post-activation document/Knowledge/vector writes, tombstones, Memory snapshot reconciliation, idempotent activation retry, and fence recovery. The latest verified integration run passed 203 tests with 1 skipped.
 
-Still required before merge:
-- Verify the latest integration head's CI result and review the crash/recovery boundaries and migration compatibility.
-- Complete failure-injection coverage for interruption between fence acquisition and activation, plus active-generation Memory and Knowledge lifecycle edge cases.
+Remaining follow-up:
+- Expand failure-injection coverage across capability writes, interrupted ingestion, and repeated recovery.
+- Extend durable operation tracking to long-running rebuild and non-transcript ingestion jobs.
 - Keep activation fail-closed if any capability checkpoint, journal acknowledgement, or tombstone verification is missing.
 
 Do not ship a rebuild operation that can silently lose acknowledged writes or resurrect deleted content.
@@ -162,7 +162,7 @@ A capability is complete when it has a usable contract, a working implementation
 
 Existing tests should continue to be run when practical. New test development is deliberately deprioritized during this functionality phase, but regressions and known failures must not be concealed.
 
-## Current review-branch state
+## Current main state
 
 The following work is implemented in the current review branch, with CI verification still required for the latest commit:
 
@@ -172,12 +172,13 @@ The following work is implemented in the current review branch, with CI verifica
 - Source tombstones deactivate current document chunks, tombstone Knowledge, and remove source vectors across collections. The Index tombstone remains authoritative and blocks later revisions.
 - Memory context assembly is exposed as a REST capability with deterministic ordering, approximate character-based token budgeting, extractive compression, and source metadata.
 - System configuration reports listener and durable-persistence status without exposing filesystem paths or database URLs.
+- Generation rebuild/cutover is merged: bounded copy and reconciliation across Index, Documents, Vectors, Memory, and Knowledge; persistent write fencing; restart recovery; active-generation retrieval and writes; and authoritative Index freshness/tombstone filtering. PR #42 merged as `4c607ffd33f27f96b07d4fac58db20cd8b3afe95` with 204 passed and 1 skipped.
 
 These are implemented slices, not a declaration that the platform is production-ready. Transcript parsing still relies on caller-supplied byte slices, while durable transcript jobs, byte checkpoints, retry state, and restart recovery are implemented. Server-side filesystem scanning remains intentionally out of scope without an explicit scoped-source contract.
 
 ## Remaining implementation sequence
 
-1. Finish and merge the generation rebuild/cutover slice after current-head CI and failure-recovery review.
+1. Generation rebuild/cutover is merged on main.
 2. Close remaining source lifecycle gaps: cleanup retry state, stale vector reconciliation, and failure recovery across Index, Documents, Knowledge, Graph, and Vector.
 3. Complete Memory scoped-source reconciliation, event lifecycle semantics, conflict/deletion policy, and retrieval quality.
 4. Add bounded deadlines/cancellation and durable operation tracking for long-running non-transcript ingestion and rebuild operations.
