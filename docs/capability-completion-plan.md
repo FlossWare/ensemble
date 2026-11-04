@@ -119,7 +119,7 @@ Do not ship a rebuild operation that can silently lose acknowledged writes or re
 
 ### 9. Source adapters
 
-- Bounded same-origin crawl preview enforces robots.txt, pins each connection to its validated DNS address, rejects cross-origin redirects, and caps page attempts, depth, response size, and total extracted characters. Durable SQLite crawl jobs persist requests/results, run through a restart-recoverable worker, and expose status/list/retry REST operations. Explicit batch ingestion persists a stable revision and per-page state before each write, checkpoints successful pages, skips completed pages on replay, and retries failed/interrupted pages without allocating a new revision. Recurring source schedules now atomically dispatch durable crawl jobs that automatically ingest refreshed pages; schedules can be paused, resumed, and deleted. Control Center exposes queue/status/retry/ingest and schedule management. Partitioned deployments must configure `ENSEMBLE_INTERNAL_BEARER_TOKEN` as a worker principal authorized for each scheduled partition.
+- Bounded same-origin crawl preview enforces robots.txt, pins each connection to its validated DNS address, rejects cross-origin redirects, and caps page attempts, depth, response size, and total extracted characters. Durable SQLite crawl jobs persist requests/results, run through a restart-recoverable worker, and expose status/list/retry REST operations. Explicit batch ingestion persists a stable revision and per-page state before each write, checkpoints successful pages, skips completed pages on replay, and retries failed/interrupted pages without allocating a new revision. Startup recovery marks interrupted per-page writes for retry. Recurring source schedules atomically dispatch durable crawl jobs that automatically ingest refreshed pages; schedules can be paused, resumed, and deleted. Control Center exposes queue/status/retry/ingest and schedule management. Partitioned deployments must configure `ENSEMBLE_INTERNAL_BEARER_TOKEN` as a worker principal authorized for each scheduled partition.
 - Add OCR only with a deliberate provider/runtime decision.
 - Provide source connector contracts without coupling core ingestion to individual vendors.
 
@@ -177,7 +177,7 @@ Branch: `integration/source-lifecycle-mainline-2026-11-04` (not yet merged).
 - Control endpoints expose reclamation queue status and an operator-triggered bounded pass.
 - Direct document writes require a matching current Index revision; direct document/Knowledge/vector source tombstones require the Index tombstone lifecycle.
 - Standalone vector upsert, metadata, and prune operations are paused during generation rebuilds. Normal indexed ingestion remains available and is reconciled through the Index change journal.
-- Latest verified integration CI: **270 passed, 1 skipped, 1 warning**.
+- Latest verified integration CI: **271 passed, 1 skipped, 1 warning**.
 
 ## Current main state
 
