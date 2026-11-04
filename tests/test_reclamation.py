@@ -77,7 +77,7 @@ def test_reclamation_physically_removes_active_source_data_but_not_index_tombsto
         await knowledge.tombstone("source-1")
         # Logical deletion takes effect before reclamation.
         assert await documents.all_chunks() == []
-        assert await knowledge.get("source-1") is None
+        assert (await knowledge.get("source-1"))["tombstoned"] is True
         assert (await index.get_source("source-1"))["tombstoned"] is True
         # Raw Vector queries also consult the authoritative Index tombstone.
         assert await vectors.query("test", [1.0, 0.0], 10) == []
