@@ -35,7 +35,7 @@ from .extraction import extract, normalize_entity
 from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
 from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_ranking_provider, configured_reranker, validate_rerank_request
-from .scraping import ScrapeError, crawl_uri, preview_uri
+from .scraping import ScrapeError, crawl_uri, preview_uri, _validate_public_uri
 from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
 from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpointStore, InMemoryTranscriptCheckpointStore
 from .file_ingestion import extract_pdf, PDFExtractionError, MAX_PDF_BYTES
@@ -48,7 +48,10 @@ from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearning
 from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryReclamationStore
 from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
-from .partitioning import partition_scope_middleware
+from .partitioning import (
+    RequestScope, partition_scope_middleware, reset_request_scope, set_request_scope,
+)
+from .crawl_store import CrawlJobStore, SqliteCrawlJobStore, InMemoryCrawlJobStore
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -179,6 +182,7 @@ def create_app(
     thompson_store: ThompsonStore | None = None,
     learning_store: LearningStore | None = None,
     transcript_store: TranscriptCheckpointStore | None = None,
+    crawl_store: CrawlJobStore | None = None,
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
     document_store = store or SqlDocumentStore(database_url)
@@ -227,6 +231,11 @@ def create_app(
     active_reclamation_store = (
         InMemoryReclamationStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteReclamationStore(database_url)
+    )
+
+    active_crawl_store = crawl_store or (
+        InMemoryCrawlJobStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteCrawlJobStore(database_url)
     )
 
     # Serialize permanent source reclamation against creation of a new generation.
@@ -304,6 +313,44 @@ def create_app(
                 # reclamation for this application process.
                 await asyncio.sleep(15)
 
+
+    async def crawl_worker() -> None:
+        while True:
+            processed = False
+            try:
+                raw = os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip()
+                if raw:
+                    token_map = json.loads(raw)
+                    partitions = sorted({
+                        partition for principal in token_map.values()
+                        for partition in principal.get("partitions", [])
+                    })
+                else:
+                    partitions = ["default"]
+                for partition_id in partitions:
+                    scope_token = set_request_scope(RequestScope(partition_id=partition_id))
+                    try:
+                        job = await active_crawl_store.claim_next()
+                        if job is None:
+                            continue
+                        processed = True
+                        try:
+                            result = await crawl_uri(
+                                job["uri"], max_pages=job["max_pages"], max_depth=job["max_depth"],
+                            )
+                            await active_crawl_store.complete(job["job_id"], result)
+                        except Exception as exc:
+                            await active_crawl_store.fail(
+                                job["job_id"], f"{type(exc).__name__}: {str(exc)}",
+                            )
+                    finally:
+                        reset_request_scope(scope_token)
+                await asyncio.sleep(1 if processed else 5)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await asyncio.sleep(5)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         try:
@@ -323,15 +370,21 @@ def create_app(
             await active_transcript_store.initialize()
             await active_transcript_store.recover_interrupted()
             await active_reclamation_store.initialize()
+            await active_crawl_store.initialize()
+            await active_crawl_store.recover_interrupted()
             worker_task = asyncio.create_task(reclamation_worker())
+            crawl_worker_task = asyncio.create_task(crawl_worker())
             try:
                 yield
             finally:
                 worker_task.cancel()
-                try:
-                    await worker_task
-                except asyncio.CancelledError:
-                    pass
+                crawl_worker_task.cancel()
+                for task in (worker_task, crawl_worker_task):
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                await active_crawl_store.close()
                 await active_reclamation_store.close()
                 await active_transcript_store.close()
         finally:
@@ -765,6 +818,7 @@ def create_app(
     app.state.thompson_store = active_thompson_store
     app.state.learning_store = active_learning_store
     app.state.transcript_store = active_transcript_store
+    app.state.crawl_store = active_crawl_store
     app.state.settings = settings_from_env(database_url)
 
     @app.exception_handler(HTTPException)
@@ -2655,6 +2709,47 @@ def create_app(
             )
         except ScrapeError as exc:
             raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+    @app.post("/api/v1/ingest/urls/crawl-jobs", status_code=202, tags=["ingestion"])
+    async def create_crawl_job(payload: dict[str, Any]):
+        try:
+            uri = _validate_public_uri(payload.get("uri"))
+            max_pages = payload.get("max_pages", 10)
+            max_depth = payload.get("max_depth", 1)
+            if isinstance(max_pages, bool) or not isinstance(max_pages, int) or not 1 <= max_pages <= 20:
+                raise ValueError("max_pages must be an integer between 1 and 20")
+            if isinstance(max_depth, bool) or not isinstance(max_depth, int) or not 0 <= max_depth <= 3:
+                raise ValueError("max_depth must be an integer between 0 and 3")
+            job = await active_crawl_store.enqueue(uri, max_pages, max_depth)
+            return {"ok": True, "job": job}
+        except ScrapeError as exc:
+            raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/ingest/urls/crawl-jobs", tags=["ingestion"])
+    async def list_crawl_jobs(limit: int = 50):
+        try:
+            return {"ok": True, "jobs": await active_crawl_store.list(limit)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/ingest/urls/crawl-jobs/{job_id}", tags=["ingestion"])
+    async def get_crawl_job(job_id: str):
+        job = await active_crawl_store.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="crawl job not found")
+        return {"ok": True, "job": job}
+
+    @app.post("/api/v1/ingest/urls/crawl-jobs/{job_id}/retry", tags=["ingestion"])
+    async def retry_crawl_job(job_id: str):
+        try:
+            return {"ok": True, "job": await active_crawl_store.retry(job_id)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="crawl job not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/ingest/urls", status_code=201, tags=["ingestion"])
     async def scrape_and_ingest(payload: dict[str, Any], request: Request):
