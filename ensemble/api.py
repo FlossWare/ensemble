@@ -54,6 +54,7 @@ from .partitioning import (
 from .crawl_store import CrawlJobStore, SqliteCrawlJobStore, InMemoryCrawlJobStore
 from .context_tokens import ContextTokenCounter, ApproximateContextTokenCounter, configured_context_token_counter
 from .source_schedule_store import SourceScheduleStore, SqliteSourceScheduleStore, InMemorySourceScheduleStore
+from .execution_trace_store import ExecutionTraceStore, SqliteExecutionTraceStore, InMemoryExecutionTraceStore, traces as execution_traces
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -290,6 +291,11 @@ def create_app(
         else SqliteSourceScheduleStore(database_url)
     )
 
+    active_execution_trace_store: ExecutionTraceStore = (
+        InMemoryExecutionTraceStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteExecutionTraceStore(database_url)
+    )
+
     # Serialize permanent source reclamation against creation of a new generation.
     generation_lifecycle_lock = asyncio.Lock()
 
@@ -474,6 +480,7 @@ def create_app(
             await active_crawl_store.initialize()
             await active_crawl_store.recover_interrupted()
             await active_source_schedule_store.initialize()
+            await active_execution_trace_store.initialize()
             worker_task = asyncio.create_task(reclamation_worker())
             crawl_worker_task = asyncio.create_task(crawl_worker())
             schedule_worker_task = asyncio.create_task(source_schedule_worker())
@@ -488,6 +495,7 @@ def create_app(
                         await task
                     except asyncio.CancelledError:
                         pass
+                await active_execution_trace_store.close()
                 await active_source_schedule_store.close()
                 await active_crawl_store.close()
                 await active_reclamation_store.close()
@@ -510,6 +518,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.middleware("http")(partition_scope_middleware)
+    app.state.execution_trace_store = active_execution_trace_store
     app.state.context_tokenizer = {
         "id": context_token_counter.tokenizer_id,
         "exact": context_token_counter.exact,
@@ -628,6 +637,44 @@ def create_app(
         origin: str = "document", locator: str | None = None,
         request: Request | None = None,
     ):
+        trace_id = uuid4().hex
+        request_id = (request.headers.get("x-request-id", "")[:256] if request else "") or trace_id
+        trace_started = time.perf_counter()
+        trace_created = False
+
+        async def trace_stage(name: str, status: str, started: float, **details: Any) -> None:
+            if not trace_created:
+                return
+            try:
+                await active_execution_trace_store.record_stage(trace_id, {
+                    "name": name, "status": status,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    **details,
+                })
+            except Exception:
+                # Observability must never become an ingestion dependency.
+                pass
+
+        try:
+            await active_execution_trace_store.create({
+                "trace_id": trace_id, "request_id": request_id,
+                "operation": "document_ingestion", "status": "running",
+                "started_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                "completed_at": None, "duration_ms": None,
+                "attributes": {
+                    "source_key": hashlib.sha256(document.source_id.encode("utf-8")).hexdigest(),
+                    "revision": document.revision, "content_characters": len(document.content),
+                    "chunk_profile": document.chunk_profile, "media_type": document.media_type,
+                    "embedding_requested": bool(embed), "vector_collection": vector_collection,
+                    "origin": origin,
+                },
+                "stages": [], "error_category": None,
+            })
+            trace_created = True
+        except Exception:
+            # Trace storage is deliberately best-effort.
+            trace_created = False
+
         internal = InternalRestClient(app, {
             "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
             "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
@@ -636,40 +683,99 @@ def create_app(
         })
         revision_id = hashlib.sha256(document.content.encode("utf-8")).hexdigest()
         profiles = {"chunking": document.chunk_profile, "media_type": document.media_type}
-        decision = await internal.request(
-            "POST", "/api/v1/index/revisions", request=request,
-            json={
-                "source_id": document.source_id,
-                "revision_sequence": document.revision,
-                "revision_id": revision_id,
-                "profiles": profiles,
-            },
-        )
-        if decision["decision"] not in {"accepted", "duplicate"}:
-            raise HTTPException(
-                status_code=409,
-                detail="source revision rejected: " + decision["decision"],
+        stage_started = time.perf_counter()
+        try:
+            decision = await internal.request(
+                "POST", "/api/v1/index/revisions", request=request,
+                json={
+                    "source_id": document.source_id,
+                    "revision_sequence": document.revision,
+                    "revision_id": revision_id,
+                    "profiles": profiles,
+                },
             )
-        result = await internal.request(
-            "POST", "/api/v1/documents/records", request=request,
-            json={
-                "document": document.model_dump(mode="json"),
-                "embed": embed,
-                "vector_collection": vector_collection,
-            },
-        )
-        result = DocumentOut.model_validate(result)
+            if decision["decision"] not in {"accepted", "duplicate"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail="source revision rejected: " + decision["decision"],
+                )
+            await trace_stage("index_revision", "completed", stage_started, decision=decision["decision"])
+        except Exception as exc:
+            await trace_stage("index_revision", "failed", stage_started, error_category=type(exc).__name__)
+            try:
+                await active_execution_trace_store.finish(
+                    trace_id, "failed", (time.perf_counter() - trace_started) * 1000, type(exc).__name__,
+                ) if trace_created else None
+            except Exception:
+                pass
+            raise
+
+        stage_started = time.perf_counter()
+        try:
+            result = await internal.request(
+                "POST", "/api/v1/documents/records", request=request,
+                json={
+                    "document": document.model_dump(mode="json"),
+                    "embed": embed,
+                    "vector_collection": vector_collection,
+                },
+            )
+            result = DocumentOut.model_validate(result)
+            await trace_stage(
+                "document_materialization", "completed", stage_started,
+                chunk_count=result.chunk_count, embedded=bool(result.embedded),
+                vector_indexed=bool(result.vector_indexed),
+            )
+        except Exception as exc:
+            await trace_stage("document_materialization", "failed", stage_started, error_category=type(exc).__name__)
+            try:
+                if trace_created:
+                    await active_execution_trace_store.finish(
+                        trace_id, "failed", (time.perf_counter() - trace_started) * 1000, type(exc).__name__,
+                    )
+            except Exception:
+                pass
+            raise
+
+        stage_started = time.perf_counter()
         try:
             linked = await index_document_entities(
                 document.source_id, document.revision, document.content,
                 origin=origin, locator=locator or document.source_id, request=request,
             )
             result.metadata = {**result.metadata, "graph_entities_indexed": linked}
-        except Exception:
+            await trace_stage("graph_entity_linking", "completed", stage_started, entities_linked=linked)
+            trace_status = "completed"
+        except Exception as exc:
             result.metadata = {**result.metadata, "graph_entities_indexed": 0, "graph_degraded": True}
-        await active_index_store.acknowledge_generation_change(
-            document.source_id, document.revision, False,
-        )
+            await trace_stage("graph_entity_linking", "degraded", stage_started, error_category=type(exc).__name__)
+            trace_status = "degraded"
+
+        stage_started = time.perf_counter()
+        try:
+            await active_index_store.acknowledge_generation_change(
+                document.source_id, document.revision, False,
+            )
+            await trace_stage("generation_acknowledgement", "completed", stage_started)
+        except Exception as exc:
+            await trace_stage("generation_acknowledgement", "failed", stage_started, error_category=type(exc).__name__)
+            try:
+                if trace_created:
+                    await active_execution_trace_store.finish(
+                        trace_id, "failed", (time.perf_counter() - trace_started) * 1000, type(exc).__name__,
+                    )
+            except Exception:
+                pass
+            raise
+
+        try:
+            if trace_created:
+                await active_execution_trace_store.finish(
+                    trace_id, trace_status, (time.perf_counter() - trace_started) * 1000,
+                )
+        except Exception:
+            pass
+        result.metadata = {**result.metadata, "execution_trace_id": trace_id}
         return result, decision["decision"]
 
     async def expand_graph_results(
@@ -3692,6 +3798,22 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=503, detail="session ingestion dependency unavailable") from exc
+
+    @app.get("/api/v1/execution-traces", tags=["operations"])
+    async def list_execution_traces(limit: int = 50):
+        try:
+            return {"ok": True, "traces": await active_execution_trace_store.list(limit)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/execution-traces/{trace_id}", tags=["operations"])
+    async def get_execution_trace(trace_id: str):
+        if not re.fullmatch(r"[0-9a-f]{32}", trace_id or ""):
+            raise HTTPException(status_code=400, detail="trace_id must be a lowercase UUID hex string")
+        trace = await active_execution_trace_store.get(trace_id)
+        if trace is None:
+            raise HTTPException(status_code=404, detail="execution trace not found")
+        return {"ok": True, "trace": trace}
 
     @app.post("/api/v1/ingest/documents", response_model=DocumentOut, status_code=201, tags=["ingestion"])
     async def ingest_document(document: DocumentIn, http_request: Request):
