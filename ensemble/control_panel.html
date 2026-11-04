@@ -122,6 +122,11 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <textarea id="pipeline-text" rows="7" style="width:100%" maxlength="200000" placeholder="Paste text to inspect across processing stages"></textarea>
 <button id="pipeline-run" type="button">Run diagnostic pipeline</button>
 <pre id="pipeline-results">No diagnostic pipeline run.</pre>
+<h3>Persisted execution traces</h3>
+<p>Inspect real ingestion and retrieval executions. Trace records contain metadata and timings, not source content.</p>
+<button id="trace-refresh" type="button">Refresh execution traces</button>
+<div id="trace-list">No persisted traces loaded.</div>
+<pre id="trace-detail">Select a persisted trace to inspect its stages.</pre>
 </section>
 <h2>URI ingestion</h2>
 <form id="scrape-form">

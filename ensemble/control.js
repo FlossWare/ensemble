@@ -866,3 +866,30 @@ document.getElementById("context-form").addEventListener("submit",async event=>{
  }catch(error){output.textContent="Context assembly failed: "+error.message;}
  finally{button.disabled=false;}
 });
+
+const traceList=document.getElementById("trace-list");
+const traceDetail=document.getElementById("trace-detail");
+async function refreshExecutionTraces(){
+ traceList.textContent="Loading persisted execution traces…";
+ try{
+  const response=await controlJson("/api/v1/execution-traces?limit=50");
+  traceList.replaceChildren();
+  const traces=Array.isArray(response.traces)?response.traces:[];
+  if(!traces.length){traceList.textContent="No persisted traces yet.";return;}
+  for(const trace of traces){
+   const button=document.createElement("button");
+   button.type="button";
+   button.textContent=[trace.operation,trace.status,trace.started_at,trace.trace_id].filter(Boolean).join(" · ");
+   button.addEventListener("click",async()=>{
+    traceDetail.textContent="Loading trace…";
+    try{
+     const detail=await controlJson("/api/v1/execution-traces/"+encodeURIComponent(trace.trace_id));
+     traceDetail.textContent=JSON.stringify(detail.trace,null,2);
+    }catch(error){traceDetail.textContent="Trace inspection failed: "+error.message;}
+   });
+   traceList.append(button);
+  }
+ }catch(error){traceList.textContent="Trace list failed: "+error.message;}
+}
+document.getElementById("trace-refresh").addEventListener("click",refreshExecutionTraces);
+refreshExecutionTraces();

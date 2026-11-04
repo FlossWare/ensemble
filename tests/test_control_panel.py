@@ -40,6 +40,7 @@ def test_control_panel_is_served_by_the_api():
         assert "Schedule automatic refresh" in response.text
         assert "Chunking Workbench" in response.text
         assert "Pipeline Inspector" in response.text
+        assert "Persisted execution traces" in response.text
         assert 'id="crawl-schedules"' in response.text
         script = client.get("/control.js")
         assert script.status_code == 200
@@ -61,6 +62,7 @@ def test_control_panel_is_served_by_the_api():
         assert "/api/v1/index/tombstones" in script.text
         assert "/api/v1/ingest/sessions" in script.text
         assert "/api/v1/ingest/urls/crawl-preview" in script.text
+        assert "/api/v1/execution-traces" in script.text
 
 
 def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch):
