@@ -13,6 +13,7 @@ from ensemble.memory_store import InMemoryMemoryStore
 from ensemble.index_store import SqliteIndexStore
 from ensemble.index_memory import InMemoryIndexStore
 from ensemble.models import Document, Chunk
+from ensemble.rebuild import IndexGenerationBuilder
 from ensemble.vector_store import SqliteVectorStore
 
 
@@ -1514,5 +1515,76 @@ def test_in_memory_generation_index_source_state_matches_durable_rules():
         assert (await store.put_generation_source("shadow", tombstone))["decision"] == "tombstoned"
         assert (await store.put_generation_source("shadow", newer))["decision"] == "tombstoned"
         assert (await store.list_generation_sources_after("shadow", None, "source-a", 10))[0]["tombstoned"] is True
+
+    asyncio.run(exercise())
+
+
+def test_index_generation_builder_copies_source_pages_and_resumes(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-builder.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    store = SqliteIndexStore(database_url)
+
+    async def exercise():
+        await store.initialize()
+        await store.record_revision("source-a", 1, "r1", {"chunking": "window-v1"})
+        await store.record_revision("source-b", 1, "r1", {"chunking": "window-v1"})
+        await store.record_tombstone("source-c", 2)
+        await store.create_generation("generation-shadow")
+
+        first_builder = IndexGenerationBuilder(store)
+        first = await first_builder.copy_index_sources(
+            "generation-shadow", page_size=2,
+        )
+        assert first["status"] == "in_progress"
+        assert first["page_count"] == 2
+        assert first["source_count"] == 2
+
+        # A key beyond the captured upper bound belongs to the next rebuild.
+        await store.record_revision("source-z", 1, "r1", {})
+        resumed_builder = IndexGenerationBuilder(store)
+        second = await resumed_builder.copy_index_sources(
+            "generation-shadow", page_size=2,
+        )
+        assert second["status"] == "complete"
+        assert second["source_count"] == 3
+        assert second["tombstone_count"] == 1
+        assert second["upper_bound"] == "source-c"
+
+        copied = await store.list_generation_sources_after(
+            "generation-shadow", None, "source-c", 10,
+        )
+        assert [item["source_id"] for item in copied] == [
+            "source-a", "source-b", "source-c",
+        ]
+        assert copied[-1]["tombstoned"] is True
+
+        completed = await resumed_builder.copy_index_sources(
+            "generation-shadow", page_size=2,
+        )
+        assert completed["status"] == "complete"
+        assert completed["page_count"] == 0
+        await store.close()
+
+    asyncio.run(exercise())
+
+
+def test_in_memory_index_generation_builder_resumes_and_seals():
+    store = InMemoryIndexStore()
+
+    async def exercise():
+        for source_id in ("a", "b", "c"):
+            await store.record_revision(source_id, 1, "r1", {})
+        await store.create_generation("shadow")
+        builder = IndexGenerationBuilder(store)
+        first = await builder.copy_index_sources("shadow", page_size=2)
+        assert first["status"] == "in_progress"
+        second = await builder.copy_index_sources("shadow", page_size=2)
+        assert second["status"] == "complete"
+        assert second["source_count"] == 3
+        status = await store.generation_status()
+        shadow = next(item for item in status["generations"] if item["generation_id"] == "shadow")
+        assert shadow["checkpoints"]["index"]["sealed"] is True
 
     asyncio.run(exercise())
