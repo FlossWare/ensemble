@@ -63,6 +63,9 @@ def test_control_panel_is_served_by_the_api():
         assert "/api/v1/ingest/sessions" in script.text
         assert "/api/v1/ingest/urls/crawl-preview" in script.text
         assert "/api/v1/execution-traces" in script.text
+        assert "renderExecutionTrace" in script.text
+        assert "Execution stages (" in script.text
+        assert "duration_ms" in script.text
 
 
 def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch):

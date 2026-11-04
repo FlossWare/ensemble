@@ -869,6 +869,70 @@ document.getElementById("context-form").addEventListener("submit",async event=>{
 
 const traceList=document.getElementById("trace-list");
 const traceDetail=document.getElementById("trace-detail");
+function renderExecutionTrace(trace){
+ traceDetail.replaceChildren();
+ const summary=document.createElement("div");
+ summary.className="execution-trace-summary";
+ const heading=document.createElement("h4");
+ heading.textContent=[trace.operation,trace.status].filter(Boolean).join(" · ");
+ summary.append(heading);
+ const metadata=document.createElement("p");
+ metadata.textContent=[
+  trace.trace_id,
+  trace.request_id?"request "+trace.request_id:null,
+  trace.duration_ms==null?null:Number(trace.duration_ms).toFixed(3)+" ms",
+  trace.started_at,
+ ].filter(Boolean).join(" · ");
+ summary.append(metadata);
+ traceDetail.append(summary);
+
+ const attributes=trace.attributes&&typeof trace.attributes==="object"?trace.attributes:{};
+ if(Object.keys(attributes).length){
+  const section=document.createElement("section");
+  const label=document.createElement("h4");
+  label.textContent="Trace attributes";
+  const values=document.createElement("pre");
+  values.textContent=JSON.stringify(attributes,null,2);
+  section.append(label,values);
+  traceDetail.append(section);
+ }
+
+ const stages=Array.isArray(trace.stages)?trace.stages:[];
+ const stageHeading=document.createElement("h4");
+ stageHeading.textContent="Execution stages ("+stages.length+")";
+ traceDetail.append(stageHeading);
+ if(!stages.length){
+  const empty=document.createElement("p");
+  empty.textContent="No stage events recorded.";
+  traceDetail.append(empty);
+  return;
+ }
+ const list=document.createElement("ol");
+ list.className="execution-trace-stages";
+ for(const stage of stages){
+  const item=document.createElement("li");
+  const row=document.createElement("div");
+  row.className="execution-trace-stage-heading";
+  const name=document.createElement("strong");
+  name.textContent=stage.name||"unnamed stage";
+  const status=document.createElement("span");
+  status.className="execution-trace-stage-status";
+  status.textContent=stage.status||"unknown";
+  const duration=document.createElement("span");
+  duration.className="execution-trace-stage-duration";
+  duration.textContent=stage.duration_ms==null?"duration unavailable":Number(stage.duration_ms).toFixed(3)+" ms";
+  row.append(name,status,duration);
+  item.append(row);
+  const details=Object.fromEntries(Object.entries(stage).filter(([key])=>!["name","status","duration_ms"].includes(key)));
+  if(Object.keys(details).length){
+   const values=document.createElement("pre");
+   values.textContent=JSON.stringify(details,null,2);
+   item.append(values);
+  }
+  list.append(item);
+ }
+ traceDetail.append(list);
+}
 async function refreshExecutionTraces(){
  traceList.textContent="Loading persisted execution traces…";
  try{
@@ -884,7 +948,7 @@ async function refreshExecutionTraces(){
     traceDetail.textContent="Loading trace…";
     try{
      const detail=await controlJson("/api/v1/execution-traces/"+encodeURIComponent(trace.trace_id));
-     traceDetail.textContent=JSON.stringify(detail.trace,null,2);
+     renderExecutionTrace(detail.trace);
     }catch(error){traceDetail.textContent="Trace inspection failed: "+error.message;}
    });
    traceList.append(button);
