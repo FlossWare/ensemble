@@ -101,7 +101,7 @@ def test_crawl_job_api_validates_bounds_before_persisting(monkeypatch):
 
 
 def test_crawl_job_ingestion_is_checkpointed_per_source_and_retrievable(monkeypatch):
-    async def fake_crawl(uri, max_pages=10, max_depth=1):
+    async def fake_crawl(uri, max_pages=10, max_depth=1, trace=None):
         if callable(trace):
             await trace({"name": "fake_page_fetch", "status": "completed", "duration_ms": 0.1, "page": 1})
         return {
