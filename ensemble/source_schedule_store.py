@@ -236,12 +236,11 @@ class InMemorySourceScheduleStore:
             key=lambda item: item["next_run_at"],
         )[:limit]
         for item in due:
-            existing = await self.crawl_store.list(limit=200)
-            if any(
-                job.get("schedule_id") == item["schedule_id"]
-                and job.get("status") in {"pending", "running"}
-                for job in existing
-            ):
+            previous = (
+                await self.crawl_store.get(item["last_job_id"])
+                if item.get("last_job_id") else None
+            )
+            if previous and previous.get("status") in {"pending", "running"}:
                 # Leave next_run_at due so dispatch resumes after the active
                 # scheduled crawl finishes.
                 continue
