@@ -139,3 +139,25 @@ def test_crawl_job_readiness_is_part_of_service_readiness():
         response = client.get("/ready")
     assert response.status_code == 200
     assert "crawl_jobs" in response.json()["capabilities"]
+
+
+def test_restart_recovery_marks_in_progress_page_ingestion_interrupted():
+    store = InMemoryCrawlJobStore()
+    job = asyncio.run(store.enqueue("https://example.com/", 1, 0, auto_ingest=True))
+    asyncio.run(store.claim_next())
+    asyncio.run(store.complete(job["job_id"], {
+        "pages": [{"final_uri": "https://example.com/", "text": "page"}],
+    }))
+    asyncio.run(store.update_ingestion(job["job_id"], {
+        "status": "running",
+        "pages": [{
+            "source_id": "https://example.com/", "revision": 1,
+            "status": "running", "content_sha256": "a" * 64,
+        }],
+    }))
+
+    recovered = asyncio.run(store.recover_interrupted())
+    state = asyncio.run(store.get(job["job_id"]))["ingestion"]
+    assert recovered == 1
+    assert state["status"] == "partial"
+    assert state["pages"][0]["status"] == "interrupted"

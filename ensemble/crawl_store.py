@@ -181,7 +181,27 @@ class SqliteCrawlJobStore:
                 last_error="Process restarted before the crawl completed; retry this job to resume.",
                 updated_at=now,
             ))
-        return int(changed.rowcount or 0)
+            recovered = int(changed.rowcount or 0)
+            rows = (await connection.execute(select(crawl_jobs).where(
+                crawl_jobs.c.status == "completed",
+                crawl_jobs.c.ingestion.is_not(None),
+            ))).mappings().all()
+            for row in rows:
+                ingestion = row["ingestion"]
+                if not isinstance(ingestion, dict) or ingestion.get("status") != "running":
+                    continue
+                for page in ingestion.get("pages", []):
+                    if isinstance(page, dict) and page.get("status") == "running":
+                        page.update(
+                            status="interrupted",
+                            last_error="Process restarted before this page completed; resubmit ingestion to retry.",
+                        )
+                ingestion["status"] = "partial"
+                await connection.execute(update(crawl_jobs).where(
+                    crawl_jobs.c.job_id == row["job_id"],
+                ).values(ingestion=ingestion, updated_at=now))
+                recovered += 1
+        return recovered
 
 
 class InMemoryCrawlJobStore:
@@ -247,8 +267,20 @@ class InMemoryCrawlJobStore:
 
     async def recover_interrupted(self) -> int:
         recovered = 0
+        now = datetime.now(timezone.utc).isoformat()
         for row in self._jobs.values():
             if row["status"] == "running":
-                row.update(status="interrupted", last_error="Process restarted before the crawl completed; retry this job to resume.", updated_at=datetime.now(timezone.utc).isoformat())
+                row.update(status="interrupted", last_error="Process restarted before the crawl completed; retry this job to resume.", updated_at=now)
+                recovered += 1
+            ingestion = row.get("ingestion")
+            if row["status"] == "completed" and isinstance(ingestion, dict) and ingestion.get("status") == "running":
+                for page in ingestion.get("pages", []):
+                    if isinstance(page, dict) and page.get("status") == "running":
+                        page.update(
+                            status="interrupted",
+                            last_error="Process restarted before this page completed; resubmit ingestion to retry.",
+                        )
+                ingestion["status"] = "partial"
+                row.update(ingestion=ingestion, updated_at=now)
                 recovered += 1
         return recovered
