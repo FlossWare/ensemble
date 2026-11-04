@@ -8,6 +8,7 @@ import secrets
 import random
 import os
 import math
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
@@ -1874,6 +1875,7 @@ def create_app(
             if not math.isfinite(graph_timeout):
                 graph_timeout = 2.0
             graph_timeout = min(30.0, max(0.05, graph_timeout))
+            graph_started = time.perf_counter()
             try:
                 result["results"], graph_expansion = await asyncio.wait_for(
                     expand_graph_results(
@@ -1886,6 +1888,9 @@ def create_app(
                     "matched_entities": [], "candidate_sources": 0,
                     "degraded": True, "timed_out": True,
                 }
+            graph_expansion["duration_ms"] = round(
+                (time.perf_counter() - graph_started) * 1000, 3
+            )
             result["graph_expansion"] = graph_expansion
             if graph_expansion.get("timed_out"):
                 result["degraded"].append("graph_timeout")
