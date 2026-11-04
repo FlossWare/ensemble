@@ -329,9 +329,23 @@ def create_app(
         return schema
 
     app.openapi = openapi_with_partition_auth
-    documents = DocumentService(document_store, Chunker(), embeddings, active_vector_store)
-    search = SearchService(document_store, embeddings, active_reranker, active_vector_store)
+    documents = DocumentService(
+        document_store, Chunker(), embeddings, active_vector_store, active_index_store,
+    )
+    search = SearchService(
+        document_store, embeddings, active_reranker, active_vector_store, active_index_store,
+    )
     ranking_provider = configured_ranking_provider(active_reranker)
+
+    async def active_generation_id() -> str | None:
+        status = await active_index_store.generation_status()
+        generation_id = status.get("active_generation_id")
+        active = next((item for item in status.get("generations", [])
+                       if item.get("generation_id") == generation_id), None)
+        verification = (active or {}).get("verification") or {}
+        if active and active.get("state") == "active" and verification.get("acknowledged_writes_verified") is True:
+            return generation_id
+        return None
 
     async def index_document_entities(
         source_id: str, revision: int, content: str, *,
@@ -768,6 +782,13 @@ def create_app(
                 "locator": provenance["locator"],
                 "profiles": profiles,
             })
+            active_generation = await active_generation_id()
+            if active_generation is not None:
+                knowledge_record = await active_knowledge_store.get(source_id)
+                if knowledge_record is None:
+                    raise RuntimeError("Knowledge record was not readable after publication")
+                await active_knowledge_store.upsert_generation(active_generation, knowledge_record)
+            await active_index_store.acknowledge_generation_change(source_id, sequence, False)
         except ChunkingError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
@@ -800,6 +821,9 @@ def create_app(
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
         await active_knowledge_store.tombstone(source_id)
+        active_generation = await active_generation_id()
+        if active_generation is not None:
+            await active_knowledge_store.tombstone_generation_source(active_generation, source_id)
         return {"ok": True, "source_id": source_id}
 
     @app.post("/api/v1/knowledge/records/{source_id}/tombstone", tags=["knowledge"])
