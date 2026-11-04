@@ -219,7 +219,7 @@ def test_memory_generation_migration_preserves_existing_memory_rows(tmp_path):
                 "content": "preserve this content",
                 "entries": [],
                 "source": None,
-                "updated_at": "2026-11-04T00:00:00",
+                "updated_at": "2026-11-04T00:00:00+00:00",
             }
         finally:
             await memory.close()
