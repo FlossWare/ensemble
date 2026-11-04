@@ -2174,7 +2174,7 @@ def create_app(
         """Execute the Search capability's lexical/vector retrieval contract."""
         try:
             return await search.search_with_status(
-                search_request.query, search_request.limit, rerank=False
+                search_request.query, search_request.limit, rerank=search_request.rerank
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
