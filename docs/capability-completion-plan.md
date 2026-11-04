@@ -173,7 +173,7 @@ The following work is implemented in the current review branch, with CI verifica
 - Memory context assembly is exposed as a REST capability with deterministic ordering, approximate character-based token budgeting, extractive compression, and source metadata.
 - System configuration reports listener and durable-persistence status without exposing filesystem paths or database URLs.
 
-These are implemented slices, not a declaration that the platform is production-ready. In particular, transcript parsing still relies on caller-supplied byte slices; it does not yet own durable ingestion jobs or restart checkpoints.
+These are implemented slices, not a declaration that the platform is production-ready. Transcript parsing still relies on caller-supplied byte slices, while durable transcript jobs, byte checkpoints, retry state, and restart recovery are implemented. Server-side filesystem scanning remains intentionally out of scope without an explicit scoped-source contract.
 
 ## Remaining implementation sequence
 
