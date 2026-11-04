@@ -6,6 +6,7 @@ import socket
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
+import httpcore
 import httpx
 
 
@@ -68,7 +69,7 @@ class _ReadableHTML(HTMLParser):
         return " ".join(" ".join(self.title_parts).split()), text, self.links
 
 
-def _validate_public_uri(uri: str) -> str:
+def _resolve_public_uri(uri: str) -> tuple[str, str, str]:
     if not isinstance(uri, str) or not uri.strip() or len(uri) > MAX_URI_CHARS:
         raise ScrapeError("invalid_uri", "uri must be a non-empty URL of at most 2048 characters")
     parsed = urlsplit(uri.strip())
@@ -89,27 +90,67 @@ def _validate_public_uri(uri: str) -> str:
         addresses = [ipaddress.ip_address(host)]
     except ValueError:
         try:
-            answers = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
-            addresses = [ipaddress.ip_address(item[4][0]) for item in answers]
-        except socket.gaierror as exc:
+            host = host.encode("idna").decode("ascii")
+            target_port = port or (443 if parsed.scheme == "https" else 80)
+            answers = socket.getaddrinfo(host, target_port, type=socket.SOCK_STREAM)
+            addresses = list(dict.fromkeys(ipaddress.ip_address(item[4][0]) for item in answers))
+        except (OSError, UnicodeError) as exc:
             raise ScrapeError("dns_failure", "URI hostname could not be resolved", 400) from exc
     if not addresses or any(not address.is_global for address in addresses):
         raise ScrapeError("blocked_destination", "private, loopback, link-local, and reserved destinations are blocked", 403)
     normalized = urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", parsed.query, ""))
-    return normalized
+    # The selected public address is pinned into the TCP backend. TLS and HTTP
+    # still use the original hostname for certificate validation, SNI and Host.
+    return normalized, host, str(addresses[0])
+
+
+def _validate_public_uri(uri: str) -> str:
+    return _resolve_public_uri(uri)[0]
+
+
+class _PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
+    """Connect to a validated IP while retaining the original hostname for TLS."""
+
+    def __init__(self, hostname: str, address: str):
+        self.hostname = hostname.rstrip(".").lower()
+        self.address = address
+        self.backend = httpcore.AnyIOBackend()
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        if host.rstrip(".").lower() != self.hostname:
+            raise OSError("pinned transport received an unexpected hostname")
+        return await self.backend.connect_tcp(
+            self.address, port, timeout, local_address, socket_options,
+        )
+
+    async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        return await self.backend.connect_unix_socket(path, timeout, socket_options)
+
+    async def sleep(self, seconds):
+        return await self.backend.sleep(seconds)
+
+
+def _pinned_transport(hostname: str, address: str) -> httpx.AsyncHTTPTransport:
+    transport = httpx.AsyncHTTPTransport(trust_env=False)
+    pool = transport._pool
+    if not hasattr(pool, "_network_backend"):
+        raise RuntimeError("installed HTTP transport does not support pinned DNS")
+    pool._network_backend = _PinnedNetworkBackend(hostname, address)
+    return transport
 
 
 async def preview_uri(uri: str) -> dict:
-    current = _validate_public_uri(uri)
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(TIMEOUT_SECONDS),
-        follow_redirects=False,
-        trust_env=False,
-        headers={"User-Agent": USER_AGENT, "Accept": "text/html, text/plain;q=0.9"},
-    ) as client:
-        response = None
-        for _ in range(MAX_REDIRECTS + 1):
-            current = _validate_public_uri(current)
+    current = uri
+    response = None
+    for _ in range(MAX_REDIRECTS + 1):
+        current, hostname, address = _resolve_public_uri(current)
+        transport = _pinned_transport(hostname, address)
+        async with httpx.AsyncClient(
+            transport=transport,
+            timeout=httpx.Timeout(TIMEOUT_SECONDS),
+            follow_redirects=False,
+            headers={"User-Agent": USER_AGENT, "Accept": "text/html, text/plain;q=0.9"},
+        ) as client:
             try:
                 async with client.stream("GET", current) as streamed:
                     if streamed.status_code in {301, 302, 303, 307, 308}:
@@ -134,8 +175,10 @@ async def preview_uri(uri: str) -> dict:
                 raise ScrapeError("upstream_timeout", "source did not respond within 15 seconds", 504) from exc
             except httpx.HTTPError as exc:
                 raise ScrapeError("upstream_failure", "could not retrieve source URI", 502) from exc
-        if response is None:
-            raise ScrapeError("too_many_redirects", "source exceeded the redirect limit", 400)
+        if response is not None:
+            break
+    if response is None:
+        raise ScrapeError("too_many_redirects", "source exceeded the redirect limit", 400)
 
     raw, content_type, headers = response
     try:
