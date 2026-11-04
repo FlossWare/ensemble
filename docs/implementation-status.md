@@ -89,6 +89,18 @@ SQLite is the only persistence implementation in this repository. FTS5 provides 
 - Activation is retry-safe when the original response is lost; retrieval checks authoritative Index revision and tombstone state.
 - Merge CI passed **204 tests, 1 skipped**.
 
+## Source lifecycle integration branch
+
+Branch `integration/source-lifecycle-mainline-2026-11-04` is in progress and not yet merged.
+
+- Base and generation search both validate every candidate against current Index revision, tombstone, and permanent-purge state.
+- Graph and Knowledge retrieval also exclude permanently purged sources.
+- Index tombstones enqueue durable reclamation jobs; partial immediate cleanup does not prevent queueing.
+- The reclamation worker removes active materialized data and marks the Index source permanently purged only after all stores report completion. Purge marking is retry-safe.
+- `GET /api/v1/index/reclamation` reports queue counts; `POST /api/v1/index/reclamation/run` triggers a bounded pass.
+- Document publication and source tombstones are required to follow Index lifecycle state. Untracked standalone vector mutations are rejected while a generation is building.
+- Latest verified integration CI: **205 passed, 1 skipped**.
+
 ## Partition isolation implementation
 
 Implemented in the current partition-isolation branch:

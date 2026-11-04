@@ -162,6 +162,19 @@ A capability is complete when it has a usable contract, a working implementation
 
 Existing tests should continue to be run when practical. New test development is deliberately deprioritized during this functionality phase, but regressions and known failures must not be concealed.
 
+## Current source-lifecycle integration work
+
+Branch: `integration/source-lifecycle-mainline-2026-11-04` (not yet merged).
+
+- Search results in both base and generation modes are filtered against authoritative Index revision, tombstone, and permanent-purge state.
+- Graph expansion and Knowledge retrieval reject permanently purged sources as well as stale or tombstoned revisions.
+- Index tombstones enqueue durable reclamation jobs even when immediate downstream cleanup is partial.
+- The reclamation worker physically removes active materialized data, then marks the Index source permanently purged. Purge marking is idempotent.
+- Control endpoints expose reclamation queue status and an operator-triggered bounded pass.
+- Direct document writes require a matching current Index revision; direct document/Knowledge/vector source tombstones require the Index tombstone lifecycle.
+- Standalone vector upsert, metadata, and prune operations are paused during generation rebuilds. Normal indexed ingestion remains available and is reconciled through the Index change journal.
+- Latest verified integration CI: **205 passed, 1 skipped**.
+
 ## Current main state
 
 The following work is implemented in the current review branch, with CI verification still required for the latest commit:
