@@ -279,7 +279,7 @@ class SqlDocumentStore:
         if url.database not in (None, "", ":memory:"):
             Path(url.database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
 
-        self.engine: AsyncEngine = create_async_engine(
+        self.engine: AsyncEngine = PartitionedAsyncEngine(
             self.database_url,
             pool_pre_ping=True,
         )
