@@ -8,6 +8,7 @@ import secrets
 import random
 import os
 import math
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
@@ -32,7 +33,7 @@ from .tokenization import PROFILES as TOKENIZATION_PROFILES, TokenizationError, 
 from .extraction import extract, normalize_entity
 from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
-from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_reranker, validate_rerank_request
+from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_ranking_provider, configured_reranker, validate_rerank_request
 from .scraping import ScrapeError, preview_uri
 from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
 from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpointStore, InMemoryTranscriptCheckpointStore
@@ -275,6 +276,7 @@ def create_app(
     app.openapi = openapi_with_partition_auth
     documents = DocumentService(document_store, Chunker(), embeddings, active_vector_store)
     search = SearchService(document_store, embeddings, active_reranker, active_vector_store)
+    ranking_provider = configured_ranking_provider(active_reranker)
 
     async def index_document_entities(
         source_id: str, revision: int, content: str, *,
@@ -1170,13 +1172,17 @@ def create_app(
 
     @app.get("/api/v1/reranking/health", tags=["reranking"])
     async def reranking_health():
-        status = active_reranker.status()
-        return JSONResponse(status_code=200 if active_reranker.available else 503, content=status)
+        status = (
+            ranking_provider.status() if ranking_provider is not None
+            else {"ok": False, "ready": False, "provider": "disabled",
+                  "error": "ranking provider is not configured"}
+        )
+        available = ranking_provider is not None and ranking_provider.available
+        return JSONResponse(status_code=200 if available else 503, content=status)
 
     @app.get("/api/v1/reranking/ready", tags=["reranking"])
     async def reranking_ready():
-        status = active_reranker.status()
-        return JSONResponse(status_code=200 if active_reranker.available else 503, content=status)
+        return await reranking_health()
 
     @app.post("/api/v1/reranking/rerank", tags=["reranking"])
     async def rerank_candidates(payload: dict[str, Any]):
@@ -1185,11 +1191,15 @@ def create_app(
             validate_rerank_request(query, documents)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if ranking_provider is None or not ranking_provider.available:
+            raise HTTPException(status_code=503, detail="ranking provider is not configured")
         try:
-            scores = await asyncio.to_thread(active_reranker.score, query, documents)
-        except RerankingUnavailable as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return {"ok": True, "model": RERANK_MODEL_ID, "scores": scores}
+            scores = await ranking_provider.score(query, documents)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="ranking provider failed") from exc
+        status = ranking_provider.status()
+        return {"ok": True, "provider": status.get("provider"),
+                "model": status.get("model"), "scores": scores}
 
     @app.get("/api/v1/ranking/health", tags=["ranking"])
     async def ranking_health():
@@ -2146,10 +2156,17 @@ def create_app(
             await document_store.check_ready()
         except Exception as exc:
             raise HTTPException(status_code=503, detail="hybrid retrieval persistence unavailable") from exc
+        embedding_available = bool(embeddings.available)
         return {
             "ok": True, "ready": True,
-            "embedding_available": embeddings.available,
-            "degraded_mode": "lexical fallback",
+            "status": "ok" if embedding_available else "partial",
+            "channels": {
+                "lexical": {"status": "ready", "available": True},
+                "vector": {"status": "ready" if embedding_available else "unavailable",
+                           "available": embedding_available},
+            },
+            "embedding_available": embedding_available,
+            "degraded_mode": None if embedding_available else "lexical fallback",
         }
 
     @app.post("/api/v1/search/retrieve", tags=["search"])
@@ -2157,7 +2174,7 @@ def create_app(
         """Execute the Search capability's lexical/vector retrieval contract."""
         try:
             return await search.search_with_status(
-                search_request.query, search_request.limit, rerank=False
+                search_request.query, search_request.limit, rerank=search_request.rerank
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2208,12 +2225,34 @@ def create_app(
 
             result["intent"] = intent
             result["entities"] = entities
-            result["results"], graph_expansion = await expand_graph_results(
-                search_request.query, entities, result["results"],
-                search_request.limit, internal, request,
+            try:
+                graph_timeout = float(os.getenv("ENSEMBLE_RETRIEVAL_GRAPH_TIMEOUT", "2"))
+            except (TypeError, ValueError):
+                graph_timeout = 2.0
+            if not math.isfinite(graph_timeout):
+                graph_timeout = 2.0
+            graph_timeout = min(30.0, max(0.05, graph_timeout))
+            graph_started = time.perf_counter()
+            try:
+                result["results"], graph_expansion = await asyncio.wait_for(
+                    expand_graph_results(
+                        search_request.query, entities, result["results"],
+                        search_request.limit, internal, request,
+                    ),
+                    timeout=graph_timeout,
+                )
+            except TimeoutError:
+                graph_expansion = {
+                    "matched_entities": [], "candidate_sources": 0,
+                    "degraded": True, "timed_out": True,
+                }
+            graph_expansion["duration_ms"] = round(
+                (time.perf_counter() - graph_started) * 1000, 3
             )
             result["graph_expansion"] = graph_expansion
-            if graph_expansion.get("degraded"):
+            if graph_expansion.get("timed_out"):
+                result["degraded"].append("graph_timeout")
+            elif graph_expansion.get("degraded"):
                 result["degraded"].append("graph")
             elif graph_expansion.get("candidate_sources"):
                 result["retrieval"] = "hybrid"
@@ -2287,6 +2326,13 @@ def create_app(
             except Exception:
                 result["degraded"].append("graph")
             result["related_sessions"] = related
+            if graph_expansion.get("candidate_sources"):
+                result["ok"] = True
+                if result.get("status") == "unavailable":
+                    result["status"] = "partial"
+            if result.get("degraded") and result.get("status") == "ok":
+                result["status"] = "partial"
+            result["degraded"] = sorted(set(result.get("degraded", [])))
 
             # Successful searches are recorded for audit/learning through the
             # Memory resource contract. Ledger failure never fails retrieval.

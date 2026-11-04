@@ -547,6 +547,8 @@ def test_knowledge_publication_enters_hybrid_search_and_graph(tmp_path):
         hit = next(item for item in result.json()["results"] if item["source_id"] == "rfc-entity")
         assert hit["graph_score"] > 0
         assert result.json()["graph_expansion"]["candidate_sources"] == 1
+        assert result.json()["graph_expansion"]["duration_ms"] >= 0
+        assert result.json()["channels"]["lexical"]["duration_ms"] >= 0
 
         tombstone = client.post(
             "/api/v1/knowledge/records/rfc-entity/tombstone",
