@@ -262,3 +262,36 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
         })
         assert after_delete.status_code == 200
         assert all(hit["source_id"] != "generation-source-1" for hit in after_delete.json()["results"])
+
+
+
+def test_base_retrieval_fails_closed_when_index_tombstone_precedes_cleanup(tmp_path):
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/ingest/documents", json={
+            "source_id": "base-freshness-source",
+            "revision": 1,
+            "title": "Base freshness",
+            "content": "index authority blocks stale base retrieval",
+            "chunk_profile": "window-v1",
+            "media_type": "text/plain",
+            "metadata": {"origin": "test", "locator": "test://base-freshness-source"},
+        })
+        assert ingested.status_code == 201
+
+        before = client.post("/api/v1/search/retrieve", json={
+            "query": "stale base retrieval", "limit": 10, "rerank": False,
+        })
+        assert any(hit["source_id"] == "base-freshness-source" for hit in before.json()["results"])
+
+        # Simulate the Index commit succeeding while document cleanup is delayed.
+        with sqlite3.connect(tmp_path / "generation-api.db") as connection:
+            connection.execute(
+                "UPDATE ensemble_index_sources SET tombstoned = 1 WHERE source_id = ?",
+                ("base-freshness-source",),
+            )
+
+        after = client.post("/api/v1/search/retrieve", json={
+            "query": "stale base retrieval", "limit": 10, "rerank": False,
+        })
+        assert after.status_code == 200
+        assert all(hit["source_id"] != "base-freshness-source" for hit in after.json()["results"])
