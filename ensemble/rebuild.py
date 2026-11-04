@@ -7,14 +7,19 @@ process restart without holding a long-lived transaction.
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 
 class IndexGenerationBuilder:
-    def __init__(self, index_store: Any, document_store: Any | None = None, vector_store: Any | None = None):
+    def __init__(
+        self, index_store: Any, document_store: Any | None = None,
+        vector_store: Any | None = None, knowledge_store: Any | None = None,
+    ):
         self.index_store = index_store
         self.document_store = document_store
         self.vector_store = vector_store
+        self.knowledge_store = knowledge_store
 
     async def copy_index_sources(
         self, generation_id: str, *, page_size: int = 500,
@@ -389,26 +394,297 @@ class IndexGenerationBuilder:
         if generation is None or generation["state"] != "building":
             raise RuntimeError("generation is not in building state")
         checkpoints = generation.get("checkpoints") or {}
-        if (checkpoints.get("index") or {}).get("sealed") is not True:
-            raise RuntimeError("Index source copy must be sealed before final write fencing")
-        checkpoint = checkpoints.get("index_reconciliation") or {}
-        value = checkpoint.get("value") or {}
-        cursor = int(value.get("cursor", 0))
+        base_capabilities = ("index", "documents", "vectors", "memory", "knowledge")
+        reconciliation_capabilities = (
+            "index_reconciliation", "documents_reconciliation", "vectors_reconciliation",
+            "memory_reconciliation", "knowledge_reconciliation",
+        )
+        for capability in base_capabilities:
+            if (checkpoints.get(capability) or {}).get("sealed") is not True:
+                raise RuntimeError(f"{capability} source copy must be sealed before final write fencing")
         high_watermark = await self.index_store.generation_change_high_watermark(generation_id)
-        if cursor != high_watermark:
-            raise RuntimeError("generation change journal advanced; reconcile before fencing")
+        reconciliation_values = {}
+        for capability in reconciliation_capabilities:
+            checkpoint = checkpoints.get(capability) or {}
+            value = checkpoint.get("value") or {}
+            cursor = int(value.get("cursor", 0))
+            if cursor != high_watermark:
+                raise RuntimeError(f"{capability} is not caught up to the generation change journal")
+            reconciliation_values[capability] = value
         fence = await self.index_store.acquire_generation_write_fence(
             generation_id, through_change_id=high_watermark,
         )
         try:
-            await self.index_store.record_generation_checkpoint(
-                generation_id, "index_reconciliation",
-                {"cursor": high_watermark, "change_count": int(value.get("change_count", 0)),
-                 "observed_high_watermark": high_watermark},
-                sealed=True,
-            )
+            for capability, value in reconciliation_values.items():
+                await self.index_store.record_generation_checkpoint(
+                    generation_id, capability,
+                    {**value, "cursor": high_watermark, "observed_high_watermark": high_watermark},
+                    sealed=True,
+                )
         except Exception:
             await self.index_store.release_generation_write_fence(generation_id)
             raise
         return fence
+
+    async def reconcile_document_changes_page(
+        self, generation_id: str, *, page_size: int = 250,
+    ) -> dict[str, Any]:
+        if self.document_store is None:
+            raise RuntimeError("document store is required for document reconciliation")
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
+            raise ValueError("page_size must be between 1 and 10000")
+        status = await self.index_store.generation_status()
+        generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        checkpoints = generation.get("checkpoints") or {}
+        if (checkpoints.get("documents") or {}).get("sealed") is not True:
+            raise RuntimeError("document source copy must be sealed before document reconciliation")
+        index_cursor = int(((checkpoints.get("index_reconciliation") or {}).get("value") or {}).get("cursor", 0))
+        previous = checkpoints.get("documents_reconciliation") or {}
+        if previous.get("sealed") is True:
+            value = previous.get("value") or {}
+            return {"generation_id": generation_id, "status": "complete",
+                    "page_count": 0, "change_count": value.get("change_count", 0),
+                    "cursor": value.get("cursor", 0)}
+        value = previous.get("value") or {}
+        cursor = int(value.get("cursor", 0))
+        change_count = int(value.get("change_count", 0))
+        page = await self.index_store.list_generation_changes_after(generation_id, cursor, page_size)
+        pending_change = next((i for i, change in enumerate(page) if not change.get("acknowledged", False)), None)
+        ready_page = page if pending_change is None else page[:pending_change]
+        active_chunks = None
+        for change in ready_page:
+            if change["change_id"] > index_cursor:
+                raise RuntimeError("Index journal reconciliation must advance before Documents")
+            source = await self.index_store.get_generation_source(generation_id, change["source_id"])
+            if source is None:
+                raise RuntimeError("reconciled Index source is missing from the target generation")
+            if source["tombstoned"]:
+                await self.document_store.tombstone_generation_source(generation_id, change["source_id"])
+                continue
+            if active_chunks is None:
+                active_chunks = await self.document_store.all_chunks()
+            source_chunks = [item for item in active_chunks if item.document.source_id == change["source_id"]]
+            if not source_chunks:
+                raise RuntimeError("acknowledged source has no active document chunks")
+            revisions = {item.document.revision for item in source_chunks}
+            if revisions != {source["high_sequence"]}:
+                raise RuntimeError("active document revision does not match the reconciled Index source")
+            grouped: dict[str, tuple[Any, list[Any]]] = {}
+            for item in source_chunks:
+                key = str(item.document.id)
+                if key not in grouped:
+                    grouped[key] = (item.document, [])
+                grouped[key][1].append(item.chunk)
+            for document, chunks in grouped.values():
+                await self.document_store.upsert_generation(
+                    generation_id, copy.deepcopy(document), copy.deepcopy(chunks),
+                )
+        next_cursor = ready_page[-1]["change_id"] if ready_page else cursor
+        change_count += len(ready_page)
+        high_watermark = await self.index_store.generation_change_high_watermark(generation_id)
+        waiting = pending_change is not None
+        caught_up = not waiting and next_cursor == high_watermark and len(page) < page_size
+        checkpoint = {"cursor": next_cursor, "change_count": change_count,
+                      "observed_high_watermark": high_watermark}
+        await self.index_store.record_generation_checkpoint(
+            generation_id, "documents_reconciliation", checkpoint, sealed=False,
+        )
+        return {"generation_id": generation_id,
+                "status": "waiting_for_ack" if waiting else ("caught_up" if caught_up else "in_progress"),
+                "page_count": len(ready_page),
+                "pending_change_id": page[pending_change]["change_id"] if waiting else None,
+                "change_count": change_count, "cursor": next_cursor,
+                "high_watermark": high_watermark}
+
+    async def reconcile_vector_changes_page(
+        self, generation_id: str, *, page_size: int = 250,
+    ) -> dict[str, Any]:
+        if self.vector_store is None:
+            raise RuntimeError("vector store is required for vector reconciliation")
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
+            raise ValueError("page_size must be between 1 and 10000")
+        status = await self.index_store.generation_status()
+        generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        checkpoints = generation.get("checkpoints") or {}
+        if (checkpoints.get("vectors") or {}).get("sealed") is not True:
+            raise RuntimeError("vector source copy must be sealed before vector reconciliation")
+        index_cursor = int(((checkpoints.get("index_reconciliation") or {}).get("value") or {}).get("cursor", 0))
+        previous = checkpoints.get("vectors_reconciliation") or {}
+        if previous.get("sealed") is True:
+            value = previous.get("value") or {}
+            return {"generation_id": generation_id, "status": "complete",
+                    "page_count": 0, "change_count": value.get("change_count", 0),
+                    "cursor": value.get("cursor", 0)}
+        value = previous.get("value") or {}
+        cursor = int(value.get("cursor", 0))
+        change_count = int(value.get("change_count", 0))
+        page = await self.index_store.list_generation_changes_after(generation_id, cursor, page_size)
+        pending_change = next((i for i, change in enumerate(page) if not change.get("acknowledged", False)), None)
+        ready_page = page if pending_change is None else page[:pending_change]
+        collections = await self.vector_store.list_collections()
+        for change in ready_page:
+            if change["change_id"] > index_cursor:
+                raise RuntimeError("Index journal reconciliation must advance before Vectors")
+            source = await self.index_store.get_generation_source(generation_id, change["source_id"])
+            if source is None:
+                raise RuntimeError("reconciled Index source is missing from the target generation")
+            if source["tombstoned"]:
+                await self.vector_store.tombstone_generation_source(generation_id, change["source_id"])
+                continue
+            for collection in collections:
+                name = collection["name"]
+                records = await self.vector_store.list_records_for_source(name, change["source_id"])
+                await self.vector_store.delete_generation_source(generation_id, change["source_id"], name=name)
+                if records:
+                    await self.vector_store.upsert_generation(
+                        generation_id, name, collection["model"], collection["dimensions"], records,
+                    )
+        next_cursor = ready_page[-1]["change_id"] if ready_page else cursor
+        change_count += len(ready_page)
+        high_watermark = await self.index_store.generation_change_high_watermark(generation_id)
+        waiting = pending_change is not None
+        caught_up = not waiting and next_cursor == high_watermark and len(page) < page_size
+        checkpoint = {"cursor": next_cursor, "change_count": change_count,
+                      "observed_high_watermark": high_watermark}
+        await self.index_store.record_generation_checkpoint(
+            generation_id, "vectors_reconciliation", checkpoint, sealed=False,
+        )
+        return {"generation_id": generation_id,
+                "status": "waiting_for_ack" if waiting else ("caught_up" if caught_up else "in_progress"),
+                "page_count": len(ready_page),
+                "pending_change_id": page[pending_change]["change_id"] if waiting else None,
+                "change_count": change_count, "cursor": next_cursor,
+                "high_watermark": high_watermark}
+
+
+
+    async def copy_knowledge_page(
+        self, generation_id: str, *, page_size: int = 500,
+    ) -> dict[str, Any]:
+        if self.knowledge_store is None:
+            raise RuntimeError("Knowledge store is required for the generation pass")
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
+            raise ValueError("page_size must be between 1 and 10000")
+        status = await self.index_store.generation_status()
+        generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        checkpoints = generation.get("checkpoints") or {}
+        index_checkpoint = checkpoints.get("index") or {}
+        if index_checkpoint.get("sealed") is not True:
+            raise RuntimeError("Index source copy must be sealed before Knowledge copy")
+        previous = checkpoints.get("knowledge") or {}
+        if previous.get("sealed") is True:
+            value = previous.get("value") or {}
+            return {"generation_id": generation_id, "status": "complete",
+                    "page_count": 0, "source_count": value.get("source_count", 0),
+                    "record_count": value.get("record_count", 0),
+                    "tombstone_count": value.get("tombstone_count", 0),
+                    "cursor": value.get("cursor")}
+        prior_value = previous.get("value") or {}
+        index_value = index_checkpoint.get("value") or {}
+        upper_bound = index_value.get("source_upper_bound")
+        cursor = prior_value.get("cursor")
+        source_count = int(prior_value.get("source_count", 0))
+        record_count = int(prior_value.get("record_count", 0))
+        tombstone_count = int(prior_value.get("tombstone_count", 0))
+        page = await self.index_store.list_generation_sources_after(
+            generation_id, cursor, upper_bound, page_size,
+        )
+        for source in page:
+            source_id = source["source_id"]
+            if source["tombstoned"]:
+                await self.knowledge_store.tombstone_generation_source(generation_id, source_id)
+                tombstone_count += 1
+                continue
+            record = await self.knowledge_store.get(source_id)
+            if record is None:
+                continue
+            if record.get("tombstoned"):
+                await self.knowledge_store.tombstone_generation_source(generation_id, source_id)
+                tombstone_count += 1
+                continue
+            if record["revision_sequence"] != source["high_sequence"]:
+                raise RuntimeError("active Knowledge revision does not match the Index source")
+            await self.knowledge_store.upsert_generation(generation_id, record)
+            record_count += 1
+        next_cursor = page[-1]["source_id"] if page else cursor
+        source_count += len(page)
+        complete = upper_bound is None or next_cursor == upper_bound or len(page) < page_size
+        checkpoint = {"cursor": next_cursor, "source_upper_bound": upper_bound,
+                      "source_count": source_count, "record_count": record_count,
+                      "tombstone_count": tombstone_count}
+        await self.index_store.record_generation_checkpoint(
+            generation_id, "knowledge", checkpoint, sealed=complete,
+        )
+        return {"generation_id": generation_id, "status": "complete" if complete else "in_progress",
+                "page_count": len(page), "source_count": source_count,
+                "record_count": record_count, "tombstone_count": tombstone_count,
+                "cursor": next_cursor, "upper_bound": upper_bound}
+
+    async def reconcile_knowledge_changes_page(
+        self, generation_id: str, *, page_size: int = 250,
+    ) -> dict[str, Any]:
+        if self.knowledge_store is None:
+            raise RuntimeError("Knowledge store is required for reconciliation")
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
+            raise ValueError("page_size must be between 1 and 10000")
+        status = await self.index_store.generation_status()
+        generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
+        if generation is None or generation["state"] != "building":
+            raise RuntimeError("generation is not in building state")
+        checkpoints = generation.get("checkpoints") or {}
+        if (checkpoints.get("knowledge") or {}).get("sealed") is not True:
+            raise RuntimeError("Knowledge source copy must be sealed before reconciliation")
+        index_cursor = int(((checkpoints.get("index_reconciliation") or {}).get("value") or {}).get("cursor", 0))
+        previous = checkpoints.get("knowledge_reconciliation") or {}
+        if previous.get("sealed") is True:
+            value = previous.get("value") or {}
+            return {"generation_id": generation_id, "status": "complete",
+                    "page_count": 0, "change_count": value.get("change_count", 0),
+                    "cursor": value.get("cursor", 0)}
+        value = previous.get("value") or {}
+        cursor = int(value.get("cursor", 0))
+        change_count = int(value.get("change_count", 0))
+        page = await self.index_store.list_generation_changes_after(generation_id, cursor, page_size)
+        pending_change = next((i for i, change in enumerate(page) if not change.get("acknowledged", False)), None)
+        ready_page = page if pending_change is None else page[:pending_change]
+        for change in ready_page:
+            if change["change_id"] > index_cursor:
+                raise RuntimeError("Index journal reconciliation must advance before Knowledge")
+            source = await self.index_store.get_generation_source(generation_id, change["source_id"])
+            if source is None:
+                raise RuntimeError("reconciled Index source is missing from the target generation")
+            if source["tombstoned"]:
+                await self.knowledge_store.tombstone_generation_source(generation_id, change["source_id"])
+                continue
+            record = await self.knowledge_store.get(change["source_id"])
+            if record is None:
+                continue
+            if record.get("tombstoned"):
+                await self.knowledge_store.tombstone_generation_source(generation_id, change["source_id"])
+                continue
+            if record["revision_sequence"] != source["high_sequence"]:
+                raise RuntimeError("active Knowledge revision does not match the reconciled Index source")
+            await self.knowledge_store.upsert_generation(generation_id, record)
+        next_cursor = ready_page[-1]["change_id"] if ready_page else cursor
+        change_count += len(ready_page)
+        high_watermark = await self.index_store.generation_change_high_watermark(generation_id)
+        waiting = pending_change is not None
+        caught_up = not waiting and next_cursor == high_watermark and len(page) < page_size
+        checkpoint = {"cursor": next_cursor, "change_count": change_count,
+                      "observed_high_watermark": high_watermark}
+        await self.index_store.record_generation_checkpoint(
+            generation_id, "knowledge_reconciliation", checkpoint, sealed=False,
+        )
+        return {"generation_id": generation_id,
+                "status": "waiting_for_ack" if waiting else ("caught_up" if caught_up else "in_progress"),
+                "page_count": len(ready_page),
+                "pending_change_id": page[pending_change]["change_id"] if waiting else None,
+                "change_count": change_count, "cursor": next_cursor,
+                "high_watermark": high_watermark}
 
