@@ -225,6 +225,19 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
         )
         assert vector_query.json()["results"] == []
 
+        # Simulate an Index tombstone committed while downstream generation
+        # cleanup has not yet completed. Retrieval must still fail closed.
+        with sqlite3.connect(tmp_path / "generation-api.db") as connection:
+            connection.execute(
+                "UPDATE ensemble_index_sources SET tombstoned = 1 WHERE source_id = ?",
+                ("generation-source-1",),
+            )
+        fail_closed = client.post("/api/v1/search/retrieve", json={
+            "query": "searchable content", "limit": 10, "rerank": False,
+        })
+        assert fail_closed.status_code == 200
+        assert all(hit["source_id"] != "generation-source-1" for hit in fail_closed.json()["results"])
+
         tombstone = client.post("/api/v1/index/tombstones", json={
             "source_id": "generation-source-1", "revision_sequence": 2,
         })
