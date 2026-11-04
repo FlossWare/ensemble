@@ -836,7 +836,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     generation_builder = IndexGenerationBuilder(
-        active_index_store, document_store, active_vector_store, active_knowledge_store,
+        active_index_store, document_store, active_vector_store,
+        active_knowledge_store, active_memory_store,
     )
 
     @app.post("/api/v1/index/generations", tags=["index"])
@@ -900,6 +901,15 @@ def create_app(
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @app.post("/api/v1/index/generations/{generation_id}/copy/memory", tags=["index"])
+    async def index_generation_copy_memory(generation_id: str, payload: dict[str, Any]):
+        try:
+            return {"ok": True, **await generation_builder.copy_memory_page(
+                generation_id, page_size=payload.get("page_size", 500),
+            )}
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.post("/api/v1/index/generations/{generation_id}/copy/knowledge", tags=["index"])
     async def index_generation_copy_knowledge(generation_id: str, payload: dict[str, Any]):
         try:
@@ -931,6 +941,15 @@ def create_app(
     async def index_generation_reconcile_vectors(generation_id: str, payload: dict[str, Any]):
         try:
             return {"ok": True, **await generation_builder.reconcile_vector_changes_page(
+                generation_id, page_size=payload.get("page_size", 250),
+            )}
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/v1/index/generations/{generation_id}/reconcile/memory", tags=["index"])
+    async def index_generation_reconcile_memory(generation_id: str, payload: dict[str, Any]):
+        try:
+            return {"ok": True, **await generation_builder.reconcile_memory_changes_page(
                 generation_id, page_size=payload.get("page_size", 250),
             )}
         except (ValueError, RuntimeError) as exc:
