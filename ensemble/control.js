@@ -492,7 +492,7 @@ async function controlJson(path, method="GET", payload=null){
 }
 const capabilities=[
  ["Embeddings","/api/v1/embeddings/health",null],
- ["Vector","/api/v1/vector/health",null],
+ ["Vector","/api/v1/vector/health","/api/v1/vector/ready"],
  ["Lexical","/api/v1/search/lexical/health","/api/v1/search/lexical/ready"],
  ["Hybrid","/api/v1/search/hybrid/health","/api/v1/search/hybrid/ready"],
  ["Reranking","/api/v1/reranking/health","/api/v1/reranking/ready"],
@@ -503,8 +503,8 @@ const capabilities=[
  ["Intent","/api/v1/intent/health","/api/v1/intent/ready"],
  ["Ranking","/api/v1/ranking/health","/api/v1/ranking/ready"],
  ["Knowledge","/api/v1/knowledge/health","/api/v1/knowledge/ready"],
- ["Memory","/api/v1/memory/health","/api/v1/memory/memories/{name}y"],
- ["Graph","/api/v1/graph/health",null],
+ ["Memory","/api/v1/memory/health","/api/v1/memory/ready"],
+ ["Graph","/api/v1/graph/health","/api/v1/graph/ready"],
  ["Thompson","/api/v1/thompson/health","/api/v1/thompson/ready"],
  ["Learning","/api/v1/learning/health","/api/v1/learning/ready"],
  ["GA Tuning","/api/v1/ga/health","/api/v1/ga/ready"]

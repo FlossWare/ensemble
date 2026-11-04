@@ -1411,3 +1411,11 @@ def test_search_feedback_rejects_conflicting_event_reuse():
         assert client.post("/api/v1/search/feedback", json=payload).status_code == 200
         payload["success"] = False
         assert client.post("/api/v1/search/feedback", json=payload).status_code == 400
+
+
+def test_vector_readiness_checks_persistent_store():
+    app = create_app(store=InMemoryDocumentStore(), vector_store=InMemoryVectorStore())
+    with TestClient(app) as client:
+        response = client.get("/api/v1/vector/ready")
+        assert response.status_code == 200
+        assert response.json()["ready"] is True

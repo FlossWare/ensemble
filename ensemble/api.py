@@ -1521,6 +1521,14 @@ def create_app(
             raise HTTPException(status_code=503, detail="vector storage unavailable") from exc
         return {"ok": True, "service": "vector", "backend": "sqlite"}
 
+    @app.get("/api/v1/vector/ready", tags=["vector"])
+    async def vector_ready():
+        try:
+            await active_vector_store.list_collections()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="vector persistence unavailable") from exc
+        return {"ok": True, "ready": True, "backend": "sqlite"}
+
     @app.get("/api/v1/vector/collections", tags=["vector"])
     async def vector_collections():
         return {"ok": True, "collections": await active_vector_store.list_collections()}
@@ -2707,6 +2715,14 @@ def create_app(
     @app.get("/api/v1/graph/health", tags=["graph"])
     async def graph_health():
         return {"ok": True, "service": "graph", "backend": "sqlite"}
+
+    @app.get("/api/v1/graph/ready", tags=["graph"])
+    async def graph_ready():
+        try:
+            await active_graph_store.query_nodes(None, {})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="graph persistence unavailable") from exc
+        return {"ok": True, "ready": True, "backend": "sqlite"}
 
     @app.post("/api/v1/graph/nodes", tags=["graph"])
     async def graph_add_node(payload: dict[str, Any]):

@@ -58,3 +58,11 @@ def test_in_memory_graph_source_reclamation_preserves_shared_entities():
         assert await graph.query_edges() == []
 
     asyncio.run(scenario())
+
+
+def test_graph_readiness_checks_persistent_store():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        response = client.get("/api/v1/graph/ready")
+        assert response.status_code == 200
+        assert response.json()["ready"] is True
