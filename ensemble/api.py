@@ -849,6 +849,9 @@ def create_app(
             await active_index_store.assert_generation_writes_open()
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        source = await active_index_store.get_source(source_id)
+        if source is None or source.get("tombstoned") is not True:
+            raise HTTPException(status_code=409, detail="source must be tombstoned through the Index lifecycle first")
         await active_knowledge_store.tombstone(source_id)
         active_generation = await active_generation_id()
         if active_generation is not None:
@@ -877,6 +880,9 @@ def create_app(
             await active_index_store.assert_generation_writes_open()
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        source = await active_index_store.get_source(source_id)
+        if source is None or source.get("tombstoned") is not True:
+            raise HTTPException(status_code=409, detail="source must be tombstoned through the Index lifecycle first")
         await document_store.tombstone_source(source_id)
         active_generation = await active_generation_id()
         if active_generation is not None:
@@ -887,6 +893,15 @@ def create_app(
     async def documents_ingest(payload: dict[str, Any]):
         try:
             document = DocumentIn.model_validate(payload.get("document", {}))
+            source = await active_index_store.get_source(document.source_id)
+            if (
+                source is None or source.get("tombstoned") or source.get("purged")
+                or source.get("high_sequence") != document.revision
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="document writes require a matching current Index revision",
+                )
             result = await documents.ingest(
                 document,
                 embed=payload.get("embed", True),
@@ -1286,6 +1301,7 @@ def create_app(
             items.append({"id": record_id, "embedding": vector, "document": document, "metadata": metadata})
         try:
             await active_index_store.assert_generation_writes_open()
+            await active_index_store.assert_standalone_vector_writes_open()
             count = await active_vector_store.upsert(name, model, dimensions, items)
             active_generation = await active_generation_id()
             if active_generation is not None:
@@ -1310,6 +1326,7 @@ def create_app(
         ]
         try:
             await active_index_store.assert_generation_writes_open()
+            await active_index_store.assert_standalone_vector_writes_open()
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         updated = await active_vector_store.update_metadata(name, changes)
@@ -1330,6 +1347,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="keep_sha256 must be a lowercase hex SHA-256")
         try:
             await active_index_store.assert_generation_writes_open()
+            await active_index_store.assert_standalone_vector_writes_open()
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         deleted = await active_vector_store.delete_superseded(name, url, digest)

@@ -115,6 +115,7 @@ class IndexStore(Protocol):
     async def release_generation_write_fence(self, generation_id: str) -> bool: ...
     async def recover_generation_write_fence(self) -> dict[str, Any]: ...
     async def assert_generation_writes_open(self) -> None: ...
+    async def assert_standalone_vector_writes_open(self) -> None: ...
     async def acknowledge_generation_change(self, source_id: str, sequence: int, tombstoned: bool) -> int: ...
 
 
@@ -526,6 +527,16 @@ class SqliteIndexStore:
                     singleton_id=1, generation_id=generation_id, acquired_at=now,
                 ))
         return {"generation_id": generation_id, "through_change_id": high, "acquired_at": now.isoformat()}
+
+    async def assert_standalone_vector_writes_open(self) -> None:
+        async with self.engine.connect() as connection:
+            building = await connection.scalar(select(generations.c.generation_id).where(
+                generations.c.state == "building"
+            ).limit(1))
+        if building is not None:
+            raise RuntimeError(
+                "standalone vector mutations are paused during generation rebuild; use indexed ingestion"
+            )
 
     async def assert_generation_writes_open(self) -> None:
         async with self.engine.connect() as connection:

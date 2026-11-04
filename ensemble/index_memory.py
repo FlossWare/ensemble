@@ -283,6 +283,12 @@ class InMemoryIndexStore:
         return {"generation_id": generation_id, "through_change_id": high,
                 "acquired_at": datetime.now(timezone.utc).isoformat()}
 
+    async def assert_standalone_vector_writes_open(self) -> None:
+        if any(item["state"] == "building" for item in self._generations.values()):
+            raise RuntimeError(
+                "standalone vector mutations are paused during generation rebuild; use indexed ingestion"
+            )
+
     async def assert_generation_writes_open(self) -> None:
         if self._write_fence_generation is not None:
             raise RuntimeError("writes are fenced during generation cutover")
