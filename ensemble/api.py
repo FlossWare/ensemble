@@ -35,7 +35,7 @@ from .extraction import extract, normalize_entity
 from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
 from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_ranking_provider, configured_reranker, validate_rerank_request
-from .scraping import ScrapeError, preview_uri
+from .scraping import ScrapeError, crawl_uri, preview_uri
 from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
 from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpointStore, InMemoryTranscriptCheckpointStore
 from .file_ingestion import extract_pdf, PDFExtractionError, MAX_PDF_BYTES
@@ -2642,6 +2642,17 @@ def create_app(
     async def scrape_preview(payload: dict[str, Any]):
         try:
             return await preview_uri(payload.get("uri"))
+        except ScrapeError as exc:
+            raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+
+    @app.post("/api/v1/ingest/urls/crawl-preview", tags=["ingestion"])
+    async def scrape_crawl_preview(payload: dict[str, Any]):
+        try:
+            return await crawl_uri(
+                payload.get("uri"),
+                max_pages=payload.get("max_pages", 10),
+                max_depth=payload.get("max_depth", 1),
+            )
         except ScrapeError as exc:
             raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
 

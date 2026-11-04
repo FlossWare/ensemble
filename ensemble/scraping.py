@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import ipaddress
 import socket
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.robotparser import RobotFileParser
 
 import httpcore
 import httpx
@@ -13,6 +15,11 @@ import httpx
 MAX_URI_CHARS = 2048
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 5
+MAX_ROBOTS_BYTES = 512 * 1024
+MAX_CRAWL_PAGES = 20
+MAX_CRAWL_DEPTH = 3
+MAX_CRAWL_CHARS = 5_000_000
+CRAWLER_AGENT = "FlossWare-Ensemble"
 TIMEOUT_SECONDS = 15
 USER_AGENT = "FlossWare-Ensemble/0.1 (+URI preview; contact site owner before crawling)"
 
@@ -104,6 +111,19 @@ def _resolve_public_uri(uri: str) -> tuple[str, str, str]:
     return normalized, host, str(addresses[0])
 
 
+
+def _origin_key(uri: str) -> tuple[str, str, int]:
+    parsed = urlsplit(uri)
+    if not parsed.scheme or not parsed.hostname:
+        raise ScrapeError("invalid_uri", "URI must have an HTTP or HTTPS origin")
+    host = parsed.hostname.rstrip(".").lower()
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        host = host.encode("idna").decode("ascii")
+    return parsed.scheme, host, parsed.port or (443 if parsed.scheme == "https" else 80)
+
+
 def _validate_public_uri(uri: str) -> str:
     return _resolve_public_uri(uri)[0]
 
@@ -139,7 +159,7 @@ def _pinned_transport(hostname: str, address: str) -> httpx.AsyncHTTPTransport:
     return transport
 
 
-async def preview_uri(uri: str) -> dict:
+async def preview_uri(uri: str, allowed_origin: tuple[str, str, int] | None = None) -> dict:
     current = uri
     response = None
     for _ in range(MAX_REDIRECTS + 1):
@@ -157,7 +177,10 @@ async def preview_uri(uri: str) -> dict:
                         location = streamed.headers.get("location")
                         if not location:
                             raise ScrapeError("invalid_redirect", "redirect response has no Location header", 502)
-                        current = urljoin(current, location)
+                        target = urljoin(current, location)
+                        if allowed_origin is not None and _origin_key(target) != allowed_origin:
+                            raise ScrapeError("cross_origin_redirect", "crawl redirects must remain on the starting origin", 403)
+                        current = target
                         continue
                     if streamed.status_code >= 400:
                         raise ScrapeError("upstream_http_error", f"source returned HTTP {streamed.status_code}", 502)
@@ -215,4 +238,123 @@ async def preview_uri(uri: str) -> dict:
         "links": list(dict.fromkeys(canonical_links))[:200],
         "truncated": len(text) > 1_000_000,
         "preview_only": True,
+    }
+
+
+async def _fetch_robots_txt(uri: str, origin: tuple[str, str, int]) -> list[str]:
+    parsed = urlsplit(uri)
+    robots_uri = urlunsplit((parsed.scheme, parsed.netloc, "/robots.txt", "", ""))
+    current = robots_uri
+    for _ in range(MAX_REDIRECTS + 1):
+        current, hostname, address = _resolve_public_uri(current)
+        if _origin_key(current) != origin:
+            raise ScrapeError("robots_cross_origin", "robots.txt must remain on the starting origin", 403)
+        transport = _pinned_transport(hostname, address)
+        async with httpx.AsyncClient(
+            transport=transport,
+            timeout=httpx.Timeout(TIMEOUT_SECONDS),
+            follow_redirects=False,
+            headers={"User-Agent": USER_AGENT, "Accept": "text/plain"},
+        ) as client:
+            try:
+                async with client.stream("GET", current) as response:
+                    if response.status_code == 404:
+                        return []
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise ScrapeError("invalid_robots_redirect", "robots redirect has no Location header", 502)
+                        target = urljoin(current, location)
+                        if _origin_key(target) != origin:
+                            raise ScrapeError("robots_cross_origin", "robots.txt redirects must remain on the starting origin", 403)
+                        current = target
+                        continue
+                    if response.status_code >= 400:
+                        raise ScrapeError("robots_unavailable", f"robots.txt returned HTTP {response.status_code}; crawl denied", 503)
+                    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if content_type != "text/plain":
+                        raise ScrapeError("robots_content_type", "robots.txt must be served as text/plain; crawl denied", 415)
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        body.extend(chunk)
+                        if len(body) > MAX_ROBOTS_BYTES:
+                            raise ScrapeError("robots_too_large", "robots.txt exceeds 512 KiB", 413)
+                    return bytes(body).decode("utf-8-sig", errors="replace").splitlines()
+            except httpx.TimeoutException as exc:
+                raise ScrapeError("robots_timeout", "robots.txt did not respond within 15 seconds; crawl denied", 504) from exc
+            except httpx.HTTPError as exc:
+                raise ScrapeError("robots_failure", "could not retrieve robots.txt; crawl denied", 502) from exc
+    raise ScrapeError("robots_redirect_limit", "robots.txt exceeded the redirect limit", 400)
+
+
+async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1) -> dict:
+    if isinstance(max_pages, bool) or not isinstance(max_pages, int) or not 1 <= max_pages <= MAX_CRAWL_PAGES:
+        raise ScrapeError("invalid_crawl_limit", f"max_pages must be between 1 and {MAX_CRAWL_PAGES}")
+    if isinstance(max_depth, bool) or not isinstance(max_depth, int) or not 0 <= max_depth <= MAX_CRAWL_DEPTH:
+        raise ScrapeError("invalid_crawl_depth", f"max_depth must be between 0 and {MAX_CRAWL_DEPTH}")
+
+    start_uri = _validate_public_uri(uri)
+    origin = _origin_key(start_uri)
+    rules = RobotFileParser()
+    rules.set_url(urlunsplit((origin[0], urlsplit(start_uri).netloc, "/robots.txt", "", "")))
+    rules.parse(await _fetch_robots_txt(start_uri, origin))
+    if not rules.can_fetch(CRAWLER_AGENT, start_uri):
+        raise ScrapeError("robots_disallowed", "robots.txt disallows crawling the requested URI", 403)
+
+    first = await preview_uri(start_uri, allowed_origin=origin)
+    pages = [first]
+    total_characters = first["characters"]
+    queue = deque()
+    seen = {first["final_uri"]}
+    if max_depth:
+        for link in first["links"]:
+            if _origin_key(link) == origin and link not in seen:
+                seen.add(link)
+                queue.append((link, 1))
+    skipped = []
+    failures = []
+    crawl_delay = rules.crawl_delay(CRAWLER_AGENT) or rules.crawl_delay("*") or 0
+    crawl_delay = min(5.0, max(0.0, float(crawl_delay)))
+
+    while queue and len(pages) < max_pages:
+        target, depth = queue.popleft()
+        if not rules.can_fetch(CRAWLER_AGENT, target):
+            skipped.append({"uri": target, "reason": "robots_disallowed"})
+            continue
+        if crawl_delay:
+            await asyncio.sleep(crawl_delay)
+        try:
+            page = await preview_uri(target, allowed_origin=origin)
+        except ScrapeError as exc:
+            failures.append({"uri": target, "code": exc.code, "message": str(exc)[:300]})
+            continue
+        if _origin_key(page["final_uri"]) != origin:
+            skipped.append({"uri": target, "reason": "cross_origin"})
+            continue
+        if total_characters + page["characters"] > MAX_CRAWL_CHARS:
+            return {
+                "ok": True, "start_uri": start_uri, "page_count": len(pages),
+                "pages": pages, "skipped": skipped, "failures": failures,
+                "characters": total_characters, "truncated": True,
+                "robots_policy": "applied",
+            }
+        pages.append(page)
+        total_characters += page["characters"]
+        if depth < max_depth:
+            for link in page["links"]:
+                if link not in seen and _origin_key(link) == origin:
+                    seen.add(link)
+                    queue.append((link, depth + 1))
+
+    return {
+        "ok": True,
+        "start_uri": start_uri,
+        "page_count": len(pages),
+        "pages": pages,
+        "skipped": skipped,
+        "failures": failures,
+        "characters": total_characters,
+        "truncated": bool(queue),
+        "robots_policy": "applied",
+        "limits": {"max_pages": max_pages, "max_depth": max_depth, "max_characters": MAX_CRAWL_CHARS},
     }
