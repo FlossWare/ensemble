@@ -379,19 +379,39 @@ class SqliteMemoryStore:
             # Memory-only stores can be used without the Ensemble Index schema.
             return 0
         from .index_store import generations
-        targets = (await connection.execute(select(generations.c.generation_id).where(
-            generations.c.state == "building"
-        ))).scalars().all()
+        targets = (await connection.execute(select(generations).where(
+            generations.c.state.in_(("active", "building"))
+        ))).mappings().all()
         if not targets:
             return 0
         snapshot = await self._snapshot_for_name(connection, name)
         now = datetime.now(timezone.utc)
-        for generation_id in targets:
-            await connection.execute(memory_generation_changes.insert().values(
-                generation_id=generation_id, name=name, snapshot=snapshot,
-                acknowledged=False, created_at=now,
-            ))
-        return len(targets)
+        journaled = 0
+        for generation in targets:
+            generation_id = generation["generation_id"]
+            if generation["state"] == "active":
+                verification = generation["verification"] or {}
+                if verification.get("acknowledged_writes_verified") is not True:
+                    continue
+                if snapshot is None:
+                    await connection.execute(memory_generation_records.delete().where(
+                        memory_generation_records.c.generation_id == generation_id,
+                        memory_generation_records.c.name == name,
+                    ))
+                else:
+                    await connection.execute(sqlite_insert(memory_generation_records).values(
+                        generation_id=generation_id, name=name, snapshot=snapshot, updated_at=now,
+                    ).on_conflict_do_update(
+                        index_elements=[memory_generation_records.c.generation_id, memory_generation_records.c.name],
+                        set_={"snapshot": snapshot, "updated_at": now},
+                    ))
+            else:
+                await connection.execute(memory_generation_changes.insert().values(
+                    generation_id=generation_id, name=name, snapshot=snapshot,
+                    acknowledged=False, created_at=now,
+                ))
+                journaled += 1
+        return journaled
 
     async def memory_generation_upper_bound(self) -> str | None:
         async with self.engine.connect() as connection:
