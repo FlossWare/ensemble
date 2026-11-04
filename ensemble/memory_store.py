@@ -472,6 +472,7 @@ class SqliteMemoryStore:
     async def delete(self, name: str) -> dict[str, Any]:
         validate_memory_name(name)
         async with self.engine.begin() as connection:
+            await self._assert_generation_writes_open(connection)
             source_result = await connection.execute(
                 delete(memory_sources).where(memory_sources.c.document_name == name)
             )
@@ -481,6 +482,7 @@ class SqliteMemoryStore:
             memory_result = await connection.execute(
                 delete(memories).where(memories.c.name == name)
             )
+            await self._journal_generation_change(connection, name)
         sources_deleted = int(source_result.rowcount or 0)
         entries_deleted = int(entry_result.rowcount or 0)
         memory_deleted = int(memory_result.rowcount or 0)
@@ -500,11 +502,13 @@ class SqliteMemoryStore:
             raise OverflowError(f"content exceeds {MAX_CONTENT_CHARS} characters")
         now = datetime.now(timezone.utc)
         async with self.engine.begin() as connection:
+            await self._assert_generation_writes_open(connection)
             await connection.execute(
                 sqlite_insert(memories).values(name=name, content=content, updated_at=now)
                 .on_conflict_do_update(index_elements=[memories.c.name],
                                        set_={"content": content, "updated_at": now})
             )
+            await self._journal_generation_change(connection, name)
 
     async def append(self, name: str, payload: dict[str, Any], event_id: str | None = None) -> dict[str, str]:
         validate_memory_name(name)
@@ -528,6 +532,7 @@ class SqliteMemoryStore:
         now = datetime.now(timezone.utc)
         record.setdefault("timestamp", now.isoformat().replace("+00:00", "Z"))
         async with self.engine.begin() as connection:
+            await self._assert_generation_writes_open(connection)
             await connection.execute(
                 sqlite_insert(memories).values(name=name, content="", updated_at=now)
                 .on_conflict_do_nothing(index_elements=[memories.c.name])
@@ -536,6 +541,7 @@ class SqliteMemoryStore:
                 await connection.execute(insert(entries).values(
                     name=name, event_id=None, payload_sha256=None, payload=record, created_at=now
                 ))
+                await self._journal_generation_change(connection, name)
                 return {"status": "stored"}
             result = await connection.execute(
                 sqlite_insert(entries).values(
@@ -543,6 +549,7 @@ class SqliteMemoryStore:
                 ).on_conflict_do_nothing(index_elements=[entries.c.name, entries.c.event_id])
             )
             if result.rowcount == 1:
+                await self._journal_generation_change(connection, name)
                 return {"status": "stored", "event_id": event_id}
             existing = (await connection.execute(
                 select(entries.c.payload_sha256).where(entries.c.name == name, entries.c.event_id == event_id)
@@ -615,6 +622,7 @@ class SqliteMemoryStore:
         document_name = "claude-code-" + hashlib.sha256(source_path.encode("utf-8")).hexdigest()[:32]
         now = datetime.now(timezone.utc)
         async with self.engine.begin() as connection:
+            await self._assert_generation_writes_open(connection)
             existing = (await connection.execute(
                 select(memory_sources.c.sha256, memory_sources.c.stale).where(memory_sources.c.source_path == source_path)
             )).first()
@@ -637,11 +645,13 @@ class SqliteMemoryStore:
                           "sha256": sha256, "metadata": meta, "stale": False, "updated_at": now},
                 )
             )
+            await self._journal_generation_change(connection, document_name)
         return {"status": "ingested", "source_path": source_path, "sha256": sha256, "document": document_name}
 
     async def reconcile_claude_markdown(self, source: str, scope: str, paths: list[str]) -> dict[str, Any]:
         current = _validate_reconciliation(source, scope, paths)
         async with self.engine.begin() as connection:
+            await self._assert_generation_writes_open(connection)
             rows = (await connection.execute(
                 select(memory_sources.c.source_path).where(
                     memory_sources.c.source == source, memory_sources.c.scope == scope,
@@ -654,6 +664,11 @@ class SqliteMemoryStore:
                     update(memory_sources).where(memory_sources.c.source_path.in_(stale))
                     .values(stale=True, updated_at=datetime.now(timezone.utc))
                 )
+                names = (await connection.execute(select(memory_sources.c.document_name).where(
+                    memory_sources.c.source_path.in_(stale)
+                ))).scalars().all()
+                for document_name in names:
+                    await self._journal_generation_change(connection, document_name)
         return {"status": "reconciled", "stale": stale, "count": len(stale)}
 
     async def knowledge_status(self) -> dict[str, Any]:
