@@ -488,7 +488,11 @@ def create_app(
         )
         return result, decision["decision"]
 
-    async def expand_graph_results(query: str, entities: list[dict[str, Any]], results: list[SearchHit], limit: int, internal: InternalRestClient, request: Request):
+    async def expand_graph_results(
+        query: str, entities: list[dict[str, Any]], results: list[SearchHit],
+        limit: int, internal: InternalRestClient, request: Request,
+        fusion: dict[str, Any] | None = None,
+    ):
         graph_sources: dict[str, int] = {}
         graph_matches = []
         try:
@@ -524,7 +528,9 @@ def create_app(
                         graph_sources[source_id] = max(graph_sources.get(source_id, 0), revision)
 
             if not graph_sources:
-                return results, {"matched_entities": graph_matches, "candidate_sources": 0}
+                return results[:limit], {
+                    "matched_entities": graph_matches, "candidate_sources": 0,
+                }
 
             source_ids = sorted(graph_sources)
             source_states: dict[str, dict[str, Any]] = {}
@@ -542,50 +548,112 @@ def create_app(
                 source_states.update(source_state_response.get("sources", {}))
                 for chunk in chunk_response.get("chunks", []):
                     by_source.setdefault(chunk["source_id"], []).append(chunk)
-            existing = {
-                (hit.source_id, str(hit.chunk_id)): index
-                for index, hit in enumerate(results)
+
+            by_id: dict[str, SearchHit] = {
+                str(hit.chunk_id): hit for hit in results
             }
-            expanded = list(results)
-            for source_rank, source_id in enumerate(source_ids, start=1):
+            graph_ranked: list[dict[str, str]] = []
+            for source_id in source_ids:
                 state = source_states.get(source_id)
                 if (
                     state is None or state.get("tombstoned") or state.get("purged")
                     or state.get("high_sequence") != graph_sources[source_id]
                 ):
                     continue
-                contribution = 1.0 / (60 + source_rank)
-                for item in by_source.get(source_id, []):
-                    key = (source_id, str(item["chunk_id"]))
-                    if key in existing:
-                        position = existing[key]
-                        hit = expanded[position]
-                        expanded[position] = hit.model_copy(update={
-                            "graph_score": hit.graph_score + contribution,
-                            "fusion_score": hit.fusion_score + contribution,
-                        })
-                        continue
-                    expanded.append(SearchHit(
-                        document_id=item["document_id"], source_id=source_id,
-                        revision=item["revision"], title=item["title"],
-                        chunk_id=item["chunk_id"], chunk_ordinal=item["chunk_ordinal"],
-                        text=item["text"], lexical_score=0.0, vector_score=0.0,
-                        graph_score=contribution, fusion_score=contribution,
-                        chunk_profile=item["chunk_profile"], chunk_start=item["chunk_start"],
-                        chunk_end=item["chunk_end"], chunk_header=item["chunk_header"],
-                        session_id=item.get("session_id"), project=item.get("project"),
-                        role=item.get("role"), kind=item.get("kind"),
-                        is_subagent=item.get("is_subagent"), text_sha=item["text_sha"],
-                    ))
-            expanded.sort(
-                key=lambda hit: (hit.fusion_score, hit.lexical_score, hit.graph_score, str(hit.chunk_id)),
-                reverse=True,
+                chunks = sorted(
+                    by_source.get(source_id, []),
+                    key=lambda item: (item.get("chunk_ordinal", 0), str(item.get("chunk_id", ""))),
+                )
+                for item in chunks:
+                    identity = str(item["chunk_id"])
+                    if identity not in by_id:
+                        by_id[identity] = SearchHit(
+                            document_id=item["document_id"], source_id=source_id,
+                            revision=item["revision"], title=item["title"],
+                            chunk_id=item["chunk_id"], chunk_ordinal=item["chunk_ordinal"],
+                            text=item["text"], lexical_score=0.0, vector_score=0.0,
+                            graph_score=0.0, fusion_score=0.0,
+                            chunk_profile=item["chunk_profile"], chunk_start=item["chunk_start"],
+                            chunk_end=item["chunk_end"], chunk_header=item["chunk_header"],
+                            session_id=item.get("session_id"), project=item.get("project"),
+                            role=item.get("role"), kind=item.get("kind"),
+                            is_subagent=item.get("is_subagent"), text_sha=item["text_sha"],
+                        )
+                    graph_ranked.append({"chunk_id": identity})
+
+            fusion = fusion or {}
+            prior_results = {
+                str(item.get("chunk_id")): item
+                for item in fusion.get("results", [])
+                if isinstance(item, dict) and item.get("chunk_id") is not None
+            }
+            lexical = sorted(
+                (
+                    (item.get("lexical_rank"), identity)
+                    for identity, item in prior_results.items()
+                    if item.get("lexical_rank") is not None and identity in by_id
+                ),
+                key=lambda value: (value[0], value[1]),
             )
+            vector = sorted(
+                (
+                    (item.get("vector_rank"), identity)
+                    for identity, item in prior_results.items()
+                    if item.get("vector_rank") is not None and identity in by_id
+                ),
+                key=lambda value: (value[0], value[1]),
+            )
+            channels = {
+                "lexical": [{"chunk_id": identity} for _, identity in lexical],
+                "vector": [{"chunk_id": identity} for _, identity in vector],
+                "graph": graph_ranked,
+            }
+            weights = fusion.get("weights") or {}
+            fused = reciprocal_rank_fusion(
+                channels, k=fusion.get("k", 60), weights=weights,
+            )
+            fusion_by_id = {item.candidate_id: item for item in fused}
+            expanded = []
+            for item in fused:
+                hit = by_id[item.candidate_id]
+                graph_contribution = item.contributions.get("graph", 0.0)
+                expanded.append(hit.model_copy(update={
+                    "graph_score": graph_contribution,
+                    "fusion_score": item.score,
+                }))
+
+            fusion["channels"] = {
+                **(fusion.get("channels") or {}),
+                "graph": {"candidate_count": len(graph_ranked)},
+            }
+            fusion["algorithm"] = (
+                "weighted_rrf"
+                if any(value != 1.0 for value in weights.values())
+                or fusion.get("weight_strategy") == "thompson"
+                else "rrf"
+            )
+            fusion["results"] = [
+                {
+                    "chunk_id": item.candidate_id,
+                    "ranks": dict(item.ranks),
+                    "lexical_rank": item.ranks.get("lexical"),
+                    "vector_rank": item.ranks.get("vector"),
+                    "graph_rank": item.ranks.get("graph"),
+                    "contributions": {
+                        channel: round(value, 8)
+                        for channel, value in item.contributions.items()
+                    },
+                    "score": round(item.score, 8),
+                }
+                for item in fused[:limit]
+            ]
             return expanded[:limit], {
-                "matched_entities": graph_matches, "candidate_sources": len(graph_sources),
+                "matched_entities": graph_matches,
+                "candidate_sources": len(graph_sources),
+                "candidate_chunks": len(graph_ranked),
             }
         except Exception:
-            return results, {
+            return results[:limit], {
                 "matched_entities": graph_matches, "candidate_sources": 0, "degraded": True,
             }
 
@@ -2652,9 +2720,13 @@ def create_app(
         try:
             # All capability composition crosses the versioned REST contracts.
             # Search owns its retrieval algorithm and persistence implementation.
+            retrieval_payload = search_request.model_dump(mode="json")
+            retrieval_payload["limit"] = min(
+                200, max(search_request.limit, search_request.limit * 4),
+            )
             result = await internal.request(
                 "POST", "/api/v1/search/retrieve", request=request,
-                json=search_request.model_dump(mode="json"),
+                json=retrieval_payload,
             )
             # HTTP JSON decoding returns dictionaries; restore the typed
             # SearchHit contract before Hybrid applies graph/rerank/ledger logic.
@@ -2695,7 +2767,7 @@ def create_app(
                 result["results"], graph_expansion = await asyncio.wait_for(
                     expand_graph_results(
                         search_request.query, entities, result["results"],
-                        search_request.limit, internal, request,
+                        search_request.limit, internal, request, result.get("fusion"),
                     ),
                     timeout=graph_timeout,
                 )

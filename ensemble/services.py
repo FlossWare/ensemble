@@ -382,6 +382,7 @@ class SearchService:
         ranked_channels = {
             "lexical": [{"chunk_id": identifier} for identifier in lexical_ranks],
             "vector": [{"chunk_id": identifier} for identifier in vector_ranks],
+            "graph": [],
         }
         selected_weights = dict(self.rrf_weights)
         weight_strategy = "static"
@@ -455,6 +456,7 @@ class SearchService:
             "channels": {
                 "lexical": {"candidate_count": len(lexical_ranks)},
                 "vector": {"candidate_count": len(vector_ranks)},
+                "graph": {"candidate_count": 0},
             },
             "results": [
                 {
