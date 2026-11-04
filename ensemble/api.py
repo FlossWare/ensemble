@@ -229,6 +229,7 @@ def create_app(
             await active_thompson_store.initialize()
             await active_learning_store.initialize()
             await active_transcript_store.initialize()
+            await active_transcript_store.recover_interrupted()
             yield
         finally:
             await active_transcript_store.close()
@@ -454,6 +455,7 @@ def create_app(
     app.state.ga_store = active_ga_store
     app.state.thompson_store = active_thompson_store
     app.state.learning_store = active_learning_store
+    app.state.transcript_store = active_transcript_store
     app.state.settings = settings_from_env(database_url)
 
     @app.exception_handler(HTTPException)
@@ -2050,6 +2052,31 @@ def create_app(
         source_key = hashlib.sha256(f"{project}|{file_path}".encode("utf-8")).hexdigest()
         source_id = "transcript-file:" + source_key
         payload_digest = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
+        job_id = hashlib.sha256(
+            f"{source_id}\\0{revision_id}\\0{offset}\\0{payload_digest}".encode("utf-8")
+        ).hexdigest()
+        try:
+            job_state = await active_transcript_store.start_job(
+                job_id, source_id, revision_id, project, file_path, offset, payload_digest,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if job_state["status"] == "completed":
+            job = await active_transcript_store.get_job(job_id)
+            replay_result = dict((job or {}).get("result") or {})
+            replayed_count = int(replay_result.get("inserted", 0)) + int(
+                replay_result.get("already_present", 0)
+            )
+            replay_result["inserted"] = 0
+            replay_result["already_present"] = replayed_count
+            return {
+                **replay_result, "replayed": True, "job_id": job_id, "job": job,
+            }
+        if job_state["status"] == "running" and not job_state["created"]:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "transcript slice is already being processed", "job_id": job_id},
+            )
         checkpoint = await active_transcript_store.get(source_id, revision_id)
         if checkpoint is not None and offset != checkpoint["byte_offset"]:
             if (
@@ -2062,7 +2089,16 @@ def create_app(
                 )
                 replay_result["inserted"] = 0
                 replay_result["already_present"] = replayed_count
-                return {**replay_result, "replayed": True, "checkpoint": checkpoint}
+                job = await active_transcript_store.complete_job(
+                    job_id, checkpoint["byte_offset"], replay_result,
+                )
+                return {
+                    **replay_result, "replayed": True, "checkpoint": checkpoint,
+                    "job_id": job_id, "job": job,
+                }
+            await active_transcript_store.fail_job(
+                job_id, f"checkpoint mismatch; expected byte offset {checkpoint['byte_offset']}",
+            )
             raise HTTPException(
                 status_code=409,
                 detail=f"transcript checkpoint mismatch; expected byte offset {checkpoint['byte_offset']}",
@@ -2070,8 +2106,10 @@ def create_app(
         try:
             parsed = parse_jsonl(raw_content, session_id=session_id, offset=offset)
         except OverflowError as exc:
+            await active_transcript_store.fail_job(job_id, str(exc))
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except ValueError as exc:
+            await active_transcript_store.fail_job(job_id, str(exc))
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not parsed["messages"]:
             result = {
@@ -2093,7 +2131,11 @@ def create_app(
                 },
                 "messages": parsed["messages"],
             }
-            result = await ingest_session(session_payload, request)
+            try:
+                result = await ingest_session(session_payload, request)
+            except Exception as exc:
+                await active_transcript_store.fail_job(job_id, f"{type(exc).__name__}: {exc}")
+                raise
             result.update({
                 "bytes_consumed": parsed["bytes_consumed"],
                 "next_offset": parsed["end_offset"],
@@ -2106,13 +2148,35 @@ def create_app(
                 payload_digest, result,
             )
         except ValueError as exc:
+            await active_transcript_store.fail_job(job_id, str(exc))
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            await active_transcript_store.fail_job(job_id, f"{type(exc).__name__}: {exc}")
+            raise HTTPException(status_code=503, detail="transcript checkpoint persistence unavailable") from exc
         if committed["replayed"]:
-            return {**committed["result"], "replayed": True, "checkpoint": committed["checkpoint"]}
+            result = committed["result"]
+        job = await active_transcript_store.complete_job(job_id, parsed["end_offset"], result)
         return {
-            **result, "replayed": False, "source_id": source_id,
+            **result, "replayed": committed["replayed"], "source_id": source_id,
             "revision_id": revision_id, "checkpoint": committed["checkpoint"],
+            "job_id": job_id, "job": job,
         }
+
+    @app.get("/api/v1/ingest/transcripts/jobs", tags=["ingestion"])
+    async def transcript_jobs(limit: int = 50):
+        try:
+            return {"ok": True, "jobs": await active_transcript_store.list_jobs(limit)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/ingest/transcripts/jobs/{job_id}", tags=["ingestion"])
+    async def transcript_job(job_id: str):
+        if not re.fullmatch(r"[0-9a-f]{64}", job_id or ""):
+            raise HTTPException(status_code=400, detail="job_id must be a lowercase SHA-256 digest")
+        job = await active_transcript_store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="transcript job not found")
+        return {"ok": True, "job": job}
 
     @app.get("/api/v1/ingest/transcripts/checkpoint", tags=["ingestion"])
     async def transcript_checkpoint(project: str, file: str, revision_id: str = "1"):
