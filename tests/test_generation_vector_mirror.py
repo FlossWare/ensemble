@@ -58,6 +58,7 @@ def test_vector_generation_mirror_failure_keeps_index_change_unacknowledged(tmp_
                 },
             )
 
+            await index.create_generation("vector-mirror-observer")
             service = DocumentService(
                 documents, Chunker(), _TestEmbeddings(), vectors, index,
             )
@@ -82,7 +83,7 @@ def test_vector_generation_mirror_failure_keeps_index_change_unacknowledged(tmp_
                 await service.ingest(request, vector_collection="generation_test")
 
             changes = await index.list_generation_changes_after(
-                "vector-mirror-active", 0, 10,
+                "vector-mirror-observer", 0, 10,
             )
             assert len(changes) == 1
             assert changes[0]["acknowledged"] is False
@@ -100,7 +101,7 @@ def test_vector_generation_mirror_failure_keeps_index_change_unacknowledged(tmp_
             assert acknowledged == 1
 
             changes = await index.list_generation_changes_after(
-                "vector-mirror-active", 0, 10,
+                "vector-mirror-observer", 0, 10,
             )
             assert len(changes) == 1
             assert changes[0]["acknowledged"] is True
