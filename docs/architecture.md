@@ -4,11 +4,11 @@
 
 ## 1. Purpose and product boundary
 
-Ensemble is a standalone platform for reusable intelligence capabilities, including Memory, Graph, Knowledge, ingestion, indexing, retrieval, embeddings, ranking, and context assembly.
+Ensemble is a standalone platform for reusable intelligence capabilities, including Memory, Graph, Knowledge, ingestion, indexing, retrieval, model access, embeddings, ranking, and context assembly.
 
-Ensemble owns the shared platform and its canonical contracts. Client-specific integrations belong in separate repositories such as ensemble-claude, ensemble-cursor, ensemble-codex, and ensemble-crush.
+Ensemble owns the shared platform and its canonical contracts. Client-specific integrations belong in separate consumer repositories and are not part of Ensemble's implementation or documentation scope.
 
-Ensemble must operate independently of Claude Code, Codex, Cursor, Crush, MCP, any other client application, and any optional model provider. Historical repositories may provide narrowly scoped implementation evidence when needed, but they are not the product definition, architecture template, or implementation target. Ensemble's scope is determined by its own requirements and contracts.
+Ensemble must operate independently of any client application and optional model provider. Model access is a capability owned by Ensemble, not a client integration. Historical repositories may provide narrowly scoped implementation evidence when needed, but they are not the product definition, architecture template, or implementation target. Ensemble's scope is determined by its own requirements and contracts.
 
 ## 2. Deployment shape
 
@@ -80,11 +80,13 @@ Schema changes are versioned with Alembic and applied as a deployment step befor
 
 Existing external data and services must not be disturbed as a prerequisite for implementing Ensemble. Any required import or migration must use an explicitly designed, supported interface or export/import contract. Data migration is separate from implementing the platform's capabilities.
 
-## 8. Providers and adapters
+## 8. Model access, providers, and adapters
 
-Embedding and ranking providers are pluggable behind Ensemble-owned contracts. Provider-specific behavior must not leak into public API contracts.
+Model access is a first-class Ensemble capability exposed through provider-neutral REST contracts. Provider-specific protocols and credentials remain behind adapters; provider details must not leak into the public contract.
 
-Optional generation is provider-backed and must not become a dependency of retrieval or other non-generation capabilities. Provider availability, model identity, and capability support must be explicit. Do not silently switch providers or models when a requested provider is unavailable.
+EnMaaS is the identified enterprise model-gateway integration direction. It is an integration target, not a dependency required to run Ensemble. Model identity, provider availability, and capability support must be explicit. Do not silently switch providers or models when a requested provider is unavailable.
+
+Embedding and ranking providers are pluggable behind Ensemble-owned contracts. Optional generation is provider-backed and must not become a dependency of retrieval or other non-generation capabilities.
 
 MCP is an optional adapter over existing Ensemble REST operations. REST remains canonical; MCP tools map to existing operations; MCP contains no duplicate business logic; and Ensemble remains fully usable when MCP is disabled.
 
@@ -120,6 +122,11 @@ Do not create a separate phase or framework for a concern that belongs inside th
 - Internal capability calls use the same REST contracts as external calls.
 - MCP can be disabled without reducing the REST capability surface.
 - Data deletion, restoration, and permanent purge cannot leave stale derived data visible or allow deleted data to be resurrected.
+
+
+## 12. Test Harness
+
+Ensemble includes a Test Harness contract for synthetic injection, deterministic replay, and controlled fault scenarios through the canonical REST API. It is disabled by default and restricted to a dedicated test deployment and database until end-to-end partition enforcement exists. The harness must use existing ingestion and deletion contracts, retain per-operation outcomes, and never write directly to persistence tables. See [Test Harness](test-harness.md) for its lifecycle, route family, safety requirements, and implementation sequence.
 
 ## Data partitions
 

@@ -246,3 +246,8 @@ Entity resolution uses the Graph capability as its durable identity store. Exact
 Entity linking accepts two canonical entity node IDs and a typed relationship. Both endpoints must exist and be entity nodes. Graph remains responsible for durable relationships and traversal. Extraction does not write to Graph, and resolution does not create relationships.
 
 Hybrid Search includes the richer intent result and extracted entity candidates in its response. It does not automatically resolve or persist query entities; callers explicitly invoke resolution when durable identity is required.
+
+
+## Test Harness
+
+The Test Harness REST route family is specified in [Test Harness](test-harness.md). It is a guarded development and verification capability, disabled by default. Synthetic injection and replay delegate to the existing document/indexing REST pipeline; cleanup delegates to supported deletion contracts. The harness does not define an independent ingestion pipeline or persistent data model visible to normal clients.
