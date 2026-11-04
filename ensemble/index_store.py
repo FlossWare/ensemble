@@ -20,7 +20,59 @@ sources = Table(
     Column("revision_id", String(512), nullable=False),
     Column("profiles", JSON, nullable=False),
     Column("tombstoned", Boolean, nullable=False),
+    Column("purged", Boolean, nullable=False, server_default="0"),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+generation_sources = Table(
+    "ensemble_index_generation_sources",
+    index_metadata,
+    Column("generation_id", String(64), primary_key=True),
+    Column("source_id", String(512), primary_key=True),
+    Column("high_sequence", Integer, nullable=False),
+    Column("revision_id", String(512), nullable=False),
+    Column("profiles", JSON, nullable=False),
+    Column("tombstoned", Boolean, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+
+generations = Table(
+    "ensemble_index_generations",
+    index_metadata,
+    Column("generation_id", String(64), primary_key=True),
+    Column("state", String(16), nullable=False),
+    Column("checkpoints", JSON, nullable=False),
+    Column("verification", JSON, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("activated_at", DateTime(timezone=True), nullable=True),
+)
+generation_control = Table(
+    "ensemble_index_generation_control",
+    index_metadata,
+    Column("singleton_id", Integer, primary_key=True),
+    Column("active_generation_id", String(64), nullable=False),
+    Column("epoch", Integer, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+generation_changes = Table(
+    "ensemble_index_generation_changes", index_metadata,
+    Column("change_id", Integer, primary_key=True, autoincrement=True),
+    Column("generation_id", String(64), nullable=False),
+    Column("source_id", String(512), nullable=False),
+    Column("high_sequence", Integer, nullable=False),
+    Column("revision_id", String(512), nullable=False),
+    Column("profiles", JSON, nullable=False),
+    Column("tombstoned", Boolean, nullable=False),
+    Column("acknowledged", Boolean, nullable=False, default=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+generation_write_fence = Table(
+    "ensemble_index_generation_write_fence", index_metadata,
+    Column("singleton_id", Integer, primary_key=True),
+    Column("generation_id", String(64), nullable=False),
+    Column("acquired_at", DateTime(timezone=True), nullable=False),
 )
 
 
@@ -29,15 +81,32 @@ class IndexStore(Protocol):
     async def close(self) -> None: ...
     async def record_revision(self, source_id: str, sequence: int, revision_id: str, profiles: dict[str, Any]) -> dict[str, Any]: ...
     async def record_tombstone(self, source_id: str, sequence: int) -> dict[str, Any]: ...
+    async def restore_source(self, source_id: str, sequence: int) -> dict[str, Any]: ...
+    async def mark_purged(self, source_id: str) -> None: ...
     async def get_source(self, source_id: str) -> dict[str, Any] | None: ...
     async def list_sources(self, limit: int) -> list[dict[str, Any]]: ...
+    async def source_key_upper_bound(self) -> str | None: ...
+    async def list_sources_after(self, cursor: str | None, upper_bound: str | None, limit: int) -> list[dict[str, Any]]: ...
+    async def put_generation_source(self, generation_id: str, source: dict[str, Any]) -> dict[str, Any]: ...
+    async def get_generation_source(self, generation_id: str, source_id: str) -> dict[str, Any] | None: ...
+    async def list_generation_sources_after(self, generation_id: str, cursor: str | None, upper_bound: str | None, limit: int) -> list[dict[str, Any]]: ...
+    async def generation_status(self) -> dict[str, Any]: ...
+    async def create_generation(self, generation_id: str) -> dict[str, Any]: ...
+    async def record_generation_checkpoint(self, generation_id: str, capability: str, checkpoint: dict[str, Any], sealed: bool = False) -> dict[str, Any]: ...
+    async def activate_generation(self, generation_id: str, expected_active_generation_id: str, expected_epoch: int, verification: dict[str, Any]) -> dict[str, Any]: ...
+    async def abort_generation(self, generation_id: str, reason: str) -> dict[str, Any]: ...
+    async def list_generation_changes_after(self, generation_id: str, after_change_id: int, limit: int) -> list[dict[str, Any]]: ...
+    async def generation_change_high_watermark(self, generation_id: str) -> int: ...
+    async def acquire_generation_write_fence(self, generation_id: str, through_change_id: int) -> dict[str, Any]: ...
+    async def release_generation_write_fence(self, generation_id: str) -> bool: ...
+    async def acknowledge_generation_change(self, source_id: str, sequence: int, tombstoned: bool) -> int: ...
 
 
 def _as_source(row: Any) -> dict[str, Any]:
     return {
         "source_id": row["source_id"], "high_sequence": row["high_sequence"],
         "revision_id": row["revision_id"], "profiles": row["profiles"],
-        "tombstoned": bool(row["tombstoned"]), "updated_at": row["updated_at"].isoformat(),
+        "tombstoned": bool(row["tombstoned"]), "purged": bool(row["purged"]), "updated_at": row["updated_at"].isoformat(),
     }
 
 
@@ -46,28 +115,427 @@ class SqliteIndexStore:
         self.database_url = database_url or os.getenv("ENSEMBLE_DATABASE_URL", "sqlite+aiosqlite:///./.ensemble/ensemble.db")
         if make_url(self.database_url).get_backend_name() != "sqlite":
             raise ValueError("Ensemble index persistence supports SQLite only")
-        self.engine = PartitionedAsyncEngine(self.database_url, pool_pre_ping=True)
+        self.engine: AsyncEngine = PartitionedAsyncEngine(self.database_url, pool_pre_ping=True)
 
     async def initialize(self) -> None:
         async with self.engine.connect() as connection:
             names = await connection.run_sync(lambda conn: __import__("sqlalchemy").inspect(conn).get_table_names())
-        if "ensemble_index_sources" not in names:
+        required = {
+            "ensemble_index_sources", "ensemble_index_generations",
+            "ensemble_index_generation_control", "ensemble_index_generation_changes",
+            "ensemble_index_generation_write_fence",
+        }
+        if not required.issubset(names):
             raise RuntimeError("index schema is not initialized; run 'alembic upgrade head'")
 
     async def close(self) -> None:
         await self.engine.dispose()
 
+    async def generation_status(self) -> dict[str, Any]:
+        async with self.engine.connect() as connection:
+            control = (await connection.execute(select(generation_control).where(
+                generation_control.c.singleton_id == 1
+            ))).mappings().one()
+            rows = (await connection.execute(
+                select(generations).order_by(generations.c.created_at.desc())
+            )).mappings().all()
+        return {
+            "active_generation_id": control["active_generation_id"],
+            "epoch": control["epoch"],
+            "generations": [dict(row) for row in rows],
+        }
+
+    async def create_generation(self, generation_id: str) -> dict[str, Any]:
+        if not isinstance(generation_id, str) or not generation_id or len(generation_id) > 64:
+            raise ValueError("generation_id must contain 1-64 characters")
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            existing = (await connection.execute(select(generations).where(
+                generations.c.state == "building"
+            ))).mappings().first()
+            if existing:
+                raise RuntimeError("an index generation rebuild is already in progress")
+            control = (await connection.execute(select(generation_control).where(
+                generation_control.c.singleton_id == 1
+            ))).mappings().one()
+            await connection.execute(generations.insert().values(
+                generation_id=generation_id, state="building", checkpoints={},
+                verification={}, created_at=now, updated_at=now, activated_at=None,
+            ))
+            pending = (await connection.execute(select(generation_changes).where(
+                generation_changes.c.generation_id == control["active_generation_id"],
+                generation_changes.c.acknowledged.is_(False),
+            ).order_by(generation_changes.c.change_id))).mappings().all()
+            if pending:
+                await connection.execute(generation_changes.insert(), [{
+                    "generation_id": generation_id,
+                    "source_id": item["source_id"],
+                    "high_sequence": item["high_sequence"],
+                    "revision_id": item["revision_id"],
+                    "profiles": item["profiles"],
+                    "tombstoned": item["tombstoned"],
+                    "acknowledged": False,
+                    "created_at": item["created_at"],
+                } for item in pending])
+            row = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().one()
+        return dict(row)
+
+    async def record_generation_checkpoint(
+        self, generation_id: str, capability: str,
+        checkpoint: dict[str, Any], sealed: bool = False,
+    ) -> dict[str, Any]:
+        if capability not in {"index", "documents", "vectors", "memory", "knowledge", "index_reconciliation", "documents_reconciliation", "vectors_reconciliation", "memory_reconciliation", "knowledge_reconciliation"}:
+            raise ValueError("capability must be one of the five capability checkpoints or their reconciliation checkpoints")
+        if not isinstance(checkpoint, dict):
+            raise ValueError("checkpoint must be an object")
+        import json
+        try:
+            json.dumps(checkpoint, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("checkpoint must contain finite JSON values") from exc
+        async with self.engine.begin() as connection:
+            row = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().first()
+            if row is None or row["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            checkpoints = dict(row["checkpoints"] or {})
+            previous = checkpoints.get(capability)
+            if previous and previous.get("sealed"):
+                raise RuntimeError(f"{capability} checkpoint is already sealed")
+            checkpoints[capability] = {"value": checkpoint, "sealed": bool(sealed)}
+            await connection.execute(generations.update().where(
+                generations.c.generation_id == generation_id,
+                generations.c.state == "building",
+            ).values(checkpoints=checkpoints, updated_at=datetime.now(timezone.utc)))
+            updated = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().one()
+        return dict(updated)
+
+    async def activate_generation(
+        self, generation_id: str, expected_active_generation_id: str,
+        expected_epoch: int, verification: dict[str, Any],
+    ) -> dict[str, Any]:
+        required = {"acknowledged_writes_verified", "tombstones_verified"}
+        if not isinstance(verification, dict) or not all(verification.get(key) is True for key in required):
+            raise ValueError("activation requires acknowledged-write and tombstone verification")
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            current_control = (await connection.execute(select(generation_control).where(
+                generation_control.c.singleton_id == 1
+            ))).mappings().one()
+            if (
+                current_control["active_generation_id"] != expected_active_generation_id
+                or current_control["epoch"] != expected_epoch
+            ):
+                raise RuntimeError("active generation changed; refresh status before cutover")
+            target = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().first()
+            if target is None or target["state"] != "building":
+                raise RuntimeError("target generation is not building")
+            checkpoints = target["checkpoints"] or {}
+            if not all(checkpoints.get(name, {}).get("sealed") is True for name in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation", "documents_reconciliation", "vectors_reconciliation", "memory_reconciliation", "knowledge_reconciliation")):
+                raise RuntimeError("index, documents, vectors, memory, knowledge, and all five reconciliation checkpoints must all be sealed")
+            fence = (await connection.execute(select(generation_write_fence).where(
+                generation_write_fence.c.singleton_id == 1,
+                generation_write_fence.c.generation_id == generation_id,
+            ))).mappings().first()
+            if fence is None:
+                raise RuntimeError("Index write fence must be held during generation activation")
+            from sqlalchemy import func
+            high = int(await connection.scalar(select(func.max(generation_changes.c.change_id)).where(
+                generation_changes.c.generation_id == generation_id
+            )) or 0)
+            if verification.get("reconciled_through_change_id") != high:
+                raise RuntimeError("generation change journal has not been fully reconciled")
+            changed = await connection.execute(generation_control.update().where(
+                generation_control.c.singleton_id == 1,
+                generation_control.c.active_generation_id == expected_active_generation_id,
+                generation_control.c.epoch == expected_epoch,
+            ).values(
+                active_generation_id=generation_id, epoch=expected_epoch + 1,
+                updated_at=now,
+            ))
+            if changed.rowcount != 1:
+                raise RuntimeError("active generation changed; refresh status before cutover")
+            await connection.execute(generations.update().where(
+                generations.c.generation_id == expected_active_generation_id,
+                generations.c.state == "active",
+            ).values(state="retired", updated_at=now))
+            await connection.execute(generations.update().where(
+                generations.c.generation_id == generation_id,
+                generations.c.state == "building",
+            ).values(
+                state="active", verification=verification,
+                activated_at=now, updated_at=now,
+            ))
+            await connection.execute(generation_write_fence.delete().where(
+                generation_write_fence.c.singleton_id == 1,
+                generation_write_fence.c.generation_id == generation_id,
+            ))
+            await connection.execute(generation_changes.delete().where(
+                generation_changes.c.generation_id.in_((expected_active_generation_id, generation_id))
+            ))
+            row = (await connection.execute(select(generation_control).where(
+                generation_control.c.singleton_id == 1
+            ))).mappings().one()
+        return {
+            "active_generation_id": row["active_generation_id"],
+            "epoch": row["epoch"],
+        }
+
+    async def abort_generation(self, generation_id: str, reason: str) -> dict[str, Any]:
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 2048:
+            raise ValueError("reason must contain 1-2048 characters")
+        async with self.engine.begin() as connection:
+            changed = await connection.execute(generations.update().where(
+                generations.c.generation_id == generation_id,
+                generations.c.state == "building",
+            ).values(
+                state="failed", verification={"failure": reason},
+                updated_at=datetime.now(timezone.utc),
+            ))
+            if changed.rowcount != 1:
+                raise RuntimeError("only a building generation can be aborted")
+            await connection.execute(generation_write_fence.delete().where(
+                generation_write_fence.c.singleton_id == 1,
+                generation_write_fence.c.generation_id == generation_id,
+            ))
+            row = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().one()
+        return dict(row)
+
+
+    async def put_generation_source(self, generation_id: str, source: dict[str, Any]) -> dict[str, Any]:
+        required = {"source_id", "high_sequence", "revision_id", "profiles", "tombstoned"}
+        if not isinstance(source, dict) or not required.issubset(source):
+            raise ValueError("source state is incomplete")
+        source_id = source["source_id"]
+        if not isinstance(source["profiles"], dict) or not isinstance(source["tombstoned"], bool):
+            raise ValueError("profiles must be an object and tombstoned must be boolean")
+        sequence = source["high_sequence"]
+        revision_id = source["revision_id"]
+        profiles = dict(sorted(source["profiles"].items()))
+        tombstoned = bool(source["tombstoned"])
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("high_sequence must be a positive integer")
+        if not isinstance(revision_id, str) or not revision_id or len(revision_id) > 512:
+            raise ValueError("revision_id must contain 1-512 characters")
+        import json
+        try:
+            json.dumps(profiles, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("profiles must contain finite JSON values") from exc
+        async with self.engine.begin() as connection:
+            generation = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().first()
+            if generation is None or generation["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            row = (await connection.execute(select(generation_sources).where(
+                generation_sources.c.generation_id == generation_id,
+                generation_sources.c.source_id == source_id,
+            ))).mappings().first()
+            now = datetime.now(timezone.utc)
+            if row is None:
+                await connection.execute(generation_sources.insert().values(
+                    generation_id=generation_id, source_id=source_id,
+                    high_sequence=sequence, revision_id=revision_id,
+                    profiles=profiles, tombstoned=tombstoned, updated_at=now,
+                ))
+                decision = "accepted"
+            elif row["tombstoned"]:
+                decision = "tombstoned"
+            elif tombstoned:
+                await connection.execute(generation_sources.update().where(
+                    generation_sources.c.generation_id == generation_id,
+                    generation_sources.c.source_id == source_id,
+                ).values(
+                    high_sequence=max(sequence, row["high_sequence"]),
+                    tombstoned=True, updated_at=now,
+                ))
+                decision = "tombstoned"
+            elif sequence > row["high_sequence"]:
+                await connection.execute(generation_sources.update().where(
+                    generation_sources.c.generation_id == generation_id,
+                    generation_sources.c.source_id == source_id,
+                ).values(
+                    high_sequence=sequence, revision_id=revision_id,
+                    profiles=profiles, updated_at=now,
+                ))
+                decision = "accepted"
+            elif sequence == row["high_sequence"]:
+                decision = "duplicate" if row["revision_id"] == revision_id and row["profiles"] == profiles else "conflict"
+            else:
+                decision = "superseded"
+            current = (await connection.execute(select(generation_sources).where(
+                generation_sources.c.generation_id == generation_id,
+                generation_sources.c.source_id == source_id,
+            ))).mappings().one()
+        return {
+            "decision": decision, "source": {
+                "source_id": current["source_id"],
+                "high_sequence": current["high_sequence"],
+                "revision_id": current["revision_id"],
+                "profiles": current["profiles"],
+                "tombstoned": bool(current["tombstoned"]),
+                "updated_at": current["updated_at"].isoformat(),
+            },
+        }
+
+    async def get_generation_source(self, generation_id: str, source_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as connection:
+            row = (await connection.execute(select(generation_sources).where(
+                generation_sources.c.generation_id == generation_id,
+                generation_sources.c.source_id == source_id,
+            ))).mappings().first()
+        if row is None:
+            return None
+        return {
+            "source_id": row["source_id"], "high_sequence": row["high_sequence"],
+            "revision_id": row["revision_id"], "profiles": row["profiles"],
+            "tombstoned": bool(row["tombstoned"]),
+            "updated_at": row["updated_at"].isoformat(),
+        }
+
+    async def list_generation_sources_after(
+        self, generation_id: str, cursor: str | None,
+        upper_bound: str | None, limit: int,
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        if upper_bound is None:
+            return []
+        statement = select(generation_sources).where(
+            generation_sources.c.generation_id == generation_id,
+            generation_sources.c.source_id <= upper_bound,
+        )
+        if cursor is not None:
+            statement = statement.where(generation_sources.c.source_id > cursor)
+        statement = statement.order_by(generation_sources.c.source_id).limit(limit)
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(statement)).mappings().all()
+        return [{
+            "source_id": row["source_id"], "high_sequence": row["high_sequence"],
+            "revision_id": row["revision_id"], "profiles": row["profiles"],
+            "tombstoned": bool(row["tombstoned"]),
+            "updated_at": row["updated_at"].isoformat(),
+        } for row in rows]
+
+    async def list_generation_changes_after(self, generation_id: str, after_change_id: int, limit: int) -> list[dict[str, Any]]:
+        if isinstance(after_change_id, bool) or not isinstance(after_change_id, int) or after_change_id < 0:
+            raise ValueError("after_change_id must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(
+                select(generation_changes).where(
+                    generation_changes.c.generation_id == generation_id,
+                    generation_changes.c.change_id > after_change_id,
+                ).order_by(generation_changes.c.change_id).limit(limit)
+            )).mappings().all()
+        return [dict(row) for row in rows]
+
+    async def acknowledge_generation_change(self, source_id: str, sequence: int, tombstoned: bool) -> int:
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("sequence must be a positive integer")
+        if not isinstance(tombstoned, bool):
+            raise ValueError("tombstoned must be a boolean")
+        async with self.engine.begin() as connection:
+            result = await connection.execute(generation_changes.update().where(
+                generation_changes.c.generation_id.in_(
+                    select(generations.c.generation_id).where(generations.c.state == "building")
+                ),
+                generation_changes.c.source_id == source_id,
+                generation_changes.c.high_sequence == sequence,
+                generation_changes.c.tombstoned.is_(tombstoned),
+                generation_changes.c.acknowledged.is_(False),
+            ).values(acknowledged=True))
+            active_deleted = await connection.execute(generation_changes.delete().where(
+                generation_changes.c.generation_id.in_(
+                    select(generations.c.generation_id).where(generations.c.state == "active")
+                ),
+                generation_changes.c.source_id == source_id,
+                generation_changes.c.high_sequence == sequence,
+                generation_changes.c.tombstoned.is_(tombstoned),
+            ))
+        return max(int(result.rowcount or 0), int(active_deleted.rowcount or 0))
+
+    async def generation_change_high_watermark(self, generation_id: str) -> int:
+        from sqlalchemy import func
+        async with self.engine.connect() as connection:
+            value = await connection.scalar(select(func.max(generation_changes.c.change_id)).where(
+                generation_changes.c.generation_id == generation_id
+            ))
+        return int(value or 0)
+
+    async def acquire_generation_write_fence(self, generation_id: str, through_change_id: int) -> dict[str, Any]:
+        if isinstance(through_change_id, bool) or not isinstance(through_change_id, int) or through_change_id < 0:
+            raise ValueError("through_change_id must be a non-negative integer")
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            generation = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().first()
+            if generation is None or generation["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            existing = (await connection.execute(select(generation_write_fence).where(
+                generation_write_fence.c.singleton_id == 1
+            ))).mappings().first()
+            if existing and existing["generation_id"] != generation_id:
+                raise RuntimeError("another generation owns the Index write fence")
+            from sqlalchemy import func
+            pending = int(await connection.scalar(select(func.count()).select_from(generation_changes).where(
+                generation_changes.c.generation_id == generation_id,
+                generation_changes.c.acknowledged.is_(False),
+            )) or 0)
+            if pending:
+                raise RuntimeError("unacknowledged source mutations remain; do not fence generation writes")
+            high = int(await connection.scalar(select(func.max(generation_changes.c.change_id)).where(
+                generation_changes.c.generation_id == generation_id
+            )) or 0)
+            if high != through_change_id:
+                raise RuntimeError("generation change journal advanced; reconcile before acquiring the write fence")
+            if existing is None:
+                await connection.execute(generation_write_fence.insert().values(
+                    singleton_id=1, generation_id=generation_id, acquired_at=now,
+                ))
+        return {"generation_id": generation_id, "through_change_id": high, "acquired_at": now.isoformat()}
+
+    async def release_generation_write_fence(self, generation_id: str) -> bool:
+        async with self.engine.begin() as connection:
+            result = await connection.execute(generation_write_fence.delete().where(
+                generation_write_fence.c.singleton_id == 1,
+                generation_write_fence.c.generation_id == generation_id,
+            ))
+        return result.rowcount == 1
+
     async def record_revision(self, source_id: str, sequence: int, revision_id: str, profiles: dict[str, Any]) -> dict[str, Any]:
         async with self.engine.begin() as connection:
+            fence = (await connection.execute(select(generation_write_fence).where(generation_write_fence.c.singleton_id == 1))).mappings().first()
+            if fence is not None:
+                current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
+                return {"decision": "fenced", "source": _as_source(current) if current else None}
             row = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
             now = datetime.now(timezone.utc)
             profile_snapshot = dict(sorted(profiles.items()))
             if row is None:
                 await connection.execute(sources.insert().values(
                     source_id=source_id, high_sequence=sequence, revision_id=revision_id,
-                    profiles=profile_snapshot, tombstoned=False, updated_at=now,
+                    profiles=profile_snapshot, tombstoned=False, purged=False, updated_at=now,
                 ))
                 decision = "accepted"
+            elif row["purged"]:
+                decision = "purged"
             elif row["tombstoned"]:
                 decision = "tombstoned"
             elif sequence > row["high_sequence"]:
@@ -85,18 +553,33 @@ class SqliteIndexStore:
             else:
                 decision = "superseded"
             current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().one()
+            if decision == "accepted":
+                generation_ids = (await connection.execute(select(generations.c.generation_id).where(
+                    generations.c.state.in_(("active", "building"))
+                ))).scalars().all()
+                for target_generation_id in generation_ids:
+                    await connection.execute(generation_changes.insert().values(
+                        generation_id=target_generation_id, source_id=source_id, high_sequence=sequence,
+                        revision_id=revision_id, profiles=profile_snapshot, tombstoned=False, acknowledged=False, created_at=now,
+                    ))
         return {"decision": decision, "source": _as_source(current)}
 
     async def record_tombstone(self, source_id: str, sequence: int) -> dict[str, Any]:
         async with self.engine.begin() as connection:
+            fence = (await connection.execute(select(generation_write_fence).where(generation_write_fence.c.singleton_id == 1))).mappings().first()
+            if fence is not None:
+                current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
+                return {"decision": "fenced", "source": _as_source(current) if current else None}
             row = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
             now = datetime.now(timezone.utc)
             if row is None:
                 await connection.execute(sources.insert().values(
                     source_id=source_id, high_sequence=sequence, revision_id="tombstone",
-                    profiles={}, tombstoned=True, updated_at=now,
+                    profiles={}, tombstoned=True, purged=False, updated_at=now,
                 ))
                 decision = "tombstoned"
+            elif row["purged"]:
+                decision = "purged"
             elif sequence >= row["high_sequence"]:
                 await connection.execute(update(sources).where(
                     sources.c.source_id == source_id
@@ -108,6 +591,16 @@ class SqliteIndexStore:
             else:
                 decision = "superseded"
             current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().one()
+            if decision == "tombstoned":
+                generation_ids = (await connection.execute(select(generations.c.generation_id).where(
+                    generations.c.state.in_(("active", "building"))
+                ))).scalars().all()
+                for target_generation_id in generation_ids:
+                    await connection.execute(generation_changes.insert().values(
+                        generation_id=target_generation_id, source_id=source_id,
+                        high_sequence=current["high_sequence"], revision_id=current["revision_id"],
+                        profiles=current["profiles"], tombstoned=True, acknowledged=False, created_at=now,
+                    ))
         return {"decision": decision, "source": _as_source(current)}
 
     async def get_source(self, source_id: str) -> dict[str, Any] | None:
@@ -115,7 +608,57 @@ class SqliteIndexStore:
             row = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
         return _as_source(row) if row else None
 
+    async def restore_source(self, source_id: str, sequence: int) -> dict[str, Any]:
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("sequence must be a positive integer")
+        async with self.engine.begin() as connection:
+            row = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
+            if row is None:
+                raise KeyError("unknown source")
+            if row["purged"]:
+                raise RuntimeError("permanently purged sources cannot be restored")
+            if not row["tombstoned"]:
+                raise RuntimeError("source is not soft-deleted")
+            if sequence <= row["high_sequence"]:
+                raise ValueError("restore sequence must exceed the current source sequence")
+            await connection.execute(update(sources).where(
+                sources.c.source_id == source_id
+            ).values(high_sequence=sequence, tombstoned=False, updated_at=datetime.now(timezone.utc)))
+            updated = (await connection.execute(select(sources).where(
+                sources.c.source_id == source_id
+            ))).mappings().one()
+        return _as_source(updated)
+
+    async def mark_purged(self, source_id: str) -> None:
+        async with self.engine.begin() as connection:
+            changed = await connection.execute(update(sources).where(
+                sources.c.source_id == source_id,
+                sources.c.tombstoned.is_(True),
+                sources.c.purged.is_(False),
+            ).values(purged=True, updated_at=datetime.now(timezone.utc)))
+            if changed.rowcount != 1:
+                raise RuntimeError("only a soft-deleted source can be permanently purged")
+
     async def list_sources(self, limit: int) -> list[dict[str, Any]]:
         async with self.engine.connect() as connection:
             rows = (await connection.execute(select(sources).order_by(sources.c.source_id).limit(limit))).mappings().all()
+        return [_as_source(row) for row in rows]
+
+    async def source_key_upper_bound(self) -> str | None:
+        async with self.engine.connect() as connection:
+            return await connection.scalar(select(__import__("sqlalchemy").func.max(sources.c.source_id)))
+
+    async def list_sources_after(
+        self, cursor: str | None, upper_bound: str | None, limit: int,
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        if upper_bound is None:
+            return []
+        statement = select(sources).where(sources.c.source_id <= upper_bound)
+        if cursor is not None:
+            statement = statement.where(sources.c.source_id > cursor)
+        statement = statement.order_by(sources.c.source_id).limit(limit)
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(statement)).mappings().all()
         return [_as_source(row) for row in rows]
