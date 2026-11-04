@@ -274,6 +274,18 @@ class InMemoryIndexStore:
         generation = self._generations.get(generation_id)
         if generation and generation["state"] == "active":
             raise RuntimeError("active generation unexpectedly retains a write fence")
+        if generation and generation["state"] == "building":
+            checkpoints = generation.get("checkpoints") or {}
+            for capability in (
+                "index_reconciliation", "documents_reconciliation",
+                "vectors_reconciliation", "memory_reconciliation",
+                "knowledge_reconciliation",
+            ):
+                if capability in checkpoints:
+                    checkpoints[capability] = {
+                        **checkpoints[capability], "sealed": False,
+                    }
+            generation["checkpoints"] = checkpoints
         self._write_fence_generation = None
         return {"recovered": True, "generation_id": generation_id,
                 "reason": "interrupted_activation",

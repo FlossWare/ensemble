@@ -530,6 +530,22 @@ class SqliteIndexStore:
             ))).mappings().first()
             if generation is not None and generation["state"] == "active":
                 raise RuntimeError("active generation unexpectedly retains a write fence")
+            if generation is not None and generation["state"] == "building":
+                checkpoints = dict(generation["checkpoints"] or {})
+                for capability in (
+                    "index_reconciliation", "documents_reconciliation",
+                    "vectors_reconciliation", "memory_reconciliation",
+                    "knowledge_reconciliation",
+                ):
+                    checkpoint = checkpoints.get(capability)
+                    if checkpoint is not None:
+                        checkpoint = dict(checkpoint)
+                        checkpoint["sealed"] = False
+                        checkpoints[capability] = checkpoint
+                await connection.execute(generations.update().where(
+                    generations.c.generation_id == fence["generation_id"],
+                    generations.c.state == "building",
+                ).values(checkpoints=checkpoints, updated_at=datetime.now(timezone.utc)))
             await connection.execute(generation_write_fence.delete().where(
                 generation_write_fence.c.singleton_id == 1,
                 generation_write_fence.c.generation_id == fence["generation_id"],

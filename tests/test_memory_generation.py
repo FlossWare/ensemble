@@ -100,6 +100,14 @@ def test_interrupted_generation_fence_is_released_after_restart(tmp_path):
         await index.initialize()
         await memory.initialize()
         await index.create_generation("interrupted-fence")
+        for capability in (
+            "index_reconciliation", "documents_reconciliation",
+            "vectors_reconciliation", "memory_reconciliation",
+            "knowledge_reconciliation",
+        ):
+            await index.record_generation_checkpoint(
+                "interrupted-fence", capability, {"cursor": 0}, sealed=True,
+            )
         await index.acquire_generation_write_fence("interrupted-fence", through_change_id=0)
         await index.close()
 
@@ -111,6 +119,16 @@ def test_interrupted_generation_fence_is_released_after_restart(tmp_path):
             recovered = await restarted.recover_generation_write_fence()
             assert recovered["recovered"] is True
             assert recovered["generation_id"] == "interrupted-fence"
+            status = await restarted.generation_status()
+            generation = next(item for item in status["generations"] if item["generation_id"] == "interrupted-fence")
+            assert all(
+                generation["checkpoints"][name]["sealed"] is False
+                for name in (
+                    "index_reconciliation", "documents_reconciliation",
+                    "vectors_reconciliation", "memory_reconciliation",
+                    "knowledge_reconciliation",
+                )
+            )
             await reopened_memory.write("after-restart", "writes resumed after recovery")
             assert await reopened_memory.read("after-restart") == "writes resumed after recovery"
         finally:
