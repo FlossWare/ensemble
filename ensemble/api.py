@@ -839,6 +839,10 @@ def create_app(
         source_id = payload.get("source_id")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        try:
+            await active_index_store.assert_generation_writes_open()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         await active_knowledge_store.tombstone(source_id)
         active_generation = await active_generation_id()
         if active_generation is not None:
@@ -863,6 +867,10 @@ def create_app(
         source_id = payload.get("source_id")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        try:
+            await active_index_store.assert_generation_writes_open()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         await document_store.tombstone_source(source_id)
         return {"ok": True, "source_id": source_id}
 
@@ -1236,6 +1244,7 @@ def create_app(
                 raise HTTPException(status_code=400, detail="embedding values must be finite")
             items.append({"id": record_id, "embedding": vector, "document": document, "metadata": metadata})
         try:
+            await active_index_store.assert_generation_writes_open()
             count = await active_vector_store.upsert(name, model, dimensions, items)
             active_generation = await active_generation_id()
             if active_generation is not None:
@@ -1258,6 +1267,10 @@ def create_app(
             {"id": record_id, "metadata": metadata}
             for record_id, metadata in zip(ids, metadatas)
         ]
+        try:
+            await active_index_store.assert_generation_writes_open()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         updated = await active_vector_store.update_metadata(name, changes)
         active_generation = await active_generation_id()
         if active_generation is not None:
@@ -1274,6 +1287,10 @@ def create_app(
             raise HTTPException(status_code=400, detail="url must be a non-empty string of at most 2048 characters")
         if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             raise HTTPException(status_code=400, detail="keep_sha256 must be a lowercase hex SHA-256")
+        try:
+            await active_index_store.assert_generation_writes_open()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         deleted = await active_vector_store.delete_superseded(name, url, digest)
         active_generation = await active_generation_id()
         if active_generation is not None:
@@ -1299,6 +1316,10 @@ def create_app(
         source_id = payload.get("source_id")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        try:
+            await active_index_store.assert_generation_writes_open()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         deleted = await active_vector_store.delete_superseded(name, source_id, "")
         active_generation = await active_generation_id()
         if active_generation is not None:

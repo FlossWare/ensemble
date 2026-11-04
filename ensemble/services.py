@@ -89,6 +89,8 @@ class DocumentService:
                 chunk.document_id = document.id
                 chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
             document = await self.store.save(document, chunks)
+        if self.index_store is not None:
+            await self.index_store.assert_generation_writes_open()
         active_generation_id = await self._active_generation()
         if active_generation_id is not None:
             await self.store.upsert_generation(

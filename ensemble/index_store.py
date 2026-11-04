@@ -100,6 +100,7 @@ class IndexStore(Protocol):
     async def acquire_generation_write_fence(self, generation_id: str, through_change_id: int) -> dict[str, Any]: ...
     async def release_generation_write_fence(self, generation_id: str) -> bool: ...
     async def recover_generation_write_fence(self) -> dict[str, Any]: ...
+    async def assert_generation_writes_open(self) -> None: ...
     async def acknowledge_generation_change(self, source_id: str, sequence: int, tombstoned: bool) -> int: ...
 
 
@@ -511,6 +512,14 @@ class SqliteIndexStore:
                     singleton_id=1, generation_id=generation_id, acquired_at=now,
                 ))
         return {"generation_id": generation_id, "through_change_id": high, "acquired_at": now.isoformat()}
+
+    async def assert_generation_writes_open(self) -> None:
+        async with self.engine.connect() as connection:
+            fence = (await connection.execute(select(generation_write_fence).where(
+                generation_write_fence.c.singleton_id == 1
+            ))).mappings().first()
+        if fence is not None:
+            raise RuntimeError("writes are fenced during generation cutover")
 
     async def recover_generation_write_fence(self) -> dict[str, Any]:
         """Release a cutover fence left by a process that stopped before activation.

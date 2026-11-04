@@ -267,6 +267,10 @@ class InMemoryIndexStore:
         return {"generation_id": generation_id, "through_change_id": high,
                 "acquired_at": datetime.now(timezone.utc).isoformat()}
 
+    async def assert_generation_writes_open(self) -> None:
+        if self._write_fence_generation is not None:
+            raise RuntimeError("writes are fenced during generation cutover")
+
     async def recover_generation_write_fence(self) -> dict[str, Any]:
         generation_id = self._write_fence_generation
         if generation_id is None:
