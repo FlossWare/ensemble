@@ -5,6 +5,7 @@ import hashlib
 import math
 import asyncio
 import os
+import time
 from collections.abc import Sequence
 from uuid import uuid5, NAMESPACE_URL
 from .chunking import Chunker, chunk as chunk_text
@@ -170,6 +171,7 @@ class SearchService:
         }
 
         # Keep channels independent: one failing must not suppress the other.
+        lexical_started = time.perf_counter()
         try:
             lexical_matches = await asyncio.wait_for(
                 self.store.lexical_search(query, limit=min(2000, max(200, limit * 4))),
@@ -179,11 +181,13 @@ class SearchService:
             channels["lexical"] = {
                 "status": "ok", "available": True,
                 "candidate_count": len(lexical_scores),
+                "duration_ms": round((time.perf_counter() - lexical_started) * 1000, 3),
             }
         except Exception as exc:
             channels["lexical"] = {
                 "status": "unavailable", "available": False,
                 "candidate_count": 0, "error": "lexical search failed",
+                "duration_ms": round((time.perf_counter() - lexical_started) * 1000, 3),
             }
             degraded.append("lexical_timeout" if isinstance(exc, TimeoutError) else "lexical")
 
@@ -197,11 +201,17 @@ class SearchService:
                 degraded.append("embeddings")
             else:
                 collection_error = False
+                vector_started = time.perf_counter()
+                embedding_ms = 0.0
+                collection_ms = 0.0
+                document_scan_ms = 0.0
                 try:
+                    embedding_started = time.perf_counter()
                     embedded = await asyncio.wait_for(
                         self.embeddings.embed([query], mode="query"),
                         timeout=_retrieval_channel_timeout(),
                     )
+                    embedding_ms = round((time.perf_counter() - embedding_started) * 1000, 3)
                     if not isinstance(embedded, list) or len(embedded) != 1:
                         raise RuntimeError("embedding provider returned an invalid query vector")
                     query_vector = embedded[0]
@@ -212,6 +222,7 @@ class SearchService:
 
                     collection_scores: dict = {}
                     if self.vector_store is not None:
+                        collection_started = time.perf_counter()
                         try:
                             vector_hits = await asyncio.wait_for(
                                 self.vector_store.query("transcript_text", query_vector, 200),
@@ -228,13 +239,17 @@ class SearchService:
                         except Exception as exc:
                             collection_error = True
                             collection_timeout = isinstance(exc, TimeoutError)
+                        finally:
+                            collection_ms = round((time.perf_counter() - collection_started) * 1000, 3)
 
+                    document_started = time.perf_counter()
                     document_scores: dict = {}
                     for item in indexed:
                         if item.chunk.embedding:
                             score = _cosine(query_vector, item.chunk.embedding)
                             if score > 0:
                                 document_scores[item.chunk.id] = score
+                    document_scan_ms = round((time.perf_counter() - document_started) * 1000, 3)
                     vector_scores = dict(collection_scores)
                     for identifier, score in document_scores.items():
                         vector_scores[identifier] = max(vector_scores.get(identifier, 0.0), score)
@@ -245,6 +260,10 @@ class SearchService:
                         "candidate_count": len(vector_scores),
                         "collection_candidate_count": len(collection_scores),
                         "document_candidate_count": len(document_scores),
+                        "duration_ms": round((time.perf_counter() - vector_started) * 1000, 3),
+                        "embedding_ms": embedding_ms,
+                        "collection_ms": collection_ms,
+                        "document_scan_ms": document_scan_ms,
                     }
                     if collection_error:
                         channels["vector"]["error"] = (
@@ -259,6 +278,10 @@ class SearchService:
                         "candidate_count": 0, "collection_candidate_count": 0,
                         "document_candidate_count": 0,
                         "error": "query embedding or vector search failed",
+                        "duration_ms": round((time.perf_counter() - vector_started) * 1000, 3),
+                        "embedding_ms": embedding_ms,
+                        "collection_ms": collection_ms,
+                        "document_scan_ms": document_scan_ms,
                     }
                     degraded.append("embeddings_timeout" if isinstance(exc, TimeoutError) else "embeddings")
 
