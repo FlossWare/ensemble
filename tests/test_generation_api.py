@@ -29,6 +29,16 @@ def test_generation_api_creates_build_and_reports_missing_capabilities(tmp_path)
         assert "memory" in build["blocked_capabilities"]
         assert "memory" in build["missing_checkpoints"]
         assert "memory_reconciliation" in build["missing_checkpoints"]
+        blocked_vector_write = client.put(
+            "/api/v1/vector/collections/building_test/records",
+            json={
+                "ids": ["blocked-vector"], "embeddings": [[1.0, 0.0]],
+                "documents": ["untracked vector mutation"],
+                "metadatas": [{"source_id": "untracked-vector-source"}],
+                "model": "test-model", "dimensions": 2,
+            },
+        )
+        assert blocked_vector_write.status_code == 409
 
 
 def test_generation_api_runs_all_copy_and_reconciliation_passes_before_fence(tmp_path):
