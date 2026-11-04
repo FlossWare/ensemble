@@ -85,3 +85,36 @@ def test_memory_writes_are_blocked_while_generation_write_fence_is_held(tmp_path
             await index.close()
 
     asyncio.run(exercise())
+
+
+
+def test_interrupted_generation_fence_is_released_after_restart(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'memory-fence-recovery.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    async def exercise():
+        index = SqliteIndexStore(database_url)
+        memory = SqliteMemoryStore(database_url)
+        await index.initialize()
+        await memory.initialize()
+        await index.create_generation("interrupted-fence")
+        await index.acquire_generation_write_fence("interrupted-fence", through_change_id=0)
+        await index.close()
+
+        restarted = SqliteIndexStore(database_url)
+        reopened_memory = SqliteMemoryStore(database_url)
+        await restarted.initialize()
+        await reopened_memory.initialize()
+        try:
+            recovered = await restarted.recover_generation_write_fence()
+            assert recovered["recovered"] is True
+            assert recovered["generation_id"] == "interrupted-fence"
+            await reopened_memory.write("after-restart", "writes resumed after recovery")
+            assert await reopened_memory.read("after-restart") == "writes resumed after recovery"
+        finally:
+            await reopened_memory.close()
+            await restarted.close()
+
+    asyncio.run(exercise())
