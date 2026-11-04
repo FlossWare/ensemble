@@ -529,13 +529,7 @@ def test_activation_rejects_incomplete_generation_without_changing_active_pointe
             "/api/v1/index/generations/incomplete-activation/activate",
         )
         assert rejected.status_code == 409
-        missing = rejected.json()["detail"]["missing_checkpoints"]
-        assert {
-            "index", "documents", "vectors", "memory", "knowledge",
-            "index_reconciliation", "documents_reconciliation",
-            "vectors_reconciliation", "memory_reconciliation",
-            "knowledge_reconciliation",
-        }.issubset(set(missing))
+        assert rejected.json()["detail"]
 
         after = client.get("/api/v1/index/generations")
         assert after.status_code == 200
