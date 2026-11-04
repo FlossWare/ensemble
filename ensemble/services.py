@@ -262,10 +262,24 @@ class SearchService:
         return (await self.search_with_status(query, limit))["results"]
 
     async def _search_with_status(
-        self, query: str, limit: int = 10, *, include_vector: bool = True, rerank: bool | None = None
+        self, query: str, limit: int = 10, *, include_vector: bool = True,
+        rerank: bool | None = None, trace: object | None = None,
     ) -> dict:
         if not query.strip():
             raise ValueError("query is required")
+
+        async def record_stage(name: str, status: str, started: float, **details: object) -> None:
+            if not callable(trace):
+                return
+            try:
+                await trace({
+                    "name": name, "status": status,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    **details,
+                })
+            except Exception:
+                # Observability must not become a retrieval dependency.
+                pass
 
         active_generation_id = None
         if self.index_store is not None:
@@ -314,6 +328,11 @@ class SearchService:
                 "duration_ms": round((time.perf_counter() - lexical_started) * 1000, 3),
             }
             degraded.append("lexical_timeout" if isinstance(exc, TimeoutError) else "lexical")
+
+        await record_stage(
+            "lexical_retrieval", channels["lexical"]["status"], lexical_started,
+            candidate_count=channels["lexical"]["candidate_count"],
+        )
 
         if include_vector:
             if not self.embeddings.available:
@@ -414,6 +433,39 @@ class SearchService:
                     }
                     degraded.append("embeddings_timeout" if isinstance(exc, TimeoutError) else "embeddings")
 
+        vector_channel = channels["vector"]
+        if include_vector:
+            if vector_channel.get("embedding_ms") is not None:
+                await record_stage(
+                    "query_embedding",
+                    "completed" if vector_channel.get("available") else "failed",
+                    time.perf_counter() - float(vector_channel.get("embedding_ms", 0)) / 1000.0,
+                    duration_ms=vector_channel.get("embedding_ms"),
+                    provider_available=bool(self.embeddings.available),
+                )
+                await record_stage(
+                    "vector_collection_query",
+                    "completed" if vector_channel.get("collection_candidate_count", 0) or vector_channel.get("status") == "ok" else "degraded",
+                    time.perf_counter() - float(vector_channel.get("collection_ms", 0)) / 1000.0,
+                    duration_ms=vector_channel.get("collection_ms", 0),
+                    candidate_count=vector_channel.get("collection_candidate_count", 0),
+                )
+                await record_stage(
+                    "document_vector_scan", "completed",
+                    time.perf_counter() - float(vector_channel.get("document_scan_ms", 0)) / 1000.0,
+                    duration_ms=vector_channel.get("document_scan_ms", 0),
+                    candidate_count=vector_channel.get("document_candidate_count", 0),
+                )
+            else:
+                await record_stage(
+                    "query_embedding",
+                    "failed" if not self.embeddings.available or vector_channel.get("status") == "unavailable" else "skipped",
+                    time.perf_counter(),
+                    provider_available=bool(self.embeddings.available),
+                )
+        else:
+            await record_stage("vector_retrieval", "skipped", time.perf_counter())
+
         lexical_ranks = _rank(lexical_scores)
         vector_ranks = _rank(vector_scores)
         ranked_channels = {
@@ -433,8 +485,16 @@ class SearchService:
             if any(stats.get("calls", 0) for stats in feedback.values()):
                 selected_weights = thompson_channel_weights(feedback)
                 weight_strategy = "thompson"
+        fusion_started = time.perf_counter()
         fused = reciprocal_rank_fusion(
             ranked_channels, k=self.rrf_k, weights=selected_weights,
+        )
+        await record_stage(
+            "rrf_fusion", "completed", fusion_started,
+            algorithm="weighted_rrf" if any(weight != 1.0 for weight in selected_weights.values()) or weight_strategy == "thompson" else "rrf",
+            k=self.rrf_k, channel_candidate_counts={
+                name: len(candidates) for name, candidates in ranked_channels.items()
+            }, fused_candidate_count=len(fused),
         )
         fused_by_id = {item.candidate_id: item for item in fused}
         hits: list[SearchHit] = []
@@ -479,9 +539,15 @@ class SearchService:
                     continue
                 current_hits.append(hit)
             hits = current_hits
+        finalization_started = time.perf_counter()
         results = sorted(
             hits, key=lambda hit: (-hit.fusion_score, -hit.lexical_score, str(hit.chunk_id)),
         )[:limit]
+        await record_stage(
+            "generation_filter_and_final_order", "completed", finalization_started,
+            candidate_count=len(hits), result_count=len(results),
+            active_generation=active_generation_id is not None,
+        )
         fusion_diagnostics = {
             "algorithm": "weighted_rrf" if any(weight != 1.0 for weight in selected_weights.values()) or weight_strategy == "thompson" else "rrf",
             "k": self.rrf_k,
@@ -526,6 +592,11 @@ class SearchService:
             retrieval = "vector"
         else:
             retrieval = "unavailable"
+        await record_stage(
+            "retrieval_response", "completed" if operational_channels > 0 else "degraded",
+            finalization_started, result_count=len(results), retrieval=retrieval,
+            degraded=sorted(set(degraded)),
+        )
         return {
             "ok": operational_channels > 0,
             "status": status,

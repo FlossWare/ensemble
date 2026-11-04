@@ -97,8 +97,10 @@ def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch
         assert trace["operation"] == "document_ingestion"
         assert trace["status"] in {"completed", "degraded"}
         assert [stage["name"] for stage in trace["stages"]] == [
-            "index_revision", "document_materialization",
-            "graph_entity_linking", "generation_acknowledgement",
+            "index_revision", "chunking", "embedding", "document_persistence",
+            "document_generation_mirror", "vector_indexing_and_generation_mirror",
+            "document_materialization", "graph_entity_linking",
+            "generation_acknowledgement",
         ]
         index = asyncio.run(index_store.get_source("https://example.org/guide"))
         knowledge = asyncio.run(knowledge_store.get("https://example.org/guide"))

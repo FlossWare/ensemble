@@ -3272,26 +3272,22 @@ def create_app(
         except Exception:
             pass
         try:
+            async def record_retrieval_stage(stage: dict[str, Any]) -> None:
+                if not created:
+                    return
+                try:
+                    await active_execution_trace_store.record_stage(trace_id, stage)
+                except Exception:
+                    pass
+
             result = await search.search_with_status(
-                search_request.query, search_request.limit, rerank=search_request.rerank
+                search_request.query, search_request.limit,
+                rerank=search_request.rerank, trace=record_retrieval_stage,
             )
             fusion = result.get("fusion") or {}
             channels = fusion.get("channels") or {}
             if created:
                 try:
-                    await active_execution_trace_store.record_stage(trace_id, {
-                        "name": "lexical_vector_retrieval_and_fusion",
-                        "status": "completed",
-                        "duration_ms": round((time.perf_counter() - started) * 1000, 3),
-                        "candidate_count": len(result.get("results", [])),
-                        "channel_candidate_counts": {
-                            name: details.get("candidate_count", 0)
-                            for name, details in channels.items() if isinstance(details, dict)
-                        },
-                        "fusion_algorithm": fusion.get("algorithm"),
-                        "rrf_k": fusion.get("k"),
-                        "degraded": result.get("degraded", []),
-                    })
                     await active_execution_trace_store.finish(
                         trace_id,
                         "degraded" if result.get("degraded") else "completed",
