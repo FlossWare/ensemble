@@ -843,8 +843,9 @@ def test_source_reclamation_waits_for_generation_build_to_finish(tmp_path):
         assert source["tombstoned"] is True
         assert source["purged"] is False
 
-        chunks = client.post("/api/v1/documents/chunks/query", json={
-            "source_ids": ["reclaim-during-build"],
-        })
-        assert chunks.status_code == 200
-        assert chunks.json()["chunks"]
+        with sqlite3.connect(tmp_path / "generation-api.db") as connection:
+            retained = connection.execute(
+                "SELECT COUNT(*) FROM ensemble_documents WHERE source_id = ?",
+                ("reclaim-during-build",),
+            ).fetchone()[0]
+        assert retained == 1
