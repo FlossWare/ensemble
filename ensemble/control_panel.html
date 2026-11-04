@@ -142,6 +142,12 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <p id="status">Preview first. Ingestion is a separate explicit action.</p>
 <pre id="crawl-results">No crawl preview run. Crawling is preview-only.</pre>
 <pre id="crawl-job-results">No durable crawl job queued.</pre>
+<div class="inline-fields">
+<label for="crawl-interval">Automatic refresh interval (seconds, 3600-2592000)</label>
+<input id="crawl-interval" type="number" min="3600" max="2592000" value="86400">
+<button id="crawl-schedule" type="button">Schedule automatic refresh</button>
+</div>
+<div id="crawl-schedules">No automatic refresh schedules.</div>
 <section id="preview" hidden>
 <h2 id="title"></h2><p id="metadata"></p><pre id="body"></pre><h3>Discovered links (not crawled)</h3><div id="links"></div>
 <button id="ingest" type="button">Ingest this page</button>

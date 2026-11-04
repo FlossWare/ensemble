@@ -100,6 +100,67 @@ const crawlQueue=document.getElementById("crawl-queue");
 const crawlRetry=document.getElementById("crawl-retry");
 const crawlJobResults=document.getElementById("crawl-job-results");
 const crawlIngest=document.getElementById("crawl-ingest");
+
+const crawlInterval=document.getElementById("crawl-interval");
+const crawlSchedule=document.getElementById("crawl-schedule");
+const crawlSchedules=document.getElementById("crawl-schedules");
+async function refreshCrawlSchedules(){
+ const response=await fetch("/api/v1/ingest/urls/schedules");
+ const payload=await response.json();
+ if(!response.ok)throw new Error(typeof payload.detail==="string"?payload.detail:JSON.stringify(payload.detail));
+ crawlSchedules.replaceChildren();
+ if(!payload.schedules.length){crawlSchedules.textContent="No automatic refresh schedules.";return;}
+ for(const schedule of payload.schedules){
+  const row=document.createElement("div");
+  row.className="inline-fields";
+  const summary=document.createElement("span");
+  summary.textContent=schedule.uri+" · every "+schedule.interval_seconds+"s · "+(schedule.enabled?"enabled":"paused")+" · next "+schedule.next_run_at;
+  row.appendChild(summary);
+  const toggle=document.createElement("button");
+  toggle.type="button";
+  toggle.textContent=schedule.enabled?"Pause":"Resume";
+  toggle.addEventListener("click",async()=>{
+   toggle.disabled=true;
+   try{
+    await request("/api/v1/ingest/urls/schedules/"+encodeURIComponent(schedule.schedule_id)+"/"+(schedule.enabled?"pause":"resume"),{});
+    await refreshCrawlSchedules();
+   }catch(error){status.textContent="Schedule update failed: "+error.message;}
+   finally{toggle.disabled=false;}
+  });
+  row.appendChild(toggle);
+  const remove=document.createElement("button");
+  remove.type="button";
+  remove.textContent="Delete";
+  remove.addEventListener("click",async()=>{
+   remove.disabled=true;
+   try{
+    const result=await fetch("/api/v1/ingest/urls/schedules/"+encodeURIComponent(schedule.schedule_id),{method:"DELETE"});
+    if(!result.ok)throw new Error("schedule deletion failed");
+    await refreshCrawlSchedules();
+   }catch(error){status.textContent="Schedule deletion failed: "+error.message;}
+   finally{remove.disabled=false;}
+  });
+  row.appendChild(remove);
+  crawlSchedules.appendChild(row);
+ }
+}
+crawlSchedule.addEventListener("click",async()=>{
+ crawlSchedule.disabled=true;
+ try{
+  const result=await request("/api/v1/ingest/urls/schedules",{
+   uri:uri.value.trim(),
+   interval_seconds:Number.parseInt(crawlInterval.value,10),
+   max_pages:Number.parseInt(crawlPages.value,10),
+   max_depth:Number.parseInt(crawlDepth.value,10),
+   run_immediately:true
+  });
+  status.textContent="Automatic source refresh scheduled: "+result.schedule.schedule_id;
+  await refreshCrawlSchedules();
+ }catch(error){status.textContent="Could not schedule source refresh: "+error.message;}
+ finally{crawlSchedule.disabled=false;}
+});
+refreshCrawlSchedules().catch(error=>{crawlSchedules.textContent="Could not load source schedules: "+error.message;});
+
 let activeCrawlJobId=null;
 async function readCrawlJob(jobId){
  const response=await fetch("/api/v1/ingest/urls/crawl-jobs/"+encodeURIComponent(jobId));
