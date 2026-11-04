@@ -595,7 +595,7 @@ def test_failed_activation_rolls_back_pointer_state_and_fence(tmp_path):
             for item in status["generations"]
         }
         assert status["active_generation_id"] == "generation-original"
-        assert status["epoch"] == 1
+        assert status["epoch"] == initial["epoch"] + 1
         assert states["generation-original"] == "active"
         assert states["generation-target"] == "building"
         with pytest.raises(RuntimeError, match="writes are fenced"):
