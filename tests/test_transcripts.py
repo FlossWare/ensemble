@@ -1,8 +1,11 @@
+import asyncio
+import hashlib
 import json
 
 import pytest
 
 from ensemble.transcripts import parse_jsonl
+from ensemble.transcript_store import InMemoryTranscriptCheckpointStore
 
 
 def _line(record):
@@ -59,3 +62,121 @@ def test_jsonl_parser_skips_malformed_complete_lines_but_advances_checkpoint():
 def test_jsonl_parser_rejects_invalid_offsets(offset):
     with pytest.raises(ValueError):
         parse_jsonl("", session_id="session", offset=offset)
+
+
+def _checkpoint_commit(store, *, start=0, end=4, payload=b"data", result=None):
+    return asyncio.run(store.commit(
+        "source-1", "revision-1", "project", "transcript.jsonl",
+        start, end, hashlib.sha256(payload).hexdigest(),
+        result or {"inserted": 1},
+    ))
+
+
+def test_checkpoint_accepts_caller_supplied_initial_offset():
+    store = InMemoryTranscriptCheckpointStore()
+    first = _checkpoint_commit(store, start=4, end=8)
+
+    assert first["replayed"] is False
+    assert first["checkpoint"]["byte_offset"] == 8
+
+
+def test_checkpoint_advances_and_exact_retry_is_reported_as_replay():
+    store = InMemoryTranscriptCheckpointStore()
+    first = _checkpoint_commit(store)
+    replay = _checkpoint_commit(store)
+
+    assert first["replayed"] is False
+    assert first["checkpoint"]["byte_offset"] == 4
+    assert replay["replayed"] is True
+    assert replay["result"] == {"inserted": 1}
+
+
+def test_checkpoint_rejects_gap_or_overlap_without_mutating_state():
+    store = InMemoryTranscriptCheckpointStore()
+    _checkpoint_commit(store)
+
+    with pytest.raises(ValueError, match="expected byte offset 4"):
+        _checkpoint_commit(store, start=8, end=12, payload=b"next")
+
+    checkpoint = asyncio.run(store.get("source-1", "revision-1"))
+    assert checkpoint["byte_offset"] == 4
+
+
+def test_zero_byte_incomplete_tail_retry_is_idempotent_but_changed_tail_can_retry():
+    store = InMemoryTranscriptCheckpointStore()
+    first = _checkpoint_commit(store, start=0, end=0, payload=b'{"partial":')
+    replay = _checkpoint_commit(store, start=0, end=0, payload=b'{"partial":')
+    appended = _checkpoint_commit(
+        store, start=0, end=13, payload=b'{"partial":}\n', result={"inserted": 0}
+    )
+
+    assert first["replayed"] is False
+    assert replay["replayed"] is True
+    assert appended["replayed"] is False
+    assert appended["checkpoint"]["byte_offset"] == 13
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "digest"),
+    [
+        (-1, 0, "0" * 64),
+        (0, -1, "0" * 64),
+        (True, 1, "0" * 64),
+        (2, 1, "0" * 64),
+        (0, 1, "not-a-digest"),
+    ],
+)
+def test_checkpoint_rejects_invalid_offsets_and_payload_digests(start, end, digest):
+    store = InMemoryTranscriptCheckpointStore()
+    with pytest.raises(ValueError):
+        asyncio.run(store.commit(
+            "source-1", "revision-1", "project", "transcript.jsonl",
+            start, end, digest, {"inserted": 0},
+        ))
+
+
+def test_transcript_jobs_record_completion_failures_and_restart_recovery():
+    store = InMemoryTranscriptCheckpointStore()
+    job_id = "a" * 64
+
+    first = asyncio.run(store.start_job(
+        job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+        64, hashlib.sha256(b"slice").hexdigest(),
+    ))
+    duplicate = asyncio.run(store.start_job(
+        job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+        64, hashlib.sha256(b"slice").hexdigest(),
+    ))
+    assert first == {"status": "running", "attempts": 1, "created": True}
+    assert duplicate == {"status": "running", "attempts": 1, "created": False}
+
+    recovered = asyncio.run(store.recover_interrupted())
+    interrupted = asyncio.run(store.get_job(job_id))
+    assert recovered == 1
+    assert interrupted["status"] == "interrupted"
+    assert "Process restarted" in interrupted["last_error"]
+
+    retry = asyncio.run(store.start_job(
+        job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+        64, hashlib.sha256(b"slice").hexdigest(),
+    ))
+    assert retry == {"status": "running", "attempts": 2, "created": True}
+
+    asyncio.run(store.fail_job(job_id, "temporary indexing failure"))
+    failed = asyncio.run(store.get_job(job_id))
+    assert failed["status"] == "failed"
+    assert failed["last_error"] == "temporary indexing failure"
+
+    retry = asyncio.run(store.start_job(
+        job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+        64, hashlib.sha256(b"slice").hexdigest(),
+    ))
+    assert retry["status"] == "running"
+    assert retry["attempts"] == 3
+
+    completed = asyncio.run(store.complete_job(job_id, 96, {"inserted": 2}))
+    assert completed["status"] == "completed"
+    assert completed["end_offset"] == 96
+    assert completed["result"] == {"inserted": 2}
+    assert asyncio.run(store.get_job(job_id))["status"] == "completed"
+    assert asyncio.run(store.list_jobs(10))[0]["job_id"] == job_id
