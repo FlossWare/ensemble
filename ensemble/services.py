@@ -221,14 +221,14 @@ class SearchService:
         # Keep channels independent: one failing must not suppress the other.
         lexical_started = time.perf_counter()
         try:
-            lexical_operation = (
-                self.store.generation_lexical_search(
-                    active_generation_id, query, limit=min(2000, max(200, limit * 4)),
-                ) if active_generation_id is not None else
-                self.store.lexical_search(query, limit=min(2000, max(200, limit * 4)))
-            )
+            # Preserve the canonical FTS5/BM25 analyzer and scoring path.
+            # Candidate IDs are intersected with the active generation below,
+            # so stale or out-of-generation base rows cannot become results.
             lexical_matches = await asyncio.wait_for(
-                lexical_operation, timeout=_retrieval_channel_timeout(),
+                self.store.lexical_search(
+                    query, limit=min(2000, max(200, limit * 4)),
+                ),
+                timeout=_retrieval_channel_timeout(),
             )
             lexical_scores = {item.chunk.id: score for item, score in lexical_matches}
             channels["lexical"] = {
