@@ -134,8 +134,8 @@ def test_hybrid_exposes_deterministic_rrf_contributions_and_configured_k(monkeyp
         first = diagnostics[0]
         assert first["lexical_rank"] == 1
         assert first["vector_rank"] == 1
-        assert first["contributions"]["lexical"] == 1 / 21
-        assert first["contributions"]["vector"] == 1 / 21
+        assert first["contributions"]["lexical"] == round(1 / 21, 8)
+        assert first["contributions"]["vector"] == round(1 / 21, 8)
         assert first["score"] == round(2 / 21, 8)
 
 
