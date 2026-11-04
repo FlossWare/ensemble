@@ -219,7 +219,8 @@ def test_bounded_crawl_emits_real_page_and_policy_trace_stages(monkeypatch):
     ))
     assert result["page_count"] == 1
     assert [stage["name"] for stage in stages] == [
-        "robots_policy", "page_fetch_and_extraction", "crawl_summary",
+        "robots_policy", "initial_page_policy",
+        "page_fetch_and_extraction", "crawl_summary",
     ]
     assert stages[0]["policy_applied"] is True
     assert stages[1]["page"] == 1
