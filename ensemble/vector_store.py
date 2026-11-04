@@ -35,11 +35,6 @@ index_sources = Table(
     Column("source_id", String(512), primary_key=True),
     Column("tombstoned", Boolean, nullable=False),
 )
-index_sources = Table(
-    "ensemble_index_sources", vector_metadata,
-    Column("source_id", String(512), primary_key=True),
-    Column("tombstoned", Boolean, nullable=False),
-)
 generation_records = Table(
     "ensemble_vector_generation_records",
     vector_metadata,
