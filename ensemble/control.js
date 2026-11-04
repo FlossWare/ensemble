@@ -398,6 +398,58 @@ const retrievalForm=document.getElementById("retrieval-form");
 const retrievalQuery=document.getElementById("retrieval-query");
 const retrievalLimit=document.getElementById("retrieval-limit");
 const retrievalResults=document.getElementById("retrieval-results");
+function renderRetrievalPipeline(result){
+ retrievalResults.replaceChildren();
+ const fusion=result.fusion||{};
+ const summary=document.createElement("p");
+ summary.textContent="Pipeline: candidate retrieval → "+(fusion.algorithm||"fusion")+" (k="+String(fusion.k??"n/a")+") → "+(result.reranked?"reranking applied":"optional reranking")+
+  ". Weight strategy: "+(fusion.weight_strategy||"static")+
+  ". Retrieval status: "+(result.status||"unknown")+
+  (result.degraded?.length?"; degraded: "+result.degraded.join(", "):"");
+ retrievalResults.append(summary);
+ const weights=document.createElement("p");
+ weights.textContent="Channel weights: "+JSON.stringify(fusion.weights||{});
+ retrievalResults.append(weights);
+ const channelTable=document.createElement("table");
+ const channelHead=document.createElement("tr");
+ for(const label of ["Channel","Candidates","Status"]){
+  const cell=document.createElement("th");cell.textContent=label;channelHead.append(cell);
+ }
+ channelTable.append(channelHead);
+ for(const [name,details] of Object.entries(fusion.channels||{})){
+  const row=document.createElement("tr");
+  for(const value of [name,details.candidate_count??0,result.channels?.[name]?.status||"retrieved"]){
+   const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);
+  }
+  channelTable.append(row);
+ }
+ retrievalResults.append(channelTable);
+ const fusionTitle=document.createElement("h3");fusionTitle.textContent="RRF contributions";retrievalResults.append(fusionTitle);
+ const fusionTable=document.createElement("table");
+ const fusionHead=document.createElement("tr");
+ for(const label of ["Candidate","Ranks","Contributions","Fused score"]){
+  const cell=document.createElement("th");cell.textContent=label;fusionHead.append(cell);
+ }
+ fusionTable.append(fusionHead);
+ for(const item of fusion.results||[]){
+  const row=document.createElement("tr");
+  for(const value of [
+   item.chunk_id,
+   JSON.stringify(item.ranks||{lexical:item.lexical_rank,vector:item.vector_rank,graph:item.graph_rank}),
+   JSON.stringify(item.contributions||{}),
+   item.score
+  ]){
+   const cell=document.createElement("td");cell.textContent=String(value??"");row.append(cell);
+  }
+  fusionTable.append(row);
+ }
+ retrievalResults.append(fusionTable);
+ const resultTitle=document.createElement("h3");resultTitle.textContent="Final results";retrievalResults.append(resultTitle);
+ const raw=document.createElement("details");
+ const disclosure=document.createElement("summary");disclosure.textContent="Full response JSON";raw.append(disclosure);
+ const pre=document.createElement("pre");pre.textContent=JSON.stringify(result,null,2);raw.append(pre);
+ retrievalResults.append(raw);
+}
 retrievalForm.addEventListener("submit",async event=>{
  event.preventDefault();retrievalResults.textContent="Searching…";
  try{
@@ -405,7 +457,7 @@ retrievalForm.addEventListener("submit",async event=>{
    query:retrievalQuery.value.trim(),limit:Number(retrievalLimit.value),
    rerank:document.getElementById("retrieval-rerank").checked
   });
-  retrievalResults.textContent=JSON.stringify(result,null,2);
+  renderRetrievalPipeline(result);
  }catch(error){retrievalResults.textContent="Search failed: "+error.message;}
 });
 

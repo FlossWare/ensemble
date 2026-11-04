@@ -37,6 +37,8 @@ def test_control_panel_is_served_by_the_api():
         assert "/api/v1/thompson/state" in script.text
         assert 'textContent="Reset"' in script.text
         assert "/api/v1/search/hybrid" in script.text
+        assert "renderRetrievalPipeline" in script.text
+        assert "RRF contributions" in script.text
         assert "/api/v1/context/assemble" in script.text
         assert "/api/v1/index/manifest" in script.text
         assert "/api/v1/memory/search/hybrid" in script.text
