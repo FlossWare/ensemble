@@ -35,3 +35,19 @@ def test_evaluate_runs_compares_lexical_vector_and_fusion_baselines():
 def test_evaluation_rejects_invalid_inputs(qrels, runs, k):
     with pytest.raises(ValueError):
         evaluate_runs(qrels, runs, k=k)
+
+
+def test_evaluation_rejects_duplicate_candidates_in_ranked_runs():
+    with pytest.raises(ValueError, match="duplicate"):
+        evaluate_runs(
+            {"q": {"a": 3, "b": 1}},
+            {"rrf": {"q": ["a", "a", "b"]}},
+        )
+
+
+def test_evaluation_rejects_runs_for_unknown_queries():
+    with pytest.raises(ValueError, match="without qrels"):
+        evaluate_runs(
+            {"q": {"a": 1}},
+            {"rrf": {"q": ["a"], "q-typo": ["b"]}},
+        )

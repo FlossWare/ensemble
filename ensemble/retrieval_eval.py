@@ -62,12 +62,17 @@ def evaluate_runs(
         if not isinstance(system, str) or not system.strip() or not isinstance(query_runs, Mapping):
             raise ValueError("each run must have a non-empty system name and query mapping")
         per_query = {}
+        unknown_queries = set(query_runs) - set(normalized_qrels)
+        if unknown_queries:
+            raise ValueError(f"run {system!r} contains queries without qrels: {sorted(unknown_queries)!r}")
         for query, relevance in normalized_qrels.items():
             ranked = query_runs.get(query, [])
             if not isinstance(ranked, Sequence) or isinstance(ranked, (str, bytes, bytearray)):
                 raise ValueError(f"ranked results for {system}/{query} must be a sequence")
             if any(not isinstance(identity, str) or not identity.strip() for identity in ranked):
                 raise ValueError(f"ranked identities for {system}/{query} must be non-empty strings")
+            if len(set(ranked)) != len(ranked):
+                raise ValueError(f"ranked results for {system}/{query} contain duplicate identities")
             per_query[query] = {
                 f"recall@{k}": recall_at_k(ranked, relevance, k),
                 f"mrr@{k}": reciprocal_rank_at_k(ranked, relevance, k),
