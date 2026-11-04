@@ -222,8 +222,17 @@ def _chunk_markdown(content: str, max_chunk_size: int = 2000) -> list[dict[str, 
 
 
 
-def _fuse_memory_results(keyword_results, semantic_results, top_k, k=60):
+def _memory_rrf_constant() -> int:
+    try:
+        value = int(os.getenv("ENSEMBLE_RRF_K", "60"))
+    except (TypeError, ValueError):
+        return 60
+    return value if 1 <= value <= 10_000 else 60
+
+
+def _fuse_memory_results(keyword_results, semantic_results, top_k, k=None):
     """Fuse Memory's lexical and semantic rankings without comparing raw scores."""
+    k = _memory_rrf_constant() if k is None else k
     ranked = {"keyword": [], "semantic": []}
     identities, raw, ranks = {}, {}, {}
     for channel, results in (("keyword", keyword_results), ("semantic", semantic_results)):

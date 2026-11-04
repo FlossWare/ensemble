@@ -92,3 +92,21 @@ def test_sqlite_memory_expiry_and_delete_semantics(tmp_path):
         await store.close()
 
     asyncio.run(exercise())
+
+
+
+def test_memory_hybrid_uses_shared_configured_rrf_constant(monkeypatch):
+    from ensemble.memory_store import _fuse_memory_results
+
+    monkeypatch.setenv("ENSEMBLE_RRF_K", "20")
+    results = _fuse_memory_results(
+        [{"file": "memory-a", "section": "Intro", "score": 0.9}],
+        [{"file": "memory-a", "section": "Intro", "score": 0.2}],
+        5,
+    )
+    assert results[0]["fusion"]["k"] == 20
+    assert results[0]["score"] == round((1 / 21) + (1 / 21), 6)
+    assert results[0]["fusion"]["contributions"] == {
+        "keyword": round(1 / 21, 6),
+        "semantic": round(1 / 21, 6),
+    }
