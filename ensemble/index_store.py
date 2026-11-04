@@ -21,6 +21,18 @@ sources = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
+generation_sources = Table(
+    "ensemble_index_generation_sources",
+    index_metadata,
+    Column("generation_id", String(64), primary_key=True),
+    Column("source_id", String(512), primary_key=True),
+    Column("high_sequence", Integer, nullable=False),
+    Column("revision_id", String(512), nullable=False),
+    Column("profiles", JSON, nullable=False),
+    Column("tombstoned", Boolean, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
 
 generations = Table(
     "ensemble_index_generations",
@@ -52,6 +64,9 @@ class IndexStore(Protocol):
     async def list_sources(self, limit: int) -> list[dict[str, Any]]: ...
     async def source_key_upper_bound(self) -> str | None: ...
     async def list_sources_after(self, cursor: str | None, upper_bound: str | None, limit: int) -> list[dict[str, Any]]: ...
+    async def put_generation_source(self, generation_id: str, source: dict[str, Any]) -> dict[str, Any]: ...
+    async def get_generation_source(self, generation_id: str, source_id: str) -> dict[str, Any] | None: ...
+    async def list_generation_sources_after(self, generation_id: str, cursor: str | None, upper_bound: str | None, limit: int) -> list[dict[str, Any]]: ...
     async def generation_status(self) -> dict[str, Any]: ...
     async def create_generation(self, generation_id: str) -> dict[str, Any]: ...
     async def record_generation_checkpoint(self, generation_id: str, capability: str, checkpoint: dict[str, Any], sealed: bool = False) -> dict[str, Any]: ...
@@ -224,6 +239,125 @@ class SqliteIndexStore:
                 generations.c.generation_id == generation_id
             ))).mappings().one()
         return dict(row)
+
+
+    async def put_generation_source(self, generation_id: str, source: dict[str, Any]) -> dict[str, Any]:
+        required = {"source_id", "high_sequence", "revision_id", "profiles", "tombstoned"}
+        if not isinstance(source, dict) or not required.issubset(source):
+            raise ValueError("source state is incomplete")
+        source_id = source["source_id"]
+        if not isinstance(source["profiles"], dict) or not isinstance(source["tombstoned"], bool):
+            raise ValueError("profiles must be an object and tombstoned must be boolean")
+        sequence = source["high_sequence"]
+        revision_id = source["revision_id"]
+        profiles = dict(sorted(source["profiles"].items()))
+        tombstoned = bool(source["tombstoned"])
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("high_sequence must be a positive integer")
+        if not isinstance(revision_id, str) or not revision_id or len(revision_id) > 512:
+            raise ValueError("revision_id must contain 1-512 characters")
+        import json
+        try:
+            json.dumps(profiles, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("profiles must contain finite JSON values") from exc
+        async with self.engine.begin() as connection:
+            generation = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().first()
+            if generation is None or generation["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            row = (await connection.execute(select(generation_sources).where(
+                generation_sources.c.generation_id == generation_id,
+                generation_sources.c.source_id == source_id,
+            ))).mappings().first()
+            now = datetime.now(timezone.utc)
+            if row is None:
+                await connection.execute(generation_sources.insert().values(
+                    generation_id=generation_id, source_id=source_id,
+                    high_sequence=sequence, revision_id=revision_id,
+                    profiles=profiles, tombstoned=tombstoned, updated_at=now,
+                ))
+                decision = "accepted"
+            elif row["tombstoned"]:
+                decision = "tombstoned"
+            elif tombstoned:
+                await connection.execute(generation_sources.update().where(
+                    generation_sources.c.generation_id == generation_id,
+                    generation_sources.c.source_id == source_id,
+                ).values(
+                    high_sequence=max(sequence, row["high_sequence"]),
+                    tombstoned=True, updated_at=now,
+                ))
+                decision = "tombstoned"
+            elif sequence > row["high_sequence"]:
+                await connection.execute(generation_sources.update().where(
+                    generation_sources.c.generation_id == generation_id,
+                    generation_sources.c.source_id == source_id,
+                ).values(
+                    high_sequence=sequence, revision_id=revision_id,
+                    profiles=profiles, updated_at=now,
+                ))
+                decision = "accepted"
+            elif sequence == row["high_sequence"]:
+                decision = "duplicate" if row["revision_id"] == revision_id and row["profiles"] == profiles else "conflict"
+            else:
+                decision = "superseded"
+            current = (await connection.execute(select(generation_sources).where(
+                generation_sources.c.generation_id == generation_id,
+                generation_sources.c.source_id == source_id,
+            ))).mappings().one()
+        return {
+            "decision": decision, "source": {
+                "source_id": current["source_id"],
+                "high_sequence": current["high_sequence"],
+                "revision_id": current["revision_id"],
+                "profiles": current["profiles"],
+                "tombstoned": bool(current["tombstoned"]),
+                "updated_at": current["updated_at"].isoformat(),
+            },
+        }
+
+    async def get_generation_source(self, generation_id: str, source_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as connection:
+            row = (await connection.execute(select(generation_sources).where(
+                generation_sources.c.generation_id == generation_id,
+                generation_sources.c.source_id == source_id,
+            ))).mappings().first()
+        if row is None:
+            return None
+        return {
+            "source_id": row["source_id"], "high_sequence": row["high_sequence"],
+            "revision_id": row["revision_id"], "profiles": row["profiles"],
+            "tombstoned": bool(row["tombstoned"]),
+            "updated_at": row["updated_at"].isoformat(),
+        }
+
+    async def list_generation_sources_after(
+        self, generation_id: str, cursor: str | None,
+        upper_bound: str | None, limit: int,
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        if upper_bound is None:
+            return []
+        statement = select(generation_sources).where(
+            generation_sources.c.generation_id == generation_id,
+            generation_sources.c.source_id <= upper_bound,
+        )
+        if cursor is not None:
+            statement = statement.where(generation_sources.c.source_id > cursor)
+        statement = statement.order_by(generation_sources.c.source_id).limit(limit)
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(statement)).mappings().all()
+        return [{
+            "source_id": row["source_id"], "high_sequence": row["high_sequence"],
+            "revision_id": row["revision_id"], "profiles": row["profiles"],
+            "tombstoned": bool(row["tombstoned"]),
+            "updated_at": row["updated_at"].isoformat(),
+        } for row in rows]
 
     async def record_revision(self, source_id: str, sequence: int, revision_id: str, profiles: dict[str, Any]) -> dict[str, Any]:
         async with self.engine.begin() as connection:

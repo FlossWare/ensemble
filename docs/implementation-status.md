@@ -160,3 +160,19 @@ Consistency boundary:
 - The upper key bounds the key range; it does not provide a transactionally consistent snapshot.
 - Updates to existing source rows and new keys inserted below the bound must be reconciled before cutover.
 - Write fences and acknowledged-write reconciliation remain required.
+
+
+## Generation-scoped Index source state
+
+Implemented:
+- Versioned SQLite migration 0020 for source revision and tombstone state per generation.
+- Monotonic revision-sequence updates within a generation.
+- Tombstones remain authoritative and cannot be undone by delayed source revisions.
+- Generation-scoped source lookup and keyset pagination.
+- SQLite and in-memory adapters share the same decisions for accepted, duplicate, conflict, superseded, and tombstoned writes.
+- Tests cover durable state, cursor pagination, stale revisions, and anti-resurrection.
+
+Still outstanding:
+- Rebuild orchestration to copy the active Index source set and its tombstones into a building generation.
+- Snapshot consistency and concurrent-write reconciliation.
+- Write fences, durable job recovery, and coordinated activation across all stores.
