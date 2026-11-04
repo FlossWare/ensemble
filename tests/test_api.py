@@ -1588,3 +1588,65 @@ def test_in_memory_index_generation_builder_resumes_and_seals():
         assert shadow["checkpoints"]["index"]["sealed"] is True
 
     asyncio.run(exercise())
+
+
+def test_document_generation_builder_copies_documents_and_applies_tombstones(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'document-builder.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    index_store = SqliteIndexStore(database_url)
+    document_store = SqlDocumentStore(database_url)
+    vector_store = SqliteVectorStore(database_url)
+
+    async def exercise():
+        await index_store.initialize()
+        await document_store.initialize()
+        await vector_store.initialize()
+        for source_id in ("source-a", "source-b"):
+            await index_store.record_revision(source_id, 1, "r1", {})
+            document = Document(source_id, 1, source_id, f"{source_id} document content")
+            await document_store.save(document, [Chunk(document.id, 0, document.content)])
+        await index_store.record_tombstone("source-c", 2)
+        await index_store.create_generation("generation-shadow")
+
+        builder = IndexGenerationBuilder(index_store, document_store, vector_store)
+        while True:
+            page = await builder.copy_index_sources("generation-shadow", page_size=2)
+            if page["status"] == "complete":
+                break
+        first = await builder.copy_documents_page("generation-shadow", page_size=2)
+        assert first["status"] == "in_progress"
+        second = await builder.copy_documents_page("generation-shadow", page_size=2)
+        assert second["status"] == "complete"
+        assert second["document_count"] == 2
+        assert second["chunk_count"] == 2
+        assert second["tombstone_count"] == 1
+
+        shadow_chunks = await document_store.generation_all_chunks("generation-shadow")
+        assert {item.document.source_id for item in shadow_chunks} == {"source-a", "source-b"}
+        shadow_state = await index_store.list_generation_sources_after(
+            "generation-shadow", None, "source-c", 10,
+        )
+        assert shadow_state[-1]["tombstoned"] is True
+        status = await index_store.generation_status()
+        generation = next(item for item in status["generations"] if item["generation_id"] == "generation-shadow")
+        assert generation["checkpoints"]["documents"]["sealed"] is True
+        await vector_store.close()
+        await document_store.close()
+        await index_store.close()
+
+    asyncio.run(exercise())
+
+
+def test_document_generation_builder_requires_sealed_index_pass():
+    index_store = InMemoryIndexStore()
+    document_store = InMemoryDocumentStore()
+    builder = IndexGenerationBuilder(index_store, document_store)
+
+    async def exercise():
+        await index_store.create_generation("shadow")
+        with pytest.raises(RuntimeError, match="Index source copy must be sealed"):
+            await builder.copy_documents_page("shadow")
+
+    asyncio.run(exercise())
