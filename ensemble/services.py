@@ -11,7 +11,7 @@ from .chunking import Chunker, chunk as chunk_text
 from .embeddings import EmbeddingProvider, MAX_TEXTS as MAX_EMBEDDING_BATCH
 from .models import Chunk, Document, DocumentIn, DocumentOut, SearchHit
 from .store import DocumentStore
-from .reranking import Reranker
+from .reranking import Reranker, RerankingDecorator, configured_ranking_provider
 from .vector_store import VectorStore
 
 
@@ -123,6 +123,8 @@ class SearchService:
         self.embeddings = embeddings
         self.reranker = reranker
         self.vector_store = vector_store
+        provider = configured_ranking_provider(reranker)
+        self.search_with_status = RerankingDecorator(provider)(self._search_with_status)
 
     async def lexical_search(self, query: str, limit: int = 10) -> list[SearchHit]:
         candidates = await self.search_with_status(
@@ -143,7 +145,7 @@ class SearchService:
     async def search(self, query: str, limit: int = 10) -> list[SearchHit]:
         return (await self.search_with_status(query, limit))["results"]
 
-    async def search_with_status(
+    async def _search_with_status(
         self, query: str, limit: int = 10, *, include_vector: bool = True, rerank: bool | None = None
     ) -> dict:
         if not query.strip():
@@ -275,36 +277,6 @@ class SearchService:
             hits, key=lambda hit: (hit.fusion_score, hit.lexical_score, str(hit.chunk_id)),
             reverse=True,
         )[:limit]
-        reranked = False
-        rerank_enabled = (
-            os.getenv("ENSEMBLE_RERANK_ENABLED", "0").strip() == "1"
-            if rerank is None else rerank
-        )
-        if rerank_enabled and results:
-            if self.reranker is None or not self.reranker.available:
-                degraded.append("reranking")
-            else:
-                candidates = results[:min(30, len(results))]
-                try:
-                    scores = await asyncio.to_thread(
-                        self.reranker.score, query,
-                        [candidate.text[:4000] for candidate in candidates],
-                    )
-                    if len(scores) != len(candidates) or any(not math.isfinite(float(score)) for score in scores):
-                        raise RuntimeError("reranker returned invalid or misaligned scores")
-                    scored = [
-                        candidate.model_copy(update={"rerank_score": float(score)})
-                        for candidate, score in zip(candidates, scores)
-                    ]
-                    results = [
-                        item for _, item in sorted(
-                            enumerate(scored), key=lambda pair: (-pair[1].rerank_score, pair[0])
-                        )
-                    ] + results[len(candidates):]
-                    reranked = True
-                except Exception:
-                    degraded.append("reranking")
-
         operational_channels = sum(
             1 for channel in channels.values()
             if channel["status"] in {"ok", "partial"}
@@ -328,7 +300,7 @@ class SearchService:
             "degraded": sorted(set(degraded)),
             "channels": channels,
             "retrieval": retrieval,
-            "reranked": reranked,
+            "reranked": False,
         }
 
 
