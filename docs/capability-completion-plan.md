@@ -86,7 +86,9 @@ Implement durable index rebuilds that can safely coexist with writes:
 
 **Document shadow storage implemented:** migration 0018 adds generation-scoped document and chunk records, preserving source/revision identity and selecting the newest revision within each generation. SQLite and in-memory adapters expose generation-scoped chunk enumeration and lexical candidate search. Active document/chunk and FTS5 paths remain unchanged.
 
-**Not yet implemented:** source tombstone propagation into shadow generations, a rebuild worker to populate all shadow stores, write-fence acquisition and propagation into each writer, acknowledged-write reconciliation, automatic restart recovery, and end-to-end atomic cutover of actual retrieval data. Keep the rebuild API unavailable until those pieces exist.
+**Shadow tombstone handling implemented:** migration 0019 records source tombstones per generation. Shadow document writes reject tombstoned sources, document enumeration excludes them, and vector cleanup removes matching source records. Repeated tombstones are idempotent. This protects the shadow data plane when the rebuild process applies source-state changes.
+
+**Not yet implemented:** a durable rebuild worker that snapshots and populates document, lexical, and vector stores, write-fence coordination, concurrent-write reconciliation, automatic restart recovery, and atomic activation across retrieval data planes. Keep the rebuild API unavailable until those pieces exist.
 
 Do not ship a rebuild operation that can silently lose acknowledged writes or resurrect deleted content.
 

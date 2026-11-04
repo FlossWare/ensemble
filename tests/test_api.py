@@ -1309,3 +1309,79 @@ def test_in_memory_document_generation_storage_isolated():
         assert await store.generation_all_chunks("shadow") == []
 
     asyncio.run(exercise())
+
+
+def test_shadow_generation_tombstones_prevent_document_resurrection_and_remove_vectors(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-tombstones.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    index_store = SqliteIndexStore(database_url)
+    document_store = SqlDocumentStore(database_url)
+    vector_store = SqliteVectorStore(database_url)
+
+    async def exercise():
+        await index_store.initialize()
+        await document_store.initialize()
+        await vector_store.initialize()
+        await index_store.create_generation("generation-shadow")
+        document = Document("tombstoned-source", 1, "Shadow source", "source content to delete")
+        chunk = Chunk(document.id, 0, document.content, [1.0, 0.0])
+        await document_store.upsert_generation("generation-shadow", document, [chunk])
+        await vector_store.upsert_generation(
+            "generation-shadow", "knowledge", "test-model", 2, [{
+                "id": "shadow-chunk",
+                "embedding": [1.0, 0.0],
+                "document": document.content,
+                "metadata": {"source_id": "tombstoned-source"},
+            }],
+        )
+
+        assert await document_store.tombstone_generation_source(
+            "generation-shadow", "tombstoned-source",
+        ) == 1
+        assert await document_store.tombstone_generation_source(
+            "generation-shadow", "tombstoned-source",
+        ) == 0
+        assert await document_store.generation_all_chunks("generation-shadow") == []
+        with pytest.raises(ValueError, match="tombstoned"):
+            await document_store.upsert_generation(
+                "generation-shadow", document, [chunk],
+            )
+        assert await vector_store.tombstone_generation_source(
+            "generation-shadow", "tombstoned-source",
+        ) == 1
+        assert await vector_store.query_generation(
+            "generation-shadow", "knowledge", [1.0, 0.0], 5,
+        ) == []
+        await vector_store.close()
+        await document_store.close()
+        await index_store.close()
+
+    asyncio.run(exercise())
+
+
+def test_in_memory_shadow_generation_tombstones_are_idempotent():
+    documents = InMemoryDocumentStore()
+    vectors = InMemoryVectorStore()
+
+    async def exercise():
+        document = Document("deleted", 1, "Deleted", "deleted content")
+        await documents.upsert_generation(
+            "shadow", document, [Chunk(document.id, 0, document.content)],
+        )
+        await vectors.upsert_generation("shadow", "knowledge", "model", 2, [{
+            "id": "deleted-chunk", "embedding": [1.0, 0.0],
+            "document": "deleted content", "metadata": {"source_id": "deleted"},
+        }])
+        assert await documents.tombstone_generation_source("shadow", "deleted") == 1
+        assert await documents.tombstone_generation_source("shadow", "deleted") == 0
+        assert await documents.generation_all_chunks("shadow") == []
+        with pytest.raises(ValueError, match="tombstoned"):
+            await documents.upsert_generation(
+                "shadow", document, [Chunk(document.id, 0, document.content)],
+            )
+        assert await vectors.tombstone_generation_source("shadow", "deleted") == 1
+        assert await vectors.query_generation("shadow", "knowledge", [1.0, 0.0], 5) == []
+
+    asyncio.run(exercise())

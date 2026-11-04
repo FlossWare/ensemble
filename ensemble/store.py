@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -87,6 +88,14 @@ generation_chunks = Table(
 Index("ix_generation_documents_current_source", generation_documents.c.generation_id, generation_documents.c.source_id, generation_documents.c.is_current)
 Index("ix_generation_chunks_document", generation_chunks.c.generation_id, generation_chunks.c.document_id)
 
+generation_source_tombstones = Table(
+    "ensemble_generation_source_tombstones",
+    metadata,
+    Column("generation_id", String(64), primary_key=True),
+    Column("source_id", String(1024), primary_key=True),
+    Column("tombstoned_at", DateTime(timezone=True), nullable=False),
+)
+
 
 @dataclass(frozen=True)
 class IndexedChunk:
@@ -105,6 +114,7 @@ class DocumentStore(Protocol):
     async def upsert_generation(self, generation_id: str, document: Document, chunks: list[Chunk]) -> Document: ...
     async def generation_all_chunks(self, generation_id: str) -> list[IndexedChunk]: ...
     async def generation_lexical_search(self, generation_id: str, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]: ...
+    async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int: ...
     async def delete_generation(self, generation_id: str) -> int: ...
 
 
@@ -170,10 +180,13 @@ class InMemoryDocumentStore:
         self._chunks: dict[UUID, list[Chunk]] = {}
         self._tombstoned: set[str] = set()
         self._generation_data: dict[str, dict[tuple[str, int], tuple[Document, list[Chunk]]]] = {}
+        self._generation_tombstones: dict[str, set[str]] = {}
 
     async def upsert_generation(self, generation_id: str, document: Document, chunks: list[Chunk]) -> Document:
         if not generation_id or len(generation_id) > 64:
             raise ValueError("generation_id must contain 1-64 characters")
+        if document.source_id in self._generation_tombstones.get(generation_id, set()):
+            raise ValueError("source is tombstoned in this generation")
         generation = self._generation_data.setdefault(generation_id, {})
         key = (document.source_id, document.revision)
         previous = generation.get(key)
@@ -191,7 +204,10 @@ class InMemoryDocumentStore:
     async def generation_all_chunks(self, generation_id: str) -> list[IndexedChunk]:
         generation = self._generation_data.get(generation_id, {})
         latest: dict[str, tuple[Document, list[Chunk]]] = {}
+        tombstones = self._generation_tombstones.get(generation_id, set())
         for (source_id, _revision), pair in generation.items():
+            if source_id in tombstones:
+                continue
             current = latest.get(source_id)
             if current is None or pair[0].revision > current[0].revision:
                 latest[source_id] = pair
@@ -213,7 +229,22 @@ class InMemoryDocumentStore:
                 matches.append((item, overlap / len(terms)))
         return sorted(matches, key=lambda pair: (-pair[1], str(pair[0].chunk.id)))[:limit]
 
+    async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:
+        if not generation_id or not source_id:
+            raise ValueError("generation_id and source_id are required")
+        tombstones = self._generation_tombstones.setdefault(generation_id, set())
+        if source_id in tombstones:
+            return 0
+        tombstones.add(source_id)
+        generation = self._generation_data.get(generation_id, {})
+        for (stored_source, _revision), (document, _chunks) in generation.items():
+            if stored_source == source_id:
+                document.metadata = dict(document.metadata)
+                document.metadata["_generation_tombstoned"] = True
+        return 1
+
     async def delete_generation(self, generation_id: str) -> int:
+        self._generation_tombstones.pop(generation_id, None)
         return len(self._generation_data.pop(generation_id, {}))
 
 
@@ -248,14 +279,14 @@ class SqlDocumentStore:
             raise RuntimeError(
                 "Ensemble database schema is not initialized; run 'alembic upgrade head'"
             )
-        missing = {"ensemble_documents", "ensemble_chunks", "ensemble_vector_collections", "ensemble_vector_records", "ensemble_index_sources", "ensemble_knowledge_records", "ensemble_graph_nodes", "ensemble_graph_edges", "ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources", "ensemble_ga_runs", "ensemble_ga_promotions", "ensemble_thompson_models", "ensemble_thompson_events", "ensemble_learning_outcomes", "ensemble_learning_artifacts", "ensemble_lexical_fts", "ensemble_transcript_checkpoints", "ensemble_index_generations", "ensemble_index_generation_control", "ensemble_vector_generation_records", "ensemble_document_generation_records", "ensemble_chunk_generation_records"} - set(tables)
+        missing = {"ensemble_documents", "ensemble_chunks", "ensemble_vector_collections", "ensemble_vector_records", "ensemble_index_sources", "ensemble_knowledge_records", "ensemble_graph_nodes", "ensemble_graph_edges", "ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources", "ensemble_ga_runs", "ensemble_ga_promotions", "ensemble_thompson_models", "ensemble_thompson_events", "ensemble_learning_outcomes", "ensemble_learning_artifacts", "ensemble_lexical_fts", "ensemble_transcript_checkpoints", "ensemble_index_generations", "ensemble_index_generation_control", "ensemble_vector_generation_records", "ensemble_document_generation_records", "ensemble_chunk_generation_records", "ensemble_generation_source_tombstones"} - set(tables)
         if missing:
             raise RuntimeError(
                 "Ensemble database schema is incomplete; run 'alembic upgrade head'"
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0018_document_generation_records":
+        if revision != "0019_generation_source_tombstones":
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )
@@ -426,6 +457,14 @@ class SqlDocumentStore:
             ), {"generation_id": generation_id})
             if not exists:
                 raise ValueError("unknown index generation")
+            tombstoned = await connection.scalar(
+                select(func.count()).select_from(generation_source_tombstones).where(
+                    generation_source_tombstones.c.generation_id == generation_id,
+                    generation_source_tombstones.c.source_id == document.source_id,
+                )
+            )
+            if tombstoned:
+                raise ValueError("source is tombstoned in this generation")
             statement = dialect_insert(generation_documents).values(
                 generation_id=generation_id, document_id=str(document.id),
                 source_id=document.source_id, revision=document.revision,
@@ -542,6 +581,27 @@ class SqlDocumentStore:
                 matches.append((item, overlap / len(terms)))
         return sorted(matches, key=lambda pair: (-pair[1], str(pair[0].chunk.id)))[:limit]
 
+    async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:
+        if not generation_id or not source_id:
+            raise ValueError("generation_id and source_id are required")
+        from sqlalchemy.dialects.sqlite import insert as dialect_insert
+        async with self.engine.begin() as connection:
+            inserted = await connection.execute(
+                dialect_insert(generation_source_tombstones).values(
+                    generation_id=generation_id, source_id=source_id,
+                    tombstoned_at=datetime.now(timezone.utc),
+                ).on_conflict_do_nothing(
+                    index_elements=["generation_id", "source_id"]
+                )
+            )
+            await connection.execute(
+                generation_documents.update().where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == source_id,
+                ).values(is_current=False)
+            )
+        return inserted.rowcount or 0
+
     async def delete_generation(self, generation_id: str) -> int:
         async with self.engine.begin() as connection:
             count = await connection.scalar(
@@ -549,8 +609,14 @@ class SqlDocumentStore:
                     generation_documents.c.generation_id == generation_id
                 )
             )
+            await connection.execute(delete(generation_chunks).where(
+                generation_chunks.c.generation_id == generation_id
+            ))
             await connection.execute(delete(generation_documents).where(
                 generation_documents.c.generation_id == generation_id
+            ))
+            await connection.execute(delete(generation_source_tombstones).where(
+                generation_source_tombstones.c.generation_id == generation_id
             ))
         return int(count or 0)
 
