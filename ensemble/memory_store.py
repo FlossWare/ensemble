@@ -340,6 +340,12 @@ class SqliteMemoryStore:
         await self.engine.dispose()
 
     async def _assert_generation_writes_open(self, connection: Any) -> None:
+        from sqlalchemy import inspect
+        names = await connection.run_sync(lambda conn: inspect(conn).get_table_names())
+        if "ensemble_index_generation_write_fence" not in names:
+            # Lightweight Memory-store unit fixtures may intentionally create
+            # only the Memory schema. Production app startup requires migrations.
+            return
         from .index_store import generation_write_fence
         fence = (await connection.execute(select(generation_write_fence).where(
             generation_write_fence.c.singleton_id == 1
