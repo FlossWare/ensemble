@@ -56,6 +56,25 @@ memory_sources = Table(
 )
 Index("ix_ensemble_memory_sources_scope_stale", memory_sources.c.scope, memory_sources.c.stale)
 
+memory_generation_records = Table(
+    "ensemble_memory_generation_records", memory_metadata,
+    Column("generation_id", String(64), primary_key=True),
+    Column("name", String(128), primary_key=True),
+    Column("snapshot", JSON, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+memory_generation_changes = Table(
+    "ensemble_memory_generation_changes", memory_metadata,
+    Column("change_id", Integer, primary_key=True, autoincrement=True),
+    Column("generation_id", String(64), nullable=False),
+    Column("name", String(128), nullable=False),
+    Column("snapshot", JSON, nullable=True),
+    Column("acknowledged", Boolean, nullable=False, default=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("ix_memory_generation_changes_pending", memory_generation_changes.c.generation_id,
+      memory_generation_changes.c.acknowledged, memory_generation_changes.c.change_id)
+
 
 def validate_memory_name(name: Any) -> str:
     if not isinstance(name, str) or not MEMORY_NAME_PATTERN.fullmatch(name) or name in {".", ".."}:
@@ -313,12 +332,132 @@ class SqliteMemoryStore:
         async with self.engine.connect() as connection:
             from sqlalchemy import inspect
             names = await connection.run_sync(lambda conn: inspect(conn).get_table_names())
-        required = {"ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources"}
+        required = {"ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources", "ensemble_memory_generation_records", "ensemble_memory_generation_changes"}
         if not required.issubset(names):
             raise RuntimeError("Memory schema is not initialized; run 'alembic upgrade head'")
 
     async def close(self) -> None:
         await self.engine.dispose()
+
+    async def _assert_generation_writes_open(self, connection: Any) -> None:
+        from .index_store import generation_write_fence
+        fence = (await connection.execute(select(generation_write_fence).where(
+            generation_write_fence.c.singleton_id == 1
+        ))).mappings().first()
+        if fence is not None:
+            raise RuntimeError("Memory writes are fenced during generation activation")
+
+    async def _snapshot_for_name(self, connection: Any, name: str) -> dict[str, Any] | None:
+        memory = (await connection.execute(select(memories).where(memories.c.name == name))).mappings().first()
+        if memory is None:
+            return None
+        entry_rows = (await connection.execute(
+            select(entries.c.payload).where(entries.c.name == name).order_by(entries.c.id)
+        )).scalars().all()
+        source = (await connection.execute(
+            select(memory_sources).where(memory_sources.c.document_name == name)
+        )).mappings().first()
+        return {
+            "name": name, "content": memory["content"],
+            "entries": list(entry_rows), "source": dict(source) if source else None,
+            "updated_at": memory["updated_at"].isoformat(),
+        }
+
+    async def _journal_generation_change(self, connection: Any, name: str) -> int:
+        from .index_store import generations
+        targets = (await connection.execute(select(generations.c.generation_id).where(
+            generations.c.state == "building"
+        ))).scalars().all()
+        if not targets:
+            return 0
+        snapshot = await self._snapshot_for_name(connection, name)
+        now = datetime.now(timezone.utc)
+        for generation_id in targets:
+            await connection.execute(memory_generation_changes.insert().values(
+                generation_id=generation_id, name=name, snapshot=snapshot,
+                acknowledged=False, created_at=now,
+            ))
+        return len(targets)
+
+    async def memory_generation_upper_bound(self) -> str | None:
+        async with self.engine.connect() as connection:
+            return await connection.scalar(select(func.max(memories.c.name)))
+
+    async def list_memory_names_after(
+        self, cursor: str | None, upper_bound: str | None, limit: int,
+    ) -> list[str]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        if upper_bound is None:
+            return []
+        statement = select(memories.c.name).where(memories.c.name <= upper_bound)
+        if cursor is not None:
+            statement = statement.where(memories.c.name > cursor)
+        async with self.engine.connect() as connection:
+            return list((await connection.execute(
+                statement.order_by(memories.c.name).limit(limit)
+            )).scalars().all())
+
+    async def get_memory_snapshot(self, name: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as connection:
+            return await self._snapshot_for_name(connection, validate_memory_name(name))
+
+    async def put_memory_generation_snapshot(
+        self, generation_id: str, name: str, snapshot: dict[str, Any] | None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            if snapshot is None:
+                await connection.execute(memory_generation_records.delete().where(
+                    memory_generation_records.c.generation_id == generation_id,
+                    memory_generation_records.c.name == name,
+                ))
+                return
+            await connection.execute(sqlite_insert(memory_generation_records).values(
+                generation_id=generation_id, name=name, snapshot=snapshot, updated_at=now,
+            ).on_conflict_do_update(
+                index_elements=[memory_generation_records.c.generation_id, memory_generation_records.c.name],
+                set_={"snapshot": snapshot, "updated_at": now},
+            ))
+
+    async def list_memory_generation_changes_after(
+        self, generation_id: str, after_change_id: int, limit: int,
+    ) -> list[dict[str, Any]]:
+        if isinstance(after_change_id, bool) or not isinstance(after_change_id, int) or after_change_id < 0:
+            raise ValueError("after_change_id must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(select(memory_generation_changes).where(
+                memory_generation_changes.c.generation_id == generation_id,
+                memory_generation_changes.c.change_id > after_change_id,
+            ).order_by(memory_generation_changes.c.change_id).limit(limit))).mappings().all()
+        return [dict(row) for row in rows]
+
+    async def memory_generation_change_high_watermark(self, generation_id: str) -> int:
+        async with self.engine.connect() as connection:
+            value = await connection.scalar(select(func.max(memory_generation_changes.c.change_id)).where(
+                memory_generation_changes.c.generation_id == generation_id
+            ))
+        return int(value or 0)
+
+    async def acknowledge_memory_generation_changes(self, generation_id: str, through_change_id: int) -> int:
+        async with self.engine.begin() as connection:
+            result = await connection.execute(memory_generation_changes.update().where(
+                memory_generation_changes.c.generation_id == generation_id,
+                memory_generation_changes.c.change_id <= through_change_id,
+                memory_generation_changes.c.acknowledged.is_(False),
+            ).values(acknowledged=True))
+        return int(result.rowcount or 0)
+
+    async def pending_memory_generation_changes(self, generation_id: str) -> int:
+        async with self.engine.connect() as connection:
+            return int(await connection.scalar(select(func.count()).select_from(
+                memory_generation_changes
+            ).where(
+                memory_generation_changes.c.generation_id == generation_id,
+                memory_generation_changes.c.acknowledged.is_(False),
+            )) or 0)
 
     async def check_ready(self) -> None:
         async with self.engine.connect() as connection:
