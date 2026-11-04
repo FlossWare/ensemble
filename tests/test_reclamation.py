@@ -45,14 +45,14 @@ def test_source_reclamation_queue_is_durable_and_idempotent(tmp_path):
         # Make the retry due, then simulate a worker crash after it claims the job.
         with sqlite3.connect(tmp_path / "reclamation.db") as connection:
             connection.execute(
-                "UPDATE ensemble_source_reclamation_jobs SET available_at = ? WHERE source_id = ?",
+                "UPDATE ensemble_source_reclamation SET available_at = ? WHERE source_id = ?",
                 ("2000-01-01 00:00:00", "source-2"),
             )
         retried = await queue.claim_due(10)
         assert retried[0]["attempts"] == 2
         with sqlite3.connect(tmp_path / "reclamation.db") as connection:
             connection.execute(
-                "UPDATE ensemble_source_reclamation_jobs SET updated_at = ? WHERE source_id = ?",
+                "UPDATE ensemble_source_reclamation SET updated_at = ? WHERE source_id = ?",
                 ("2000-01-01 00:00:00", "source-2"),
             )
         recovered = await queue.claim_due(10)
