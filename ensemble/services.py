@@ -5,6 +5,7 @@ import hashlib
 import math
 import asyncio
 import os
+import time
 from collections.abc import Sequence
 from uuid import uuid5, NAMESPACE_URL
 from .chunking import Chunker, chunk as chunk_text
@@ -13,6 +14,16 @@ from .models import Chunk, Document, DocumentIn, DocumentOut, SearchHit
 from .store import DocumentStore
 from .reranking import Reranker, RerankingDecorator, configured_ranking_provider
 from .vector_store import VectorStore
+
+
+def _retrieval_channel_timeout() -> float:
+    try:
+        configured = float(os.getenv("ENSEMBLE_RETRIEVAL_CHANNEL_TIMEOUT", "5"))
+    except (TypeError, ValueError):
+        configured = 5.0
+    if not math.isfinite(configured):
+        configured = 5.0
+    return min(60.0, max(0.05, configured))
 
 
 class DocumentService:
@@ -162,21 +173,25 @@ class SearchService:
         }
 
         # Keep channels independent: one failing must not suppress the other.
+        lexical_started = time.perf_counter()
         try:
-            lexical_matches = await self.store.lexical_search(
-                query, limit=min(2000, max(200, limit * 4))
+            lexical_matches = await asyncio.wait_for(
+                self.store.lexical_search(query, limit=min(2000, max(200, limit * 4))),
+                timeout=_retrieval_channel_timeout(),
             )
             lexical_scores = {item.chunk.id: score for item, score in lexical_matches}
             channels["lexical"] = {
                 "status": "ok", "available": True,
                 "candidate_count": len(lexical_scores),
+                "duration_ms": round((time.perf_counter() - lexical_started) * 1000, 3),
             }
-        except Exception:
+        except Exception as exc:
             channels["lexical"] = {
                 "status": "unavailable", "available": False,
                 "candidate_count": 0, "error": "lexical search failed",
+                "duration_ms": round((time.perf_counter() - lexical_started) * 1000, 3),
             }
-            degraded.append("lexical")
+            degraded.append("lexical_timeout" if isinstance(exc, TimeoutError) else "lexical")
 
         if include_vector:
             if not self.embeddings.available:
@@ -188,8 +203,17 @@ class SearchService:
                 degraded.append("embeddings")
             else:
                 collection_error = False
+                vector_started = time.perf_counter()
+                embedding_ms = 0.0
+                collection_ms = 0.0
+                document_scan_ms = 0.0
                 try:
-                    embedded = await self.embeddings.embed([query], mode="query")
+                    embedding_started = time.perf_counter()
+                    embedded = await asyncio.wait_for(
+                        self.embeddings.embed([query], mode="query"),
+                        timeout=_retrieval_channel_timeout(),
+                    )
+                    embedding_ms = round((time.perf_counter() - embedding_started) * 1000, 3)
                     if not isinstance(embedded, list) or len(embedded) != 1:
                         raise RuntimeError("embedding provider returned an invalid query vector")
                     query_vector = embedded[0]
@@ -200,8 +224,12 @@ class SearchService:
 
                     collection_scores: dict = {}
                     if self.vector_store is not None:
+                        collection_started = time.perf_counter()
                         try:
-                            vector_hits = await self.vector_store.query("transcript_text", query_vector, 200)
+                            vector_hits = await asyncio.wait_for(
+                                self.vector_store.query("transcript_text", query_vector, 200),
+                                timeout=_retrieval_channel_timeout(),
+                            )
                             known_ids = {str(item.chunk.id): item.chunk.id for item in indexed}
                             collection_scores = {
                                 known_ids[hit["id"]]: float(hit["score"])
@@ -210,15 +238,20 @@ class SearchService:
                                 and math.isfinite(float(hit.get("score", 0.0)))
                                 and float(hit.get("score", 0.0)) > 0
                             }
-                        except Exception:
+                        except Exception as exc:
                             collection_error = True
+                            collection_timeout = isinstance(exc, TimeoutError)
+                        finally:
+                            collection_ms = round((time.perf_counter() - collection_started) * 1000, 3)
 
+                    document_started = time.perf_counter()
                     document_scores: dict = {}
                     for item in indexed:
                         if item.chunk.embedding:
                             score = _cosine(query_vector, item.chunk.embedding)
                             if score > 0:
                                 document_scores[item.chunk.id] = score
+                    document_scan_ms = round((time.perf_counter() - document_started) * 1000, 3)
                     vector_scores = dict(collection_scores)
                     for identifier, score in document_scores.items():
                         vector_scores[identifier] = max(vector_scores.get(identifier, 0.0), score)
@@ -229,18 +262,30 @@ class SearchService:
                         "candidate_count": len(vector_scores),
                         "collection_candidate_count": len(collection_scores),
                         "document_candidate_count": len(document_scores),
+                        "duration_ms": round((time.perf_counter() - vector_started) * 1000, 3),
+                        "embedding_ms": embedding_ms,
+                        "collection_ms": collection_ms,
+                        "document_scan_ms": document_scan_ms,
                     }
                     if collection_error:
-                        channels["vector"]["error"] = "vector collection query failed; document vectors remain available"
-                        degraded.append("vector_collection")
-                except Exception:
+                        channels["vector"]["error"] = (
+                            "vector collection query timed out; document vectors remain available"
+                            if collection_timeout else
+                            "vector collection query failed; document vectors remain available"
+                        )
+                        degraded.append("vector_collection_timeout" if collection_timeout else "vector_collection")
+                except Exception as exc:
                     channels["vector"] = {
                         "status": "unavailable", "available": False,
                         "candidate_count": 0, "collection_candidate_count": 0,
                         "document_candidate_count": 0,
                         "error": "query embedding or vector search failed",
+                        "duration_ms": round((time.perf_counter() - vector_started) * 1000, 3),
+                        "embedding_ms": embedding_ms,
+                        "collection_ms": collection_ms,
+                        "document_scan_ms": document_scan_ms,
                     }
-                    degraded.append("embeddings")
+                    degraded.append("embeddings_timeout" if isinstance(exc, TimeoutError) else "embeddings")
 
         lexical_ranks = _rank(lexical_scores)
         vector_ranks = _rank(vector_scores)
