@@ -583,10 +583,28 @@ class SqliteIndexStore:
                 decision = "superseded"
             current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().one()
             if decision == "accepted":
-                generation_ids = (await connection.execute(select(generations.c.generation_id).where(
-                    generations.c.state.in_(("active", "building"))
-                ))).scalars().all()
-                for target_generation_id in generation_ids:
+                generation_rows = (await connection.execute(select(
+                    generations.c.generation_id, generations.c.state,
+                ).where(generations.c.state.in_(("active", "building"))))).all()
+                for target_generation_id, state in generation_rows:
+                    if state == "active":
+                        existing_generation_source = (await connection.execute(select(generation_sources).where(
+                            generation_sources.c.generation_id == target_generation_id,
+                            generation_sources.c.source_id == source_id,
+                        ))).mappings().first()
+                        values = {
+                            "high_sequence": sequence, "revision_id": revision_id,
+                            "profiles": profile_snapshot, "tombstoned": False, "updated_at": now,
+                        }
+                        if existing_generation_source is None:
+                            await connection.execute(generation_sources.insert().values(
+                                generation_id=target_generation_id, source_id=source_id, **values,
+                            ))
+                        else:
+                            await connection.execute(generation_sources.update().where(
+                                generation_sources.c.generation_id == target_generation_id,
+                                generation_sources.c.source_id == source_id,
+                            ).values(**values))
                     await connection.execute(generation_changes.insert().values(
                         generation_id=target_generation_id, source_id=source_id, high_sequence=sequence,
                         revision_id=revision_id, profiles=profile_snapshot, tombstoned=False, acknowledged=False, created_at=now,
@@ -621,10 +639,29 @@ class SqliteIndexStore:
                 decision = "superseded"
             current = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().one()
             if decision == "tombstoned":
-                generation_ids = (await connection.execute(select(generations.c.generation_id).where(
-                    generations.c.state.in_(("active", "building"))
-                ))).scalars().all()
-                for target_generation_id in generation_ids:
+                generation_rows = (await connection.execute(select(
+                    generations.c.generation_id, generations.c.state,
+                ).where(generations.c.state.in_(("active", "building"))))).all()
+                for target_generation_id, state in generation_rows:
+                    if state == "active":
+                        existing_generation_source = (await connection.execute(select(generation_sources).where(
+                            generation_sources.c.generation_id == target_generation_id,
+                            generation_sources.c.source_id == source_id,
+                        ))).mappings().first()
+                        values = {
+                            "high_sequence": current["high_sequence"],
+                            "revision_id": current["revision_id"],
+                            "profiles": current["profiles"], "tombstoned": True, "updated_at": now,
+                        }
+                        if existing_generation_source is None:
+                            await connection.execute(generation_sources.insert().values(
+                                generation_id=target_generation_id, source_id=source_id, **values,
+                            ))
+                        else:
+                            await connection.execute(generation_sources.update().where(
+                                generation_sources.c.generation_id == target_generation_id,
+                                generation_sources.c.source_id == source_id,
+                            ).values(**values))
                     await connection.execute(generation_changes.insert().values(
                         generation_id=target_generation_id, source_id=source_id,
                         high_sequence=current["high_sequence"], revision_id=current["revision_id"],
