@@ -41,12 +41,15 @@ These items are implemented foundations, not claims that every operational requi
 
 ### 2. Complete transcript ingestion lifecycle
 
-- Turn the existing incremental JSONL parser into a durable ingestion workflow; the current caller-supplied byte-slice parser and synchronous session ingestion are not durable jobs.
-- Persist source identity, revision, byte checkpoint, operation state, and failure details.
-- Make retries idempotent and prevent acknowledgement before durable indexing succeeds.
-- Resume safely after process restart.
-- Handle changed source revisions, truncation, malformed records, and incomplete trailing records.
-- Keep filesystem access caller-authorized and scope-restricted; do not allow arbitrary server-side paths.
+Implemented on current main:
+- Durable transcript ingestion jobs persist source identity, revision, byte checkpoints, operation state, and failure details.
+- Retries are idempotent; checkpoints advance only after durable indexing succeeds.
+- Interrupted jobs recover on application restart.
+- The JSONL parser handles complete newline-terminated records, malformed records, UTF-8 byte offsets, and incomplete trailing records.
+
+Remaining:
+- The parser still accepts caller-supplied byte slices. Filesystem scanning remains caller-authorized and scope-restricted; Ensemble must not open arbitrary server-side paths.
+- Extend durable job tracking to other long-running ingestion and rebuild operations.
 
 ### 3. Complete source and document lifecycle correctness
 
@@ -69,16 +72,19 @@ These items are implemented foundations, not claims that every operational requi
 
 ### 5. Index generation rebuild and cutover
 
-Implement durable index rebuilds that can safely coexist with writes:
+Implemented on `integration/generation-mainline-2026-11-04` (not yet merged):
+- REST operations create and inspect a rebuild, perform bounded copy passes for Index, Documents, Vectors, Memory, and Knowledge, reconcile each capability, acquire the write fence, activate, and abort.
+- Memory now has generation-scoped durable snapshots and a mutation journal. Memory writes are blocked while the shared cutover fence is held.
+- The Index journal tracks acknowledged mutations. Completed document/Knowledge writes and source tombstones acknowledge only after the corresponding stores are updated.
+- The active generation pointer now drives lexical/vector retrieval. Document writes, vector writes, Knowledge publication, Index manifest changes, Memory snapshots, and tombstones keep the active generation current after cutover.
+- The existing FTS5/BM25 lexical scoring path is preserved; active-generation candidate IDs constrain returned results.
+- Activation retries are idempotent after a lost response. Restart recovery releases an abandoned fence and reopens reconciliation checkpoints so subsequent writes can be reconciled.
+- CI has verified end-to-end copy, reconciliation, activation, retrieval, post-activation document/Knowledge/vector writes, tombstones, Memory snapshot reconciliation, idempotent activation retry, and fence recovery. The latest verified integration run passed 203 tests with 1 skipped.
 
-- Create a new index generation.
-- Reconcile Memory and Knowledge independently.
-- Establish durable sealed checkpoints.
-- Acquire and register write fences with the owning capabilities.
-- Verify all acknowledged changes are represented.
-- Atomically switch the active generation.
-- Release fences and persist completion.
-- Recover safely from crashes, lost responses, expired fences, and uncertain cutover.
+Still required before merge:
+- Verify the latest integration head's CI result and review the crash/recovery boundaries and migration compatibility.
+- Complete failure-injection coverage for interruption between fence acquisition and activation, plus active-generation Memory and Knowledge lifecycle edge cases.
+- Keep activation fail-closed if any capability checkpoint, journal acknowledgement, or tombstone verification is missing.
 
 Do not ship a rebuild operation that can silently lose acknowledged writes or resurrect deleted content.
 
@@ -167,14 +173,14 @@ The following work is implemented in the current review branch, with CI verifica
 - Memory context assembly is exposed as a REST capability with deterministic ordering, approximate character-based token budgeting, extractive compression, and source metadata.
 - System configuration reports listener and durable-persistence status without exposing filesystem paths or database URLs.
 
-These are implemented slices, not a declaration that the platform is production-ready. In particular, transcript parsing still relies on caller-supplied byte slices; it does not yet own durable ingestion jobs or restart checkpoints.
+These are implemented slices, not a declaration that the platform is production-ready. Transcript parsing still relies on caller-supplied byte slices, while durable transcript jobs, byte checkpoints, retry state, and restart recovery are implemented. Server-side filesystem scanning remains intentionally out of scope without an explicit scoped-source contract.
 
 ## Remaining implementation sequence
 
-1. Durable transcript ingestion jobs with persisted byte checkpoints, retries, revision handling, and restart recovery.
-2. Close remaining source lifecycle gaps: cleanup retry state, stale vector reconciliation, rebuild/reindex semantics, and failure recovery across Index, document, Knowledge, Graph, and Vector stores.
+1. Finish and merge the generation rebuild/cutover slice after current-head CI and failure-recovery review.
+2. Close remaining source lifecycle gaps: cleanup retry state, stale vector reconciliation, and failure recovery across Index, Documents, Knowledge, Graph, and Vector.
 3. Complete Memory scoped-source reconciliation, event lifecycle semantics, conflict/deletion policy, and retrieval quality.
-4. Add bounded deadlines/cancellation and durable operation tracking for long-running ingestion and rebuild operations.
+4. Add bounded deadlines/cancellation and durable operation tracking for long-running non-transcript ingestion and rebuild operations.
 5. Finish Control Center usability and real execution diagnostics, while keeping all operations REST-backed.
 6. Complete operational readiness: backup/restore, migrations/upgrade, observability, rate limits, authentication/authorization, and partition enforcement.
 7. Verify the local embedding/reranking runtime matrix and decide when exact vector scans require a local ANN implementation.

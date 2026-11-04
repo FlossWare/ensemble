@@ -67,7 +67,7 @@ Not yet implemented:
 - Additional tokenization/analyzer profiles beyond lexical-v1.
 - Dedicated approximate-nearest-neighbor vector index; exact dot-product search currently scans SQLite collection records.
 - Remaining retrieval work: calibrated channel weighting and richer end-to-end trace provenance. Lexical search, query embedding, vector-collection lookup, and Graph expansion have bounded independent deadlines. Diagnostics include per-channel elapsed time and vector sub-stage timings for embedding, external lookup, and local document-vector scanning. Knowledge records now share the durable document/chunk index and participate in the same lexical/vector candidate fusion; Graph-linked exact entities can expand the candidate set. ANN indexing remains intentionally absent.
-- Durable ingestion jobs and restart-safe transcript checkpoints remain incomplete. Context assembly is available through `POST /api/v1/context/assemble` and Memory recall. It uses a character-based token estimate and extractive sentence selection; exact model-tokenizer budgeting and model-backed summarization are not implemented. Current transcript JSONL parsing accepts caller-supplied slices and returns byte offsets, while structured session ingestion is idempotent but synchronous.
+- Durable transcript ingestion jobs, persisted byte checkpoints, retry state, and restart recovery are implemented on main. The parser still accepts caller-supplied byte slices rather than opening arbitrary server-side paths. Durable job tracking for other long-running ingestion and rebuild operations remains incomplete. Context assembly is available through `POST /api/v1/context/assemble` and Memory recall. It uses a character-based token estimate and extractive sentence selection; exact model-tokenizer budgeting and model-backed summarization are not implemented.
 - Broader learned/model-backed entity extraction and fuzzy entity resolution; current extraction and resolution are deterministic and rule-based.
 - Model-backed intent providers and calibrated confidence; current intent classification is deterministic and heuristic.
 - Remaining POC Memory parity: direct scoped filesystem scanning and symlink-safe path traversal, full session-event compatibility and deeper matching against the POC's 48 memory tests. Current semantic search is deterministic local term-vector cosine, not an embedding-backed ANN index; the source-import endpoint accepts content and verified path metadata rather than opening arbitrary paths. Initial Learning capability is implemented on the same REST listener: task outcome validation, payload-digest idempotency, SQLite checkpoint/status, Memory event publication, idempotent Thompson outcome updates, Thompson state snapshots, report/recent-outcome APIs, portable artifact persistence and explicit reset. Migrations `0010_learning` and `0011_thompson_events` support the workflow. Remaining Learning parity includes a deeper POC test/edge-case audit and any future client/circuit-breaker behavior outside the co-located service boundary. Scrape-ledger remains unimplemented. GA Tuning has an initial optimizer/API/persistence slice, but full POC evaluator parity, scheduled execution/recovery, portable learning artifacts, and Control Center configuration/progress/candidate comparison are not complete. The GA's Thompson evaluator is not the standalone Thompson service.
@@ -76,6 +76,20 @@ Not yet implemented:
 - Authentication, partition enforcement, durable ingestion/background jobs, production observability, rate limits, backup/restore automation, and deployment/upgrade hardening.
 
 SQLite is the only persistence implementation in this repository. FTS5 provides the lexical index. Embeddings are stored as JSON and scored by exact scan in the application; this is not a scalable approximate-nearest-neighbor vector index.
+
+## Generation rebuild and cutover integration branch
+
+The integration branch `integration/generation-mainline-2026-11-04` contains the generation rebuild/cutover implementation; it has not yet been merged into `main`.
+
+Implemented in this branch:
+- Durable generation-scoped Memory snapshots and a mutation journal, including writes, append-once entries, deletes, imported Markdown metadata, and stale-source reconciliation.
+- Bounded REST copy and reconciliation operations for Index, Documents, Vectors, Memory, and Knowledge.
+- A shared write fence enforced inside Index, Documents, Vectors, Knowledge, and Memory write transactions; startup recovery releases an abandoned fence and reopens all reconciliation checkpoints.
+- Active-generation retrieval for lexical and vector candidates, with FTS5/BM25 scoring retained.
+- Post-activation document/vector/Knowledge writes, Index manifest changes, Memory snapshots, and tombstones are reflected in the active generation.
+- Activation is retry-safe when the original response is lost.
+
+The end-to-end cutover tests cover initial ingestion, bounded copy, independent reconciliation, fencing, activation, retrieval from the new generation, post-activation document/Knowledge/vector writes, metadata updates, pruning, tombstone removal, activation retry after a lost response, Memory snapshot updates, restart recovery of an abandoned fence, and Index-authoritative filtering before downstream cleanup. The integration head `7c2fa457732bef9e2ec4c3f1b0d5cde8aae5e7a7` passed **203 tests, 1 skipped**. Consolidated PR [#42](https://github.com/FlossWare/ensemble/pull/42) is open against `main`; merge is pending review and required PR checks.
 
 ## Partition isolation implementation
 
