@@ -1379,3 +1379,35 @@ def test_ranking_fuse_endpoint_rejects_invalid_channel_weights():
             "weights": {"lexical": -1},
         })
         assert response.status_code == 400
+
+
+def test_search_feedback_is_idempotent_and_updates_thompson_channel_state():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        payload = {
+            "event_id": "retrieval-feedback-001",
+            "channel": "graph",
+            "success": True,
+        }
+        first = client.post("/api/v1/search/feedback", json=payload)
+        duplicate = client.post("/api/v1/search/feedback", json=payload)
+        assert first.status_code == 200
+        assert first.json()["recorded"] is True
+        assert duplicate.status_code == 200
+        assert duplicate.json()["recorded"] is False
+        state = client.get("/api/v1/thompson/state").json()["state"]
+        assert state["models"]["retrieval:graph"]["successes"] == 1
+        assert state["models"]["retrieval:graph"]["calls"] == 1
+
+
+def test_search_feedback_rejects_conflicting_event_reuse():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        payload = {
+            "event_id": "retrieval-feedback-conflict",
+            "channel": "lexical",
+            "success": True,
+        }
+        assert client.post("/api/v1/search/feedback", json=payload).status_code == 200
+        payload["success"] = False
+        assert client.post("/api/v1/search/feedback", json=payload).status_code == 400

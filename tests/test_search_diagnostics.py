@@ -180,12 +180,12 @@ def test_hybrid_uses_persisted_thompson_channel_feedback(monkeypatch):
     with TestClient(app) as client:
         _ingest(client)
         for _ in range(8):
-            assert client.post("/api/v1/thompson/outcomes", json={
-                "model": "retrieval:lexical", "success": True,
+            assert client.post("/api/v1/search/feedback", json={
+                "event_id": f"lexical-{_}", "channel": "lexical", "success": True,
             }).status_code == 200
         for _ in range(8):
-            assert client.post("/api/v1/thompson/outcomes", json={
-                "model": "retrieval:vector", "success": False,
+            assert client.post("/api/v1/search/feedback", json={
+                "event_id": f"vector-{_}", "channel": "vector", "success": False,
             }).status_code == 200
         response = client.post("/api/v1/search/hybrid", json={
             "query": "independent lexical retrieval",

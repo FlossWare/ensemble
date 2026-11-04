@@ -1971,6 +1971,29 @@ def create_app(
     async def thompson_select_route(payload: dict[str, Any]):
         return await thompson_select(payload)
 
+    @app.post("/api/v1/search/feedback", tags=["search"])
+    async def search_feedback(payload: dict[str, Any]):
+        channel = payload.get("channel")
+        event_id = payload.get("event_id")
+        if not isinstance(channel, str) or not channel.strip() or len(channel) > 128:
+            raise HTTPException(status_code=400, detail="channel must be a non-empty string of at most 128 characters")
+        if not isinstance(event_id, str) or not event_id.strip():
+            raise HTTPException(status_code=400, detail="event_id is required for idempotent retrieval feedback")
+        try:
+            recorded = await active_thompson_store.record_outcome_once(
+                event_id=event_id,
+                model=f"retrieval:{channel}",
+                success=payload.get("success"),
+                cost=payload.get("cost", 0.0),
+                tokens=payload.get("tokens", 0),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "ok": True, "recorded": recorded, "channel": channel,
+            "request_id": payload.get("request_id") or str(uuid4()),
+        }
+
     @app.post("/api/v1/thompson/outcomes", tags=["thompson"])
     async def thompson_outcome_route(payload: dict[str, Any]):
         return await thompson_record(payload)
