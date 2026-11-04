@@ -376,7 +376,7 @@ class SearchService:
                 is_subagent=item.document.metadata.get("is_subagent"),
                 text_sha=hashlib.sha256(item.chunk.content.encode("utf-8")).hexdigest(),
             ))
-        if active_generation_id is not None and hits:
+        if self.index_store is not None and hits:
             source_states = await self.index_store.get_sources(
                 sorted({hit.source_id for hit in hits}),
             )
