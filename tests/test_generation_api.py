@@ -664,3 +664,98 @@ def test_failed_activation_rolls_back_pointer_state_and_fence(tmp_path):
         connection.commit()
 
     asyncio.run(exercise())
+
+def test_knowledge_generation_mirror_failure_keeps_index_change_retryable(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'knowledge-generation-retry.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    app = create_app(database_url=database_url)
+    knowledge_store = app.state.knowledge_store
+    original_upsert = knowledge_store.upsert_generation
+    fail_once = {"enabled": True}
+
+    async def upsert_generation(generation_id, record):
+        if fail_once["enabled"]:
+            fail_once["enabled"] = False
+            raise RuntimeError("simulated Knowledge generation mirror failure")
+        return await original_upsert(generation_id, record)
+
+    knowledge_store.upsert_generation = upsert_generation
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        created = client.post(
+            "/api/v1/index/generations",
+            json={"generation_id": "knowledge-generation-retry"},
+        )
+        assert created.status_code == 200
+
+        for capability in ("index", "documents", "vectors", "knowledge", "memory"):
+            copied = client.post(
+                f"/api/v1/index/generations/knowledge-generation-retry/copy/{capability}",
+                json={"page_size": 20},
+            )
+            assert copied.status_code == 200
+
+        for capability in ("index", "documents", "vectors", "knowledge", "memory"):
+            reconciled = client.post(
+                f"/api/v1/index/generations/knowledge-generation-retry/reconcile/{capability}",
+                json={"page_size": 20},
+            )
+            assert reconciled.status_code == 200
+            assert reconciled.json()["status"] == "caught_up"
+
+        assert client.post(
+            "/api/v1/index/generations/knowledge-generation-retry/fence"
+        ).status_code == 200
+        activated = client.post(
+            "/api/v1/index/generations/knowledge-generation-retry/activate"
+        )
+        assert activated.status_code == 200
+
+        payload = {
+            "source_id": "knowledge-mirror-retry",
+            "revision_sequence": 1,
+            "revision_id": "knowledge-mirror-retry-rev-1",
+            "title": "Knowledge mirror retry",
+            "content": "Knowledge publication must remain retryable after a mirror failure.",
+            "provenance": {
+                "origin": "test",
+                "locator": "test://knowledge-mirror-retry",
+            },
+            "profiles": {"chunking": "window-v1@1"},
+        }
+        failed = client.post("/api/v1/knowledge/records", json=payload)
+        assert failed.status_code == 500
+
+        # The base Knowledge write may have succeeded, but the generation mirror
+        # did not. The Index journal must therefore remain unacknowledged.
+        changes = asyncio.run(
+            app.state.index_store.list_generation_changes_after(
+                "knowledge-generation-retry", 0, 20,
+            )
+        )
+        change = next(item for item in changes if item["source_id"] == payload["source_id"])
+        assert change["acknowledged"] is False
+        assert client.get(
+            "/api/v1/knowledge/records/knowledge-mirror-retry"
+        ).status_code == 200
+
+        retried = client.post("/api/v1/knowledge/records", json=payload)
+        assert retried.status_code == 200
+        assert retried.json()["decision"] == "duplicate"
+
+        changes = asyncio.run(
+            app.state.index_store.list_generation_changes_after(
+                "knowledge-generation-retry", 0, 20,
+            )
+        )
+        change = next(item for item in changes if item["source_id"] == payload["source_id"])
+        assert change["acknowledged"] is True
+        generation_record = asyncio.run(
+            app.state.knowledge_store.get_generation(
+                "knowledge-generation-retry", payload["source_id"],
+            )
+        )
+        assert generation_record is not None
+        assert generation_record["revision_id"] == payload["revision_id"]
