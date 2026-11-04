@@ -138,6 +138,62 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
         assert after.status_code == 200
         assert any(hit["source_id"] == "generation-source-2" for hit in after.json()["results"])
 
+        vector_write = client.put(
+            "/api/v1/vector/collections/generation_test/records",
+            json={
+                "ids": ["generation-vector-1"],
+                "embeddings": [[1.0, 0.0]],
+                "documents": ["generation vector content"],
+                "metadatas": [{
+                    "source_id": "generation-vector-source",
+                    "content_sha256": "a" * 64,
+                }],
+                "model": "test-model",
+                "dimensions": 2,
+            },
+        )
+        assert vector_write.status_code == 200
+        vector_query = client.post(
+            "/api/v1/vector/collections/generation_test/query",
+            json={
+                "embedding": [1.0, 0.0], "top_k": 5, "dimensions": 2,
+                "generation_id": "generation-cutover-test",
+            },
+        )
+        assert vector_query.status_code == 200
+        assert vector_query.json()["results"][0]["id"] == "generation-vector-1"
+
+        metadata_update = client.patch(
+            "/api/v1/vector/collections/generation_test/records/metadata",
+            json={
+                "ids": ["generation-vector-1"],
+                "metadatas": [{"source_id": "generation-vector-source", "label": "updated"}],
+            },
+        )
+        assert metadata_update.status_code == 200
+        vector_query = client.post(
+            "/api/v1/vector/collections/generation_test/query",
+            json={
+                "embedding": [1.0, 0.0], "top_k": 5, "dimensions": 2,
+                "generation_id": "generation-cutover-test",
+            },
+        )
+        assert vector_query.json()["results"][0]["metadata"]["label"] == "updated"
+
+        vector_prune = client.post(
+            "/api/v1/vector/collections/generation_test/records/prune",
+            json={"url": "generation-vector-source", "keep_sha256": "0" * 64},
+        )
+        assert vector_prune.status_code == 200
+        vector_query = client.post(
+            "/api/v1/vector/collections/generation_test/query",
+            json={
+                "embedding": [1.0, 0.0], "top_k": 5, "dimensions": 2,
+                "generation_id": "generation-cutover-test",
+            },
+        )
+        assert vector_query.json()["results"] == []
+
         tombstone = client.post("/api/v1/index/tombstones", json={
             "source_id": "generation-source-1", "revision_sequence": 2,
         })
