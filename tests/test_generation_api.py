@@ -542,6 +542,9 @@ def test_application_startup_recovers_interrupted_generation_fence(tmp_path):
     # reconciliation checkpoint before accepting traffic.
     with TestClient(create_app(database_url=database_url)):
         pass
+    # A second startup must be a no-op once the abandoned fence is gone.
+    with TestClient(create_app(database_url=database_url)):
+        pass
 
     with sqlite3.connect(tmp_path / "generation-startup-recovery.db") as connection:
         fence_count = connection.execute(
