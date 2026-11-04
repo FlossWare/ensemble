@@ -246,15 +246,12 @@ def create_app(
                     generation_id = generation.get("generation_id")
                     if not generation_id:
                         continue
-                    reclaim_documents = getattr(document_store, "reclaim_generation_source", None)
-                    if callable(reclaim_documents):
-                        await reclaim_documents(generation_id, source_id)
-                    reclaim_knowledge = getattr(active_knowledge_store, "reclaim_generation_source", None)
-                    if callable(reclaim_knowledge):
-                        await reclaim_knowledge(generation_id, source_id)
-                    delete_generation_vectors = getattr(active_vector_store, "delete_generation_source", None)
-                    if callable(delete_generation_vectors):
-                        await delete_generation_vectors(generation_id, source_id)
+                    # These stores are required participants in permanent purge.
+                    # Never silently skip a missing adapter operation and mark the
+                    # Index source purged while generation payloads still exist.
+                    await document_store.reclaim_generation_source(generation_id, source_id)
+                    await active_knowledge_store.reclaim_generation_source(generation_id, source_id)
+                    await active_vector_store.delete_generation_source(generation_id, source_id)
                 reclaimed = [
                     await document_store.reclaim_source(source_id),
                     await active_knowledge_store.reclaim_source(source_id),
