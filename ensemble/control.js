@@ -99,6 +99,7 @@ crawlButton.addEventListener("click",async()=>{
 const crawlQueue=document.getElementById("crawl-queue");
 const crawlRetry=document.getElementById("crawl-retry");
 const crawlJobResults=document.getElementById("crawl-job-results");
+const crawlIngest=document.getElementById("crawl-ingest");
 let activeCrawlJobId=null;
 async function readCrawlJob(jobId){
  const response=await fetch("/api/v1/ingest/urls/crawl-jobs/"+encodeURIComponent(jobId));
@@ -112,6 +113,7 @@ async function pollCrawlJob(jobId){
   crawlJobResults.textContent=JSON.stringify(job,null,2);
   if(job.status==="completed"||job.status==="failed"||job.status==="interrupted"){
    crawlRetry.hidden=job.status!=="failed"&&job.status!=="interrupted";
+   crawlIngest.hidden=job.status!=="completed"||job.result?.page_count===0||job.ingestion?.status==="completed";
    status.textContent="Durable crawl "+job.status+": "+job.job_id;
    return;
   }
@@ -137,6 +139,20 @@ crawlQueue.addEventListener("click",async()=>{
   status.textContent="Could not queue or inspect crawl job: "+error.message;
  }finally{crawlQueue.disabled=false;}
 });
+
+crawlIngest.addEventListener("click",async()=>{
+ if(!activeCrawlJobId)return;
+ crawlIngest.disabled=true;
+ status.textContent="Ingesting persisted crawl pages with per-page checkpoints…";
+ try{
+  const result=await request("/api/v1/ingest/urls/crawl-jobs/"+encodeURIComponent(activeCrawlJobId)+"/ingest",{});
+  crawlJobResults.textContent=JSON.stringify(result,null,2);
+  status.textContent="Crawl ingestion "+result.ingestion.status+". Completed pages are checkpointed; failed pages can be retried.";
+  crawlIngest.hidden=result.ingestion.status==="completed";
+ }catch(error){status.textContent="Crawl ingestion failed: "+error.message;}
+ finally{crawlIngest.disabled=false;}
+});
+
 crawlRetry.addEventListener("click",async()=>{
  if(!activeCrawlJobId)return;
  crawlRetry.disabled=true;

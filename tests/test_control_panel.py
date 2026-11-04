@@ -35,6 +35,8 @@ def test_control_panel_is_served_by_the_api():
         assert 'id="crawl-depth"' in response.text
         assert "Queue durable crawl" in response.text
         assert 'id="crawl-job-results"' in response.text
+        assert "Ingest crawled pages" in response.text
+        assert 'id="crawl-ingest"' in response.text
         script = client.get("/control.js")
         assert script.status_code == 200
         assert "/api/v1/ga/runs" in script.text

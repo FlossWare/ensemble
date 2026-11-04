@@ -119,7 +119,7 @@ Do not ship a rebuild operation that can silently lose acknowledged writes or re
 
 ### 9. Source adapters
 
-- Bounded same-origin crawl preview enforces robots.txt, pins each connection to its validated DNS address, rejects cross-origin redirects, and caps page attempts, depth, response size, and total extracted characters. Durable SQLite crawl jobs now persist requests/results, run through a restart-recoverable worker, expose status/list/retry REST operations, and have Control Center queue/status/retry controls. The job currently persists crawl discovery results; ingestion remains an explicit separate operation. Durable per-page ingestion checkpoints and scheduled source refresh remain.
+- Bounded same-origin crawl preview enforces robots.txt, pins each connection to its validated DNS address, rejects cross-origin redirects, and caps page attempts, depth, response size, and total extracted characters. Durable SQLite crawl jobs persist requests/results, run through a restart-recoverable worker, and expose status/list/retry REST operations. Explicit batch ingestion now persists a stable revision and per-page state before each write, checkpoints successful pages, skips completed pages on replay, and retries failed/interrupted pages without allocating a new revision. Control Center exposes queue/status/retry/ingest actions. Scheduled source refresh and a durable scheduler remain.
 - Add OCR only with a deliberate provider/runtime decision.
 - Provide source connector contracts without coupling core ingestion to individual vendors.
 
@@ -177,7 +177,7 @@ Branch: `integration/source-lifecycle-mainline-2026-11-04` (not yet merged).
 - Control endpoints expose reclamation queue status and an operator-triggered bounded pass.
 - Direct document writes require a matching current Index revision; direct document/Knowledge/vector source tombstones require the Index tombstone lifecycle.
 - Standalone vector upsert, metadata, and prune operations are paused during generation rebuilds. Normal indexed ingestion remains available and is reconciled through the Index change journal.
-- Latest verified integration CI: **258 passed, 1 skipped, 1 warning**.
+- Latest verified integration CI: **263 passed, 1 skipped, 1 warning**.
 
 ## Current main state
 
