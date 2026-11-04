@@ -227,3 +227,17 @@ Still outstanding:
 - Reconciliation for records and collections created or updated during the bounded copy.
 - Memory and Knowledge snapshot/copy passes.
 - Write fences, acknowledged-write verification, crash recovery, and atomic cutover across all stores.
+
+## Reversible source deletion and deferred permanent purge
+
+Implemented on `feature/deferred-source-reclamation`:
+
+- Ordinary deletion is a **soft delete**. The authoritative Index source state is marked deleted immediately; document, Knowledge, Vector, and Graph retrieval stop returning it.
+- Original document/chunk, Knowledge, and Vector materializations are retained, so restoration does not require re-ingestion or reconstruction.
+- `POST /api/v1/index/sources/{source_id}/restore` restores a soft-deleted source using a new, higher revision sequence. The Index is reactivated only after the retained materializations are ready.
+- Permanent deletion is a separate, explicit operation: `POST /api/v1/index/sources/{source_id}/purge`.
+- Permanent purge first marks the source irreversibly purged, then enqueues bounded physical cleanup in SQLite. The worker removes document/chunk/FTS, Knowledge, and source-attributed Vector records with retry/backoff and restart recovery.
+- The Index source record and purge marker remain as a compact anti-resurrection guard. Purged sources cannot be restored or re-ingested.
+- `GET /api/v1/index/reclamation` reports pending, running, retry, and completed purge jobs.
+
+Retention expiry is not automatic yet. A retention policy should be configurable before any scheduled purge is enabled. Memory imports, Graph lineage, retired generation materializations, and privacy erasure remain separate cleanup work.
