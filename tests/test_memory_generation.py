@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 
 from alembic import command
 from alembic.config import Config
@@ -189,5 +190,38 @@ def test_memory_mutations_continue_mirroring_into_the_active_generation(tmp_path
         finally:
             await memory.close()
             await index.close()
+
+    asyncio.run(exercise())
+
+
+
+def test_memory_generation_migration_preserves_existing_memory_rows(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'memory-migration.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0027_generation_reclamation_merge")
+
+    with sqlite3.connect(tmp_path / "memory-migration.db") as connection:
+        connection.execute(
+            "INSERT INTO ensemble_memories (name, content, updated_at) VALUES (?, ?, ?)",
+            ("preexisting-memory", "preserve this content", "2026-11-04T00:00:00+00:00"),
+        )
+
+    command.upgrade(config, "head")
+
+    async def exercise():
+        memory = SqliteMemoryStore(database_url)
+        await memory.initialize()
+        try:
+            assert await memory.read("preexisting-memory") == "preserve this content"
+            assert await memory.get_memory_snapshot("preexisting-memory") == {
+                "name": "preexisting-memory",
+                "content": "preserve this content",
+                "entries": [],
+                "source": None,
+                "updated_at": "2026-11-04T00:00:00",
+            }
+        finally:
+            await memory.close()
 
     asyncio.run(exercise())
