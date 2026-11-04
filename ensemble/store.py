@@ -304,7 +304,7 @@ class SqlDocumentStore:
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0029_crawl_jobs":
+        if revision != "0030_crawl_ingestion_checkpoints":
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )

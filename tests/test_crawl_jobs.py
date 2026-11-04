@@ -87,3 +87,47 @@ def test_crawl_job_api_validates_bounds_before_persisting(monkeypatch):
             "uri": "https://example.com/", "max_pages": 1000,
         })
         assert response.status_code == 400
+
+
+def test_crawl_job_ingestion_is_checkpointed_per_source_and_retrievable(monkeypatch):
+    async def fake_crawl(uri, max_pages=10, max_depth=1):
+        return {
+            "ok": True, "start_uri": uri, "page_count": 1,
+            "pages": [{
+                "final_uri": uri, "title": "Example guide",
+                "text": "A useful guide about durable ingestion.",
+                "media_type": "text/markdown",
+            }],
+            "attempted_pages": 1, "robots_policy": "applied",
+        }
+
+    monkeypatch.setattr(api, "_validate_public_uri", lambda uri: uri)
+    monkeypatch.setattr(api, "crawl_uri", fake_crawl)
+    app = create_app(store=InMemoryDocumentStore(), crawl_store=InMemoryCrawlJobStore())
+    with TestClient(app) as client:
+        created = client.post("/api/v1/ingest/urls/crawl-jobs", json={
+            "uri": "https://example.com/guide", "max_pages": 1, "max_depth": 0,
+        })
+        assert created.status_code == 202
+        job_id = created.json()["job"]["job_id"]
+
+        deadline = time.monotonic() + 4
+        job = None
+        while time.monotonic() < deadline:
+            job = client.get(f"/api/v1/ingest/urls/crawl-jobs/{job_id}").json()["job"]
+            if job["status"] == "completed":
+                break
+            time.sleep(0.02)
+        assert job["status"] == "completed"
+
+        ingested = client.post(f"/api/v1/ingest/urls/crawl-jobs/{job_id}/ingest")
+        assert ingested.status_code == 200
+        payload = ingested.json()["ingestion"]
+        assert payload["status"] == "completed"
+        assert payload["pages"][0]["status"] == "completed"
+        assert payload["pages"][0]["revision"] == 1
+
+        replay = client.post(f"/api/v1/ingest/urls/crawl-jobs/{job_id}/ingest")
+        assert replay.status_code == 200
+        assert replay.json()["ingestion"]["pages"][0]["revision"] == 1
+        assert replay.json()["ingestion"]["pages"][0]["status"] == "completed"

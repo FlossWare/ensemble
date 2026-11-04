@@ -2751,6 +2751,95 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+
+    @app.post("/api/v1/ingest/urls/crawl-jobs/{job_id}/ingest", tags=["ingestion"])
+    async def ingest_crawl_job(job_id: str, request: Request):
+        job = await active_crawl_store.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="crawl job not found")
+        if job["status"] != "completed" or not isinstance(job.get("result"), dict):
+            raise HTTPException(status_code=409, detail="crawl job must complete before ingestion")
+        previews = job["result"].get("pages")
+        if not isinstance(previews, list):
+            raise HTTPException(status_code=409, detail="crawl job has no persisted page results")
+
+        ingestion = job.get("ingestion") or {"status": "pending", "pages": []}
+        page_states = {
+            item["source_id"]: item for item in ingestion.get("pages", [])
+            if isinstance(item, dict) and isinstance(item.get("source_id"), str)
+        }
+        for preview in previews:
+            if not isinstance(preview, dict):
+                continue
+            source_id = preview.get("final_uri")
+            content = preview.get("text")
+            if not isinstance(source_id, str) or not isinstance(content, str) or not content.strip():
+                continue
+            state = page_states.get(source_id)
+            if state and state.get("status") == "completed":
+                continue
+            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            if state is None:
+                current = await active_index_store.get_source(source_id)
+                revision = (current["high_sequence"] + 1) if current else 1
+                state = {
+                    "source_id": source_id, "revision": revision, "content_sha256": digest,
+                    "status": "running", "decision": None, "document": None, "last_error": None,
+                }
+                page_states[source_id] = state
+                ingestion["pages"] = list(page_states.values())
+                ingestion["status"] = "running"
+                await active_crawl_store.update_ingestion(job_id, ingestion)
+            else:
+                if state.get("content_sha256") != digest:
+                    state.update(status="failed", last_error="persisted crawl content changed; refusing to reuse its revision")
+                    ingestion["pages"] = list(page_states.values())
+                    ingestion["status"] = "partial"
+                    await active_crawl_store.update_ingestion(job_id, ingestion)
+                    continue
+                state.update(status="running", last_error=None)
+                ingestion["pages"] = list(page_states.values())
+                ingestion["status"] = "running"
+                await active_crawl_store.update_ingestion(job_id, ingestion)
+
+            try:
+                profiles = {"chunking": "window-v1", "media_type": "text/plain"}
+                document = DocumentIn(
+                    source_id=source_id, revision=state["revision"],
+                    title=preview.get("title") or source_id, content=content,
+                    chunk_profile="window-v1",
+                    metadata={"origin": "web", "locator": source_id},
+                )
+                result, decision = await ingest_indexed_document(
+                    document, origin="web", locator=source_id, request=request,
+                )
+                await active_knowledge_store.put({
+                    "source_id": source_id, "revision_sequence": state["revision"],
+                    "revision_id": digest, "title": preview.get("title") or source_id,
+                    "content": content, "origin": "web", "locator": source_id,
+                    "profiles": profiles,
+                })
+                state.update(
+                    status="completed", decision=decision,
+                    document=result.model_dump(mode="json"), last_error=None,
+                )
+            except Exception as exc:
+                state.update(status="failed", last_error=f"{type(exc).__name__}: {str(exc)}"[:2000])
+            ingestion["pages"] = list(page_states.values())
+            ingestion["status"] = (
+                "completed" if all(item.get("status") == "completed" for item in page_states.values())
+                else "partial"
+            )
+            await active_crawl_store.update_ingestion(job_id, ingestion)
+
+        ingestion["pages"] = list(page_states.values())
+        ingestion["status"] = (
+            "completed" if page_states and all(item.get("status") == "completed" for item in page_states.values())
+            else "partial" if page_states else "empty"
+        )
+        updated = await active_crawl_store.update_ingestion(job_id, ingestion)
+        return {"ok": ingestion["status"] == "completed", "job_id": job_id, "ingestion": updated["ingestion"]}
+
     @app.post("/api/v1/ingest/urls", status_code=201, tags=["ingestion"])
     async def scrape_and_ingest(payload: dict[str, Any], request: Request):
         try:
