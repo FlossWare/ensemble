@@ -417,3 +417,42 @@ def test_memory_generation_reconciliation_replays_updates_and_deletions(tmp_path
             await index.close()
 
     asyncio.run(scenario())
+
+
+
+def test_generation_fence_recovery_reopens_building_generation_and_invalidates_reconciliation(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-recovery.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    async def scenario():
+        store = SqliteIndexStore(database_url)
+        await store.initialize()
+        try:
+            await store.create_generation("recoverable-generation")
+            await store.record_generation_checkpoint(
+                "recoverable-generation", "index_reconciliation",
+                {"cursor": 0, "observed_high_watermark": 0}, sealed=True,
+            )
+            await store.acquire_generation_write_fence("recoverable-generation", 0)
+
+            recovered = await store.recover_generation_write_fence()
+            assert recovered["recovered"] is True
+            assert recovered["generation_state"] == "building"
+
+            status = await store.generation_status()
+            generation = next(
+                item for item in status["generations"]
+                if item["generation_id"] == "recoverable-generation"
+            )
+            assert generation["checkpoints"]["index_reconciliation"]["sealed"] is False
+
+            accepted = await store.record_revision(
+                "after-restart-source", 1, "revision-1", {"profile": "default"},
+            )
+            assert accepted["decision"] == "accepted"
+        finally:
+            await store.close()
+
+    asyncio.run(scenario())
