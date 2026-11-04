@@ -428,7 +428,9 @@ def test_generation_fence_recovery_reopens_building_generation_and_invalidates_r
 
     async def scenario():
         store = SqliteIndexStore(database_url)
+        memory = SqliteMemoryStore(database_url)
         await store.initialize()
+        await memory.initialize()
         try:
             await store.create_generation("recoverable-generation")
             await store.record_generation_checkpoint(
@@ -436,6 +438,8 @@ def test_generation_fence_recovery_reopens_building_generation_and_invalidates_r
                 {"cursor": 0, "observed_high_watermark": 0}, sealed=True,
             )
             await store.acquire_generation_write_fence("recoverable-generation", 0)
+            with pytest.raises(RuntimeError, match="writes are fenced"):
+                await memory.write("fenced-memory", "must not commit")
 
             recovered = await store.recover_generation_write_fence()
             assert recovered["recovered"] is True
@@ -452,7 +456,10 @@ def test_generation_fence_recovery_reopens_building_generation_and_invalidates_r
                 "after-restart-source", 1, "revision-1", {"profile": "default"},
             )
             assert accepted["decision"] == "accepted"
+            await memory.write("fenced-memory", "writes resumed after recovery")
+            assert await memory.read("fenced-memory") == "writes resumed after recovery"
         finally:
+            await memory.close()
             await store.close()
 
     asyncio.run(scenario())
