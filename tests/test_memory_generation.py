@@ -136,3 +136,58 @@ def test_interrupted_generation_fence_is_released_after_restart(tmp_path):
             await restarted.close()
 
     asyncio.run(exercise())
+
+
+
+def test_memory_mutations_continue_mirroring_into_the_active_generation(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'memory-active-generation.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    async def exercise():
+        index = SqliteIndexStore(database_url)
+        memory = SqliteMemoryStore(database_url)
+        await index.initialize()
+        await memory.initialize()
+        try:
+            await index.create_generation("memory-active-generation")
+            await memory.write("shared-memory", "before activation")
+            builder = IndexGenerationBuilder(index, memory_store=memory)
+            await builder.copy_memory_page("memory-active-generation", page_size=10)
+            await builder.reconcile_memory_changes_page("memory-active-generation", page_size=10)
+
+            for capability in ("index", "documents", "vectors", "knowledge"):
+                await index.record_generation_checkpoint(
+                    "memory-active-generation", capability, {"empty": True}, sealed=True,
+                )
+            for capability in (
+                "index_reconciliation", "documents_reconciliation",
+                "vectors_reconciliation", "knowledge_reconciliation",
+            ):
+                await index.record_generation_checkpoint(
+                    "memory-active-generation", capability, {"cursor": 0}, sealed=False,
+                )
+
+            await builder.fence_reconciled_generation("memory-active-generation")
+            status = await index.generation_status()
+            activated = await index.activate_generation(
+                "memory-active-generation", status["active_generation_id"],
+                status["epoch"], {
+                    "acknowledged_writes_verified": True,
+                    "tombstones_verified": True,
+                    "reconciled_through_change_id": 0,
+                },
+            )
+            assert activated["active_generation_id"] == "memory-active-generation"
+
+            await memory.write("shared-memory", "after activation")
+            snapshot = await memory.get_memory_generation_snapshot(
+                "memory-active-generation", "shared-memory",
+            )
+            assert snapshot["content"] == "after activation"
+        finally:
+            await memory.close()
+            await index.close()
+
+    asyncio.run(exercise())
