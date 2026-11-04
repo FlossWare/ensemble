@@ -99,6 +99,7 @@ class IndexStore(Protocol):
     async def generation_change_high_watermark(self, generation_id: str) -> int: ...
     async def acquire_generation_write_fence(self, generation_id: str, through_change_id: int) -> dict[str, Any]: ...
     async def release_generation_write_fence(self, generation_id: str) -> bool: ...
+    async def recover_generation_write_fence(self) -> dict[str, Any]: ...
     async def acknowledge_generation_change(self, source_id: str, sequence: int, tombstoned: bool) -> int: ...
 
 
@@ -510,6 +511,34 @@ class SqliteIndexStore:
                     singleton_id=1, generation_id=generation_id, acquired_at=now,
                 ))
         return {"generation_id": generation_id, "through_change_id": high, "acquired_at": now.isoformat()}
+
+    async def recover_generation_write_fence(self) -> dict[str, Any]:
+        """Release a cutover fence left by a process that stopped before activation.
+
+        Activation and fence deletion are one SQLite transaction. Therefore a
+        surviving fence can only belong to a still-building generation and is
+        safe to release so its journal can be reconciled again.
+        """
+        async with self.engine.begin() as connection:
+            fence = (await connection.execute(select(generation_write_fence).where(
+                generation_write_fence.c.singleton_id == 1
+            ))).mappings().first()
+            if fence is None:
+                return {"recovered": False, "reason": "no_fence"}
+            generation = (await connection.execute(select(generations).where(
+                generations.c.generation_id == fence["generation_id"]
+            ))).mappings().first()
+            if generation is not None and generation["state"] == "active":
+                raise RuntimeError("active generation unexpectedly retains a write fence")
+            await connection.execute(generation_write_fence.delete().where(
+                generation_write_fence.c.singleton_id == 1,
+                generation_write_fence.c.generation_id == fence["generation_id"],
+            ))
+            return {
+                "recovered": True, "generation_id": fence["generation_id"],
+                "reason": "interrupted_activation",
+                "generation_state": generation["state"] if generation else "missing",
+            }
 
     async def release_generation_write_fence(self, generation_id: str) -> bool:
         async with self.engine.begin() as connection:
