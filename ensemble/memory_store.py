@@ -357,9 +357,12 @@ class SqliteMemoryStore:
         source = (await connection.execute(
             select(memory_sources).where(memory_sources.c.document_name == name)
         )).mappings().first()
+        source_snapshot = dict(source) if source else None
+        if source_snapshot and source_snapshot.get("updated_at") is not None:
+            source_snapshot["updated_at"] = source_snapshot["updated_at"].isoformat()
         return {
             "name": name, "content": memory["content"],
-            "entries": list(entry_rows), "source": dict(source) if source else None,
+            "entries": list(entry_rows), "source": source_snapshot,
             "updated_at": memory["updated_at"].isoformat(),
         }
 
