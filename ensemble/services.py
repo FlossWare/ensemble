@@ -401,7 +401,7 @@ class SearchService:
         fused_by_id = {item.candidate_id: item for item in fused}
         hits: list[SearchHit] = []
         for item in indexed:
-            fusion_result = fused_by_id.get(item.chunk.id)
+            fusion_result = fused_by_id.get(str(item.chunk.id))
             if fusion_result is None:
                 continue
             hits.append(SearchHit(
@@ -459,12 +459,12 @@ class SearchService:
             "results": [
                 {
                     "chunk_id": hit.chunk_id,
-                    "lexical_rank": fused_by_id[hit.chunk_id].ranks.get("lexical"),
-                    "vector_rank": fused_by_id[hit.chunk_id].ranks.get("vector"),
-                    "ranks": dict(fused_by_id[hit.chunk_id].ranks),
+                    "lexical_rank": fused_by_id[str(hit.chunk_id)].ranks.get("lexical"),
+                    "vector_rank": fused_by_id[str(hit.chunk_id)].ranks.get("vector"),
+                    "ranks": dict(fused_by_id[str(hit.chunk_id)].ranks),
                     "contributions": {
                         channel: round(value, 8)
-                        for channel, value in fused_by_id[hit.chunk_id].contributions.items()
+                        for channel, value in fused_by_id[str(hit.chunk_id)].contributions.items()
                     },
                     "score": round(hit.fusion_score, 8),
                 }

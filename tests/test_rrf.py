@@ -67,3 +67,13 @@ def test_thompson_channel_weights_are_seed_reproducible_and_positive():
 def test_thompson_channel_weights_validate_feedback():
     with pytest.raises(ValueError):
         thompson_channel_weights({"lexical": {"successes": -1}})
+
+
+def test_rrf_normalizes_uuid_candidate_identity():
+    from uuid import uuid4
+
+    identity = uuid4()
+    fused = reciprocal_rank_fusion({
+        "lexical": [{"chunk_id": identity}],
+    })
+    assert fused[0].candidate_id == str(identity)

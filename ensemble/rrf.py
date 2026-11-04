@@ -53,8 +53,11 @@ def reciprocal_rank_fusion(
         for candidate in ranked:
             if not isinstance(candidate, Mapping):
                 raise ValueError(f"candidate in channel {channel} must be a mapping")
-            identity = candidate.get(identity_key)
-            if not isinstance(identity, str) or not identity.strip():
+            raw_identity = candidate.get(identity_key)
+            if raw_identity is None or isinstance(raw_identity, bool):
+                raise ValueError(f"candidate in channel {channel} has no valid {identity_key}")
+            identity = str(raw_identity)
+            if not identity.strip():
                 raise ValueError(f"candidate in channel {channel} has no valid {identity_key}")
             if identity in seen:
                 continue
