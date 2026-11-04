@@ -589,6 +589,13 @@ def test_search_retrieve_rest_contract_owns_lexical_vector_retrieval(tmp_path):
         assert body["results"][0]["source_id"] == "search-retrieve-source"
         assert body["retrieval"] == "lexical"
         assert body["reranked"] is False
+        trace_id = body["execution_trace_id"]
+        trace_response = client.get(f"/api/v1/execution-traces/{trace_id}")
+        assert trace_response.status_code == 200
+        trace = trace_response.json()["trace"]
+        assert trace["operation"] == "retrieval"
+        assert trace["status"] in {"completed", "degraded"}
+        assert trace["stages"][0]["name"] == "lexical_vector_retrieval_and_fusion"
 
 
 def test_graph_expansion_source_reads_have_document_and_index_rest_contracts(tmp_path):
