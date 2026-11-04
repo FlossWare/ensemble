@@ -108,7 +108,9 @@ Implement durable index rebuilds that can safely coexist with writes:
 
 **Vector reconciliation implemented:** acknowledged changes are replayed per active vector collection. Reconciliation removes the old shadow records for that source before copying current active records, and applies tombstones across collections. SQLite uses source-scoped JSON metadata lookup; a source with more than 10,000 vector records fails closed rather than being partially copied. The in-memory adapter mirrors the behavior.
 
-**Still not complete:** Memory and Knowledge materialization reconciliation, REST rebuild orchestration, and restart recovery for a process that stops while the durable fence is held. The final fence and activation now require all five capability reconciliation checkpoints, including Memory and Knowledge, so the rebuild API remains unavailable until those requirements are satisfied.
+**Knowledge reconciliation implemented:** migration 0023 adds generation-scoped Knowledge records. The builder copies Knowledge records alongside the bounded Index source manifest, verifies revision parity, and replays acknowledged revisions and tombstones with an independent durable checkpoint. SQLite and in-memory adapters support the same lifecycle.
+
+**Still not complete:** Memory materialization reconciliation, REST rebuild orchestration, and restart recovery for a process that stops while the durable fence is held. The final fence and activation require all five capability reconciliation checkpoints, including Memory, so the rebuild API remains unavailable until those requirements are satisfied.
 
 Do not ship a rebuild operation that can silently lose acknowledged writes or resurrect deleted content.
 
