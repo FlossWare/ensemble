@@ -262,6 +262,14 @@ def test_generation_cutover_routes_retrieval_and_subsequent_writes(tmp_path):
             ).fetchone()
         assert knowledge_row == (1,)
 
+        reclaimed = client.post("/api/v1/index/reclamation/run")
+        assert reclaimed.status_code == 200
+        assert reclaimed.json()["processed"] == 2
+        assert reclaimed.json()["jobs"]["complete"] == 2
+        source_state = client.get("/api/v1/index/sources/generation-source-1")
+        assert source_state.status_code == 200
+        assert source_state.json()["source"]["purged"] is True
+
         after_delete = client.post("/api/v1/search/retrieve", json={
             "query": "searchable content", "limit": 10, "rerank": False,
         })
