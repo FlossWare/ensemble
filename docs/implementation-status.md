@@ -94,3 +94,19 @@ Not yet implemented:
 - Reconciliation of writes accepted while the generation is being built.
 - Restart recovery for interrupted rebuilds and uncertain cutover.
 - Public rebuild operations. These remain intentionally unavailable until the data-plane guarantees are implemented.
+
+
+## Shadow vector generation storage
+
+Implemented:
+- Versioned SQLite migration 0017 for generation-scoped vector records, keyed by collection, generation, and record ID.
+- Durable shadow-vector upsert, query, and generation cleanup operations.
+- In-memory adapter with matching generation isolation.
+- Shadow writes and queries do not alter or leak into the existing active vector collection query path.
+- Tests cover same-record-ID isolation between active and shadow generations and cleanup without disturbing active records.
+
+Still outstanding:
+- Shadow document/chunk and lexical storage.
+- Rebuild worker and source snapshot/cursor handling.
+- Write-fence coordination and reconciliation of writes accepted during rebuild.
+- End-to-end active generation cutover and crash recovery.
