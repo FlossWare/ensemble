@@ -1,153 +1,124 @@
 # Ensemble Architecture
 
-**Status:** Initial architectural direction accepted; implementation and detailed contracts remain to be designed.
+**Status:** Accepted architectural direction. Implementation status is tracked separately in docs/implementation-status.md and docs/review-readiness.md.
 
-## 1. Purpose and ownership
+## 1. Purpose and product boundary
 
-Ensemble is the shared, standalone platform for reusable intelligence capabilities. It is built first.
+Ensemble is a standalone platform for reusable intelligence capabilities, including Memory, Graph, Knowledge, ingestion, indexing, retrieval, model access, embeddings, ranking, and context assembly.
 
-The platform owns reusable capabilities and their service contracts. Client-specific repositories own only their client integration and workflows.
+Ensemble owns the shared platform and its canonical contracts. Client-specific integrations belong in separate consumer repositories and are not part of Ensemble's implementation or documentation scope.
 
-- ensemble: shared platform and capabilities.
-- ensemble-claude: Claude-specific integration consuming Ensemble.
-- Claude Code, Codex, Cursor, Crush, and other applications are optional clients.
-- The historical claude-ensemble and poc-claude-ensemble repositories are source material to assess and consolidate, not assumed to be the long-term platform boundary.
+Ensemble must operate independently of any client application and optional model provider. Model access is a capability owned by Ensemble, not a client integration. Historical repositories may provide narrowly scoped implementation evidence when needed, but they are not the product definition, architecture template, or implementation target. Ensemble's scope is determined by its own requirements and contracts.
 
-Ensemble must start and operate without Claude Code, Codex, Cursor, MCP clients, or any other AI coding assistant installed, authenticated, or running.
+## 2. Deployment shape
 
-## 2. REST is the service contract
-
-REST is the canonical interface for external consumers and internal service-to-service communication.
-
-The initial deployment is:
+The initial deployment is deliberately simple:
 
 - One application.
 - One REST server/listener.
 - Multiple versioned endpoint groups.
 - Independently addressable logical capabilities.
+- Pluggable implementations behind stable contracts.
 
-A capability invokes another capability through its REST contract, even when both happen to run in the same deployment. Do not substitute in-process calls as the normal service boundary.
+Capabilities may share a process and deployment initially. Their REST contracts and ownership remain independent so a capability can move to another process or host without changing consumers.
 
-This makes service location a deployment/configuration concern rather than a different programming model.
+Do not introduce federation, service discovery, service meshes, brokers, distributed coordination, or a microservice fleet without a concrete requirement.
 
-## 3. Co-located first; federation-ready
+## 3. REST is the canonical boundary
 
-The initial deployment should remain simple. Capabilities may share one process and one server while retaining independent REST contracts and ownership.
+REST/HTTP is the canonical contract for external consumers and capability-to-capability communication.
 
-The architecture should permit a capability to move to another host or deployment without changing its consumers or service contract.
+A capability calls another capability through its REST contract, even when both are co-located. Direct in-process calls are not the normal service boundary. Co-location is a deployment choice, not permission to bypass the contract.
 
-Federation is a future possibility, not an initial subsystem. Do not introduce service discovery, distributed registries, service meshes, brokers, distributed coordination, or federation protocols until a concrete requirement warrants them.
+Contracts are language-neutral. Implementations may use the language and runtime suited to the capability; consumers must not depend on implementation language or framework.
 
-## 4. Decorator composition over REST
+The current implementation is not yet fully compliant with this boundary. Some orchestration paths in the review branch still invoke stores and services directly. That gap must be closed as capabilities are consolidated. See docs/review-readiness.md.
 
-Service contracts should support decorator composition without coupling consumers to a particular implementation or location.
+See docs/rest-contracts.md for REST contract conventions.
 
-A decorator may wrap a REST client/implementation while preserving the same service contract. Examples of potential decorators include logging, metrics, tracing, retry, timeout, caching, policy, routing, and failover. These are examples, not a mandate to implement all of them initially.
+## 4. Composition and decorators
 
-Provider selection can compose multiple implementations behind one capability. For example, an embedding capability may route requests to multiple independently hosted embedding servers based on model, dimensions, workload, policy, or availability.
+Implementations sit behind capability contracts. Decorators may wrap a REST client or implementation while preserving the same contract.
 
-## 5. Model access and client boundary
+Cross-cutting decorators may include logging, metrics, tracing, timeouts, bounded retries, caching, provider selection and routing, policy, authorization, and partition-aware access enforcement.
 
-Model inference is an Ensemble capability, not an AI-client integration.
+Decorators are composition mechanisms, not the sole security boundary. Authorization must also be enforced at storage and query boundaries where applicable. A capability must not become less secure because a decorator was omitted.
 
-- Ensemble owns a provider-neutral model invocation contract, model catalog, explicit routing, and usage records.
-- Provider adapters implement external inference protocols. The Anthropic Messages API is one adapter protocol, not Ensemble's universal internal contract.
-- EnMaaS is the first identified enterprise model gateway and the first candidate provider adapter. Its Anthropic Messages API compatibility does not make Claude Code a dependency.
-- Other gateways and direct providers may be added through adapters without changing consumers of Ensemble's model-access REST contract.
-- Enterprise and personal provider profiles, credentials, model allowlists, and policies must remain isolated.
-- Model selection must be explicit. Unknown, unavailable, or unauthorized models fail clearly; there is no silent provider or model fallback.
-- Gateway discovery informs the catalog but does not itself establish workload approval or authorization.
-- Ensemble must not duplicate or bypass upstream gateway authorization and enterprise policy.
+Introduce only the decorators needed by a concrete capability or operational requirement. Do not build a framework of unused extension points.
 
-**AI clients are consumers, not model-provider implementations.** Claude Code, Codex, Cursor, Crush, and similar applications may call Ensemble APIs, but they do not belong in Ensemble's core runtime or provider registry.
+## 5. Retrieval and RAG
 
-In particular:
+Retrieval is a first-class, independently callable capability. It must work without a generation model or AI client.
 
-- No ClaudeCodeProvider, Claude CLI subprocess, Claude authentication check, or Claude-specific runtime selection belongs in Ensemble core.
-- No Claude installation, account, token, or configuration is required to start or operate Ensemble.
-- If a client-specific integration is needed, it belongs in its own integration project (for example, ensemble-claude).
-- A client may use its own model gateway independently while consuming Ensemble memory, knowledge, retrieval, or other capabilities. Using Ensemble does not require routing that client's inference through Ensemble.
+The retrieval pipeline may combine lexical retrieval, vector retrieval, Graph expansion, candidate fusion, ranking and reranking, and source metadata and citations.
 
-See [Model Access](model-access.md) for the initial provider boundary and EnMaaS direction.
+Reranking receives only candidates the caller is authorized to access. Authorization must be applied before candidate fusion and reranking, and checked again at trust boundaries. Unauthorized content must never be sent to a reranker or external model provider.
 
-## 6. RAG and MCP
+Generation is optional and provider-backed. It is not a prerequisite for search, retrieval, or context assembly.
 
-### RAG
+## 6. Data partitions and access control
 
-RAG is a first-class Ensemble capability. Retrieval must be independently usable through REST without requiring a generation model or AI client.
+The architecture must accommodate isolated data partitions without requiring a redesign.
 
-The platform can expose ingestion, extraction, chunking, embedding, lexical/vector retrieval, graph expansion, ranking, reranking, and sourced results as appropriate contracts. Generation is optional and uses a separately configured provider.
+The intended model includes caller identity, owner or tenant identity where applicable, partition identity, classification and sharing policy, explicit grants, and authorized scope carried through ingestion, storage, retrieval, Graph traversal, reranking, caching, and response generation.
 
-### MCP
+Access is deny-by-default. Missing classification or scope must not imply that content is shareable.
 
-MCP is an optional adapter over existing Ensemble REST capabilities.
+Logical partitioning and physical isolation are both possible implementation strategies. Sensitive workloads may require a separate deployment and storage boundary rather than relying only on logical filters.
 
-- REST remains canonical.
-- MCP tools map to existing capability operations.
-- MCP contains no duplicate business logic.
-- Ensemble remains fully usable when MCP is disabled.
+Authentication and partition enforcement are not prerequisites for the initial local development milestone. They are prerequisites before exposing the service to untrusted networks or multiple mutually untrusted users.
 
-## 7. Storage and active POC ingestion
+## 7. Storage and migration
 
-The initial storage foundation reuses the existing POC data and storage:
+Storage technology is not part of the public REST contract.
 
-- ChromaDB for existing vector collections.
-- SQLite for existing lexical/index/metadata responsibilities.
+Ensemble owns its persistence implementation. SQLite is the only persistence implementation in this repository and is the initial supported deployment store. PostgreSQL and other alternative persistence implementations are not part of the current Ensemble scope; shared infrastructure and alternative persistence implementations belong to FlossWare proper.
 
-PostgreSQL is not part of the current design.
+Ensemble must not depend on another application's database files, persistence directories, process internals, or direct database sharing.
 
-The POC ingestion pipeline is actively running. Preserve its operation and existing data. Do not stop ingestion, relocate active storage, re-ingest documents, regenerate embeddings, or create a parallel storage system as an architectural prerequisite.
+Schema changes are versioned with Alembic and applied as a deployment step before the application starts. Application startup checks that required migrations and tables exist; it does not silently upgrade production schemas.
 
-Before changing storage ownership, inventory the actual deployed databases, collections, schemas, paths, record counts, and write ownership. Avoid assuming database boundaries beyond what the running implementation demonstrates. In particular, avoid having independent processes write to the same ChromaDB persistence directory without a deliberate consistency/ownership design.
+Existing external data and services must not be disturbed as a prerequisite for implementing Ensemble. Any required import or migration must use an explicitly designed, supported interface or export/import contract. Data migration is separate from implementing the platform's capabilities.
 
-Reuse existing data first; assess and consolidate implementation behind Ensemble contracts afterward.
+## 8. Model access, providers, and adapters
 
-## 8. Capability consolidation
+Model access is a first-class Ensemble capability exposed through provider-neutral REST contracts. Provider-specific protocols and credentials remain behind adapters; provider details must not leak into the public contract.
 
-Existing POC and related work should be assessed as candidate Ensemble capabilities rather than automatically retained as separate platforms or repositories. Candidate areas include:
+EnMaaS is the identified enterprise model-gateway integration direction. It is an integration target, not a dependency required to run Ensemble. Model identity, provider availability, and capability support must be explicit. Do not silently switch providers or models when a requested provider is unavailable.
 
-- Memory
-- Graph
-- Knowledge
-- Retrieval and RAG
-- Model access and provider routing
-- Embeddings and provider routing
-- Reranking and ranking
-- Chunking and tokenization
-- Ingestion and extraction
-- Indexing and source revision tracking
+Embedding and ranking providers are pluggable behind Ensemble-owned contracts. Optional generation is provider-backed and must not become a dependency of retrieval or other non-generation capabilities.
 
-This is an inventory for assessment, not a claim that every capability is complete or that each requires a separate process.
+MCP is an optional adapter over existing Ensemble REST operations. REST remains canonical; MCP tools map to existing operations; MCP contains no duplicate business logic; and Ensemble remains fully usable when MCP is disabled.
 
-## 9. Explicitly deferred
+## 9. Explicitly out of scope initially
 
-- Messaging endpoint/service.
-- Federation infrastructure and distributed service discovery.
-- Service mesh, message broker, and distributed coordination.
-- Mandatory MCP support.
-- Dependency on any particular AI client or model vendor.
-- Anthropic-compatible public API facade over Ensemble's provider-neutral model contract, unless a concrete consumer requires it.
-- Streaming, tool use, and advanced model features until provider-specific support and requirements are verified.
+- The broader FlossWare ecosystem and its shared infrastructure implementations.
+- Client-specific workflows inside the Ensemble platform.
+- A mandatory MCP server.
+- Federation and distributed service discovery.
+- Service mesh, message brokers, and distributed coordination.
+- A required generation model.
+- Premature provider federation or a model broker.
+- Rebuilding or migrating unrelated active data stores as a prerequisite for Ensemble implementation.
 
-## 10. Initial implementation sequence
+## 10. Implementation sequence
 
-1. Establish the repository architecture and REST contract conventions.
-2. Inventory the active POC storage and ingestion without interrupting it.
-3. Map existing capabilities, implementations, data ownership, and dependencies into Ensemble boundaries.
-4. Define the minimum server and endpoint skeleton.
-5. Define provider-neutral model-access contracts and the EnMaaS adapter boundary.
-6. Reuse existing ChromaDB/SQLite data through Ensemble REST contracts.
-7. Consolidate capabilities incrementally and validate against existing data.
-8. Build ensemble-claude and other clients as independent consumers.
+1. Finish the architecture and foundational REST contracts.
+2. Inventory capabilities and dependencies only as needed to implement the agreed contracts.
+3. Establish the application and REST server skeleton.
+4. Consolidate capabilities incrementally, including Memory, Graph, Knowledge, ingestion, indexing, embeddings, retrieval/RAG, and context assembly.
+5. Integrate the relevant deletion lifecycle within each capability: soft deletion, restoration, purge strategies, and propagation to derived data.
+6. Validate data integrity, failure behavior, recovery, and operational behavior.
+7. Build client integrations as independent consumers.
+8. Revisit generic contracts and broader abstractions only when concrete use cases justify them.
 
-## 11. Architectural tests
+Do not create a separate phase or framework for a concern that belongs inside the capability being implemented.
 
-The architecture must pass these tests:
+## 11. Architectural acceptance tests
 
-1. Can Ensemble start, become healthy, and serve its REST APIs when Claude Code is not installed?
-2. Can Ensemble start and serve non-model capabilities when no model provider is configured or reachable?
-3. Can a capability move from the initial co-located deployment to another host without changing its consumers or REST contract?
-4. Can Claude Code, Crush, Cursor, or another client consume Ensemble without becoming a runtime dependency?
-5. Can a model provider be replaced or added without changing the provider-neutral model-access contract?
-
-If yes, the architecture preserves the intended independence and future deployment flexibility without requiring premature federation machinery.
+- Ensemble starts and serves its REST APIs without any AI client installed or running.
+- Retrieval works when no generation model is configured or reachable.
+- A capability can move from the co-located deployment to another process or host without changing its REST contract or consumer behavior.
+- Internal capability calls use the same REST contracts as external calls.
+- MCP can be disabled without reducing the REST capability surface.
+- Data deletion, restoration, and permanent purge cannot leave stale derived data visible or allow deleted data to be resurrected.

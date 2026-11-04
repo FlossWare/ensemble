@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flossware-ensemble"
+version = "0.1"
+description = "Standalone REST-first memory, knowledge, and retrieval platform"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.34,<1",
+  "httpx>=0.28,<1",
+  "sqlalchemy[asyncio]>=2.0.38,<3",
+  "aiosqlite>=0.21,<1",
+  "alembic>=1.15,<2",
+  "pypdf>=5.4,<7",
+]
+
+[project.scripts]
+ensemble = "ensemble.__main__:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3,<9", "pytest-cov>=6,<7", "httpx>=0.28,<1"]
+reranking = ["sentence-transformers>=3.4,<6"]
+local-embeddings = ["numpy>=1.26,<3", "tokenizers>=0.21,<1", "onnxruntime>=1.20,<2"]
+openvino = ["openvino>=2026.2,<2027"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.setuptools.packages.find]
+include = ["ensemble*"]
+
+[tool.setuptools.package-data]
+ensemble = ["control_panel.html", "control.js"]

@@ -1,42 +1,69 @@
 # Ensemble
 
-Ensemble is a standalone, REST-first platform that exposes reusable intelligence capabilities to applications and AI clients.
+Ensemble is a standalone, REST-first platform for reusable intelligence capabilities. It provides shared Memory, Knowledge, Graph, ingestion, indexing, retrieval, and context capabilities to applications and AI clients.
 
-It does not require Claude Code, Codex, Cursor, MCP, or any other AI client to run. Those systems are optional consumers.
+Ensemble is the product and implementation boundary. It does not depend on any client application or optional model provider to run.
 
-## Architectural direction
+## Architecture
 
 - One application and one REST server initially, with multiple versioned endpoint groups.
-- REST is the canonical contract for both external consumers and service-to-service communication.
-- Capabilities are independently addressable through REST contracts, even when initially deployed together.
-- Service implementations can be composed and decorated while preserving their REST contracts.
-- Providers are pluggable and may be multiple independent servers (for example, multiple embedding providers).
-- Model access is a first-class Ensemble capability with provider-neutral contracts and protocol-specific adapters.
-- EnMaaS is the first identified enterprise model gateway; Claude Code is not required to access it.
-- RAG is a platform capability. Retrieval is independently usable; generation is optional and provider-backed.
-- MCP is an optional adapter over Ensemble capabilities. It does not contain duplicate business logic.
-- The initial storage foundation reuses the active POC data: ChromaDB and SQLite. PostgreSQL is not part of this design.
-- The initial deployment stays deliberately simple. Service discovery, federation, service meshes, brokers, and distributed coordination are deferred until needed.
+- REST is the canonical contract for external consumers and capability-to-capability communication.
+- Capabilities are independently addressable through REST contracts, even when co-located in one deployment.
+- Implementations are composed and decorated behind stable contracts.
+- Model access is a first-class Ensemble capability with provider-neutral contracts and provider-specific adapters.
+- EnMaaS is the identified enterprise model-gateway integration direction; model access is not tied to a particular client.
+- Embedding, ranking, and generation providers are pluggable; provider implementations do not define the API contract.
+- Retrieval is independently usable; generation is optional and provider-backed.
+- MCP is an optional adapter over REST capabilities. It contains no duplicate business logic.
+- Ensemble uses SQLite for its own persistence. Alternative persistence implementations and shared infrastructure belong to FlossWare proper.
 
-## Consumers and integrations
+The REST boundary is the architectural rule. The current review implementation still has orchestration paths that call stores and services directly; those paths must be moved behind internal REST clients before claiming full capability-boundary compliance. See [Architecture](docs/architecture.md) and [review readiness](docs/review-readiness.md).
 
-Claude Code, Codex, Cursor, Crush, traditional applications, and other clients are consumers of Ensemble, not runtime dependencies.
+See [REST contract conventions](docs/rest-contracts.md), [REST route inventory and naming audit](docs/rest-route-audit.md), [capability completion plan](docs/capability-completion-plan.md), [Control Center requirements](docs/control-center-requirements.md), [Control Center API mapping](docs/control-center-api-mapping.md), and [current implementation status](docs/implementation-status.md).
 
-Client-specific integrations live outside Ensemble core. For example, ensemble-claude may integrate Claude Code with Ensemble APIs.
+## Current implementation
 
-Ensemble does not launch Claude Code, inspect Claude authentication, or require a Claude installation. A client may use its own model gateway while independently consuming Ensemble capabilities.
+The Python application provides health/readiness, durable document ingestion, versioned window/Markdown/message chunking with persisted provenance, SQLite FTS5 lexical indexing with shared tokenization and BM25, exact SQLite vector collections, Hybrid lexical/vector retrieval with degraded-mode fallback, optional cross-encoder reranking, intent enrichment, typed entity extraction, Graph-backed entity resolution/linking, and graph-based related-session lookup. It also includes SQLite-backed episodic Memory and Knowledge, Index revision/tombstone management, Thompson sampling, Learning outcomes/artifacts, a bounded GA optimizer, extraction, tokenization, and explainable ranking through one FastAPI application. Raw JSONL transcript ingestion supports caller-supplied incremental slices with UTF-8 byte checkpoints; bounded PDF uploads and public single-page HTML/plain-text URI ingestion feed the shared document pipeline. Durable transcript checkpoint jobs, broad website crawling, OCR, complete hybrid channel orchestration, and several deeper Memory/GA operational behaviors remain open in the [capability completion plan](docs/capability-completion-plan.md).
 
-## Initial capability areas
+SQLite is the only persistence implementation in this repository. The storage adapter is private to the implementation; REST contracts expose neither database choice nor schema. Database schema changes are managed with Alembic migrations.
 
-The existing POC and related work provide candidate capabilities to consolidate into Ensemble, including memory, graph, knowledge, retrieval, model access, embeddings, reranking, chunking, tokenization, ingestion, indexing, and ranking. Their contracts and implementations will be assessed and consolidated; this list is not a claim that all are already implemented in this repository.
+## Run locally
 
-Messaging is explicitly out of the initial scope.
+Python 3.12 or newer is required.
 
-## Documentation
+```bash
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -e '.[dev]'
+alembic upgrade head
+uvicorn ensemble.api:app --host 127.0.0.1 --port 8090
+```
 
-- [Architecture and decisions](docs/architecture.md)
-- [Model Access](docs/model-access.md)
+The default persistence root is .ensemble and the database is .ensemble/ensemble.db. Configure the HTTP listener with ENSEMBLE_HOST and ENSEMBLE_PORT, and move all default persistent data with ENSEMBLE_PERSISTENCE_ROOT. The server can also be started with command-line overrides. For example:
 
-## Status
+```bash
+ENSEMBLE_PERSISTENCE_ROOT=/var/lib/ensemble alembic upgrade head
+ENSEMBLE_PERSISTENCE_ROOT=/var/lib/ensemble python -m ensemble --host 127.0.0.1 --port 8090
+```
 
-Architecture-first foundation. Existing POC ingestion is active; preserve it and its data while storage ownership and migration are assessed. Do not interrupt ingestion or create a parallel storage system as part of the initial architecture work.
+The API refuses to start against an unmigrated or incomplete database. Apply migrations as a deployment step before starting the application.
+
+Run the existing tests:
+
+```bash
+pytest
+```
+
+All source ingestion uses the canonical /api/v1/ingest/... namespace: documents, files, URLs (including preview), and transcripts. The browser Control Center is available at /control. It includes live capability health/readiness checks, a retrieval explorer with optional reranking, structured transcript-session ingestion, Index and Vector inspection, Memory and Knowledge inspection, source lookup and confirmed permanent tombstoning, URI preview/explicit-ingest, PDF upload ingestion, raw JSONL transcript ingestion, GA run/history/candidate inspection and approval-to-export, Thompson model inspection/selection/reset, and Learning report/outcome/artifact inspection with confirmed reset. GA candidates are not applied to live settings. Discovered URI links are displayed but not crawled. API documentation is available at /docs; the OpenAPI document is at /openapi.json.
+
+## Scope
+
+This repository contains the Ensemble platform only.
+
+Client-specific integrations belong in separate consumer repositories. They consume Ensemble contracts without becoming part of the platform. The broader FlossWare ecosystem is not part of this repository's scope.
+
+Ensemble has no runtime dependency on other applications' data stores or process internals. Any required import or migration must use an explicitly designed, supported interface or export/import contract. Data migration is separate from implementing Ensemble's capabilities.
+
+## Runtime configuration
+
+The HTTP listener and persistence root are configurable through ENSEMBLE_HOST, ENSEMBLE_PORT and ENSEMBLE_PERSISTENCE_ROOT. Defaults are 127.0.0.1, 8090 and ./.ensemble respectively. The SQLite database defaults to <persistence-root>/ensemble.db. Command-line overrides are available through python -m ensemble --host, --port, --persistence-root and --database-url. See docs/installation.md for the systemd installer and deployment configuration.

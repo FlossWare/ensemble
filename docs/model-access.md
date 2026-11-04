@@ -13,7 +13,7 @@ It is not a wrapper around an AI coding assistant. Ensemble calls model gateways
 These are different architectural roles:
 
 - A **model provider** accepts inference requests and returns model responses. Examples include EnMaaS, Anthropic API, and other compatible gateways.
-- A **client application** consumes Ensemble capabilities. Examples include Claude Code, Crush, Cursor, Codex, and ordinary applications.
+- A **client application** consumes Ensemble capabilities. Examples include Claude Code, Cursor, Codex, and ordinary applications.
 
 Client applications do not belong in the model-provider registry merely because they can generate text.
 
