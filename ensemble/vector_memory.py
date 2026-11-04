@@ -185,6 +185,19 @@ class InMemoryVectorStore:
             raise RuntimeError("source has too many vector records for one reconciliation page")
         return matches
 
+    async def update_generation_metadata(
+        self, generation_id: str, name: str, items: list[dict[str, Any]],
+    ) -> int:
+        collection = self._collections.get(name, {})
+        generation = collection.get("generations", {}).get(generation_id, {})
+        updated = 0
+        for item in items:
+            record = generation.get(item["id"])
+            if record is not None:
+                record["metadata"] = dict(item["metadata"])
+                updated += 1
+        return updated
+
     async def delete_generation_source(self, generation_id: str, source_id: str, name: str | None = None) -> int:
         removed = 0
         targets = [self._collections[name]] if name is not None and name in self._collections else ([] if name is not None else list(self._collections.values()))

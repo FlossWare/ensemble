@@ -1237,6 +1237,11 @@ def create_app(
             items.append({"id": record_id, "embedding": vector, "document": document, "metadata": metadata})
         try:
             count = await active_vector_store.upsert(name, model, dimensions, items)
+            active_generation = await active_generation_id()
+            if active_generation is not None:
+                await active_vector_store.upsert_generation(
+                    active_generation, name, model, dimensions, items,
+                )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "upserted": count}
@@ -1249,9 +1254,16 @@ def create_app(
             raise HTTPException(status_code=400, detail="ids and metadatas must be non-empty lists of equal length, at most 256")
         if any(not isinstance(item, str) or not item for item in ids) or any(not isinstance(item, dict) for item in metadatas):
             raise HTTPException(status_code=400, detail="ids must be strings and metadatas must be objects")
-        updated = await active_vector_store.update_metadata(name, [
-            {"id": record_id, "metadata": metadata} for record_id, metadata in zip(ids, metadatas)
-        ])
+        changes = [
+            {"id": record_id, "metadata": metadata}
+            for record_id, metadata in zip(ids, metadatas)
+        ]
+        updated = await active_vector_store.update_metadata(name, changes)
+        active_generation = await active_generation_id()
+        if active_generation is not None:
+            await active_vector_store.update_generation_metadata(
+                active_generation, name, changes,
+            )
         return {"ok": True, "updated": updated}
 
     @app.post("/api/v1/vector/collections/{name}/records/prune", tags=["vector"])
@@ -1263,6 +1275,22 @@ def create_app(
         if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             raise HTTPException(status_code=400, detail="keep_sha256 must be a lowercase hex SHA-256")
         deleted = await active_vector_store.delete_superseded(name, url, digest)
+        active_generation = await active_generation_id()
+        if active_generation is not None:
+            remaining = await active_vector_store.list_records_for_source(name, url)
+            await active_vector_store.delete_generation_source(
+                active_generation, url, name=name,
+            )
+            if remaining:
+                collection = next(
+                    (item for item in await active_vector_store.list_collections()
+                     if item["name"] == name), None,
+                )
+                if collection is not None:
+                    await active_vector_store.upsert_generation(
+                        active_generation, name, collection["model"],
+                        collection["dimensions"], remaining,
+                    )
         return {"ok": True, "deleted": deleted}
 
     @app.post("/api/v1/vector/collections/{name}/sources/tombstone", tags=["vector"])
@@ -1272,6 +1300,11 @@ def create_app(
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
         deleted = await active_vector_store.delete_superseded(name, source_id, "")
+        active_generation = await active_generation_id()
+        if active_generation is not None:
+            deleted += await active_vector_store.delete_generation_source(
+                active_generation, source_id, name=name,
+            )
         return {"ok": True, "deleted": deleted}
 
     @app.post("/api/v1/vector/collections/{name}/query", tags=["vector"])

@@ -63,6 +63,7 @@ class VectorStore(Protocol):
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
     async def upsert_generation(self, generation_id: str, name: str, model: str, dimensions: int, items: list[dict[str, Any]]) -> int: ...
     async def query_generation(self, generation_id: str, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]: ...
+    async def update_generation_metadata(self, generation_id: str, name: str, items: list[dict[str, Any]]) -> int: ...
     async def list_records_for_source(self, name: str, source_id: str, limit: int = 10000) -> list[dict[str, Any]]:
         if not isinstance(source_id, str) or not source_id:
             raise ValueError("source_id is required")
@@ -86,6 +87,22 @@ class VectorStore(Protocol):
             "id": row["record_id"], "embedding": row["embedding"],
             "document": row["document"], "metadata": row["metadata"],
         } for row in rows]
+
+    async def update_generation_metadata(
+        self, generation_id: str, name: str, items: list[dict[str, Any]],
+    ) -> int:
+        if not items:
+            return 0
+        async with self.engine.begin() as connection:
+            updated = 0
+            for item in items:
+                result = await connection.execute(generation_records.update().where(
+                    generation_records.c.generation_id == generation_id,
+                    generation_records.c.collection_name == name,
+                    generation_records.c.record_id == item["id"],
+                ).values(metadata=item["metadata"]))
+                updated += result.rowcount or 0
+        return updated
 
     async def delete_generation_source(self, generation_id: str, source_id: str, name: str | None = None) -> int:
         statement = delete(generation_records).where(
