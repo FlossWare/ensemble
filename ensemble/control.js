@@ -444,7 +444,25 @@ function renderRetrievalPipeline(result){
   fusionTable.append(row);
  }
  retrievalResults.append(fusionTable);
+ const graph=result.graph_expansion||{};
+ const graphSummary=document.createElement("p");
+ graphSummary.textContent="Graph expansion: "+String(graph.candidate_sources||0)+" sources, "+String(graph.candidate_chunks||0)+" candidate chunks, "+String(graph.duration_ms??0)+" ms.";
+ retrievalResults.append(graphSummary);
  const resultTitle=document.createElement("h3");resultTitle.textContent="Final results";retrievalResults.append(resultTitle);
+ const resultTable=document.createElement("table");
+ const resultHead=document.createElement("tr");
+ for(const label of ["Source","Chunk","RRF score","Graph score","Rerank score"]){
+  const cell=document.createElement("th");cell.textContent=label;resultHead.append(cell);
+ }
+ resultTable.append(resultHead);
+ for(const item of result.results||[]){
+  const row=document.createElement("tr");
+  for(const value of [item.source_id,item.chunk_id,item.fusion_score,item.graph_score,item.rerank_score]){
+   const cell=document.createElement("td");cell.textContent=String(value??"");row.append(cell);
+  }
+  resultTable.append(row);
+ }
+ retrievalResults.append(resultTable);
  const raw=document.createElement("details");
  const disclosure=document.createElement("summary");disclosure.textContent="Full response JSON";raw.append(disclosure);
  const pre=document.createElement("pre");pre.textContent=JSON.stringify(result,null,2);raw.append(pre);
