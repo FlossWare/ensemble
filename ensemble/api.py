@@ -468,30 +468,62 @@ def create_app(
 
     async def tombstone_indexed_source(
         source_id: str, request: Request | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
+        # The Index tombstone is authoritative before cleanup begins. Cleanup
+        # is best-effort: one failed capability must not prevent the remaining
+        # stores and vector collections from being pruned.
         internal = InternalRestClient(app, {
             "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
             "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
             "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
         })
-        await internal.request(
-            "POST", "/api/v1/documents/sources/tombstone",
-            request=request, json={"source_id": source_id},
-        )
-        await internal.request(
-            "POST", "/api/v1/knowledge/sources/tombstone",
-            request=request, json={"source_id": source_id},
-        )
-        # Remove the source from every vector collection, not only Knowledge.
-        collections = (await internal.request(
-            "GET", "/api/v1/vector/collections", request=request,
-        )).get("collections", [])
-        for collection in collections:
-            await internal.request(
-                "POST",
-                f"/api/v1/vector/collections/{collection['name']}/sources/tombstone",
-                request=request, json={"source_id": source_id},
+        cleanup: dict[str, Any] = {
+            "status": "complete", "retryable": False, "completed": [],
+            "failed": [],
+        }
+        for name, path in (
+            ("documents", "/api/v1/documents/sources/tombstone"),
+            ("knowledge", "/api/v1/knowledge/sources/tombstone"),
+        ):
+            try:
+                await internal.request(
+                    "POST", path, request=request, json={"source_id": source_id},
+                )
+                cleanup["completed"].append(name)
+            except Exception as exc:
+                cleanup["failed"].append({
+                    "target": name, "error": type(exc).__name__,
+                })
+        try:
+            response = await internal.request(
+                "GET", "/api/v1/vector/collections", request=request,
             )
+            collections = response.get("collections", [])
+        except Exception as exc:
+            collections = []
+            cleanup["failed"].append({
+                "target": "vector_collections", "error": type(exc).__name__,
+            })
+        for collection in collections:
+            name = collection["name"]
+            try:
+                response = await internal.request(
+                    "POST",
+                    f"/api/v1/vector/collections/{name}/sources/tombstone",
+                    request=request, json={"source_id": source_id},
+                )
+                cleanup["completed"].append({
+                    "target": "vector:" + name,
+                    "deleted": response.get("deleted") if isinstance(response, dict) else None,
+                })
+            except Exception as exc:
+                cleanup["failed"].append({
+                    "target": "vector:" + name, "error": type(exc).__name__,
+                })
+        if cleanup["failed"]:
+            cleanup["status"] = "partial"
+            cleanup["retryable"] = True
+        return cleanup
 
     app.state.store = document_store
     app.state.embedding_provider = embeddings
@@ -763,8 +795,10 @@ def create_app(
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         result = await active_index_store.record_tombstone(source_id, sequence)
         if result["decision"] == "tombstoned":
-            await tombstone_indexed_source(source_id, request)
-        return {"ok": True, **result}
+            cleanup = await tombstone_indexed_source(source_id, request)
+        else:
+            cleanup = {"status": "not_required", "retryable": False, "completed": [], "failed": []}
+        return {"ok": True, **result, "cleanup": cleanup}
 
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
     async def index_source(source_id: str):
@@ -2253,6 +2287,7 @@ def create_app(
         internal = InternalRestClient(app, {
             "embeddings": os.getenv("ENSEMBLE_EMBEDDINGS_REST_URL"),
             "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
         })
         try:
             embedded = await internal.request(
@@ -2262,15 +2297,48 @@ def create_app(
             vectors = embedded.get("embeddings", [])
             if len(vectors) != 1:
                 raise RuntimeError("embedding capability returned an invalid result")
-            vector = vectors[0]
             response = await internal.request(
                 "POST", "/api/v1/vector/collections/knowledge_chunks/query",
                 request=request,
-                json={"embedding": vector, "top_k": search_request.limit,
-                      "dimensions": embedded.get("dimensions")},
+                json={
+                    "embedding": vectors[0],
+                    "top_k": min(200, max(search_request.limit, search_request.limit * 4)),
+                    "dimensions": embedded.get("dimensions"),
+                },
             )
+            candidates = response.get("results", [])
+            source_ids = sorted({
+                item.get("metadata", {}).get("source_id")
+                for item in candidates
+                if isinstance(item.get("metadata"), dict)
+                and isinstance(item["metadata"].get("source_id"), str)
+            })
+            states = (await internal.request(
+                "POST", "/api/v1/index/sources/query", request=request,
+                json={"source_ids": source_ids},
+            )).get("sources", {})
+            results = []
+            for candidate in candidates:
+                metadata = candidate.get("metadata")
+                if not isinstance(metadata, dict):
+                    continue
+                source_id, revision = metadata.get("source_id"), metadata.get("revision")
+                if (
+                    not isinstance(source_id, str) or not source_id
+                    or isinstance(revision, bool) or not isinstance(revision, int)
+                ):
+                    continue
+                source = states.get(source_id)
+                if (
+                    source is None or source.get("tombstoned")
+                    or source.get("high_sequence") != revision
+                ):
+                    continue
+                results.append(candidate)
+                if len(results) >= search_request.limit:
+                    break
             return {
-                "ok": True, "results": response.get("results", []), "degraded": [],
+                "ok": True, "results": results, "degraded": [],
                 "retrieval": "knowledge-only",
             }
         except Exception as exc:
