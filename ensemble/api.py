@@ -1124,7 +1124,15 @@ def create_app(
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
         result = await active_index_store.record_tombstone(source_id, sequence)
         if result["decision"] == "tombstoned":
-            cleanup = await tombstone_indexed_source(source_id, request)
+            try:
+                cleanup = await tombstone_indexed_source(source_id, request)
+            except Exception as exc:
+                cleanup = {
+                    "status": "partial", "retryable": True,
+                    "completed": [], "failed": [{
+                        "target": "logical_cleanup", "error": type(exc).__name__,
+                    }],
+                }
             try:
                 reclamation = await active_reclamation_store.enqueue(source_id)
             except Exception as exc:
