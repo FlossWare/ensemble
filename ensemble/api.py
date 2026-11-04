@@ -345,7 +345,7 @@ def create_app(
                             )
                     finally:
                         reset_request_scope(scope_token)
-                await asyncio.sleep(1 if processed else 5)
+                await asyncio.sleep(0.5 if processed else 1)
             except asyncio.CancelledError:
                 raise
             except Exception:
