@@ -423,7 +423,14 @@ def test_knowledge_vector_records_follow_revision_and_tombstone():
         assert tombstone.json()["decision"] == "tombstoned"
         collection = next(item for item in client.get("/api/v1/vector/collections").json()["collections"]
                           if item["name"] == "knowledge_chunks")
-        assert collection["count"] == 0
+        # Physical rows remain until the background reclamation worker runs,
+        # but the source is immediately invisible to Vector queries.
+        assert collection["count"] == 1
+        query = client.post("/api/v1/vector/collections/knowledge_chunks/query", json={
+            "embedding": [1.0, 0.0, 0.0], "top_k": 10,
+        })
+        assert query.status_code == 200
+        assert query.json()["results"] == []
 
 
 def test_knowledge_publication_enters_hybrid_search_and_graph(tmp_path):
@@ -488,14 +495,13 @@ def test_knowledge_tombstone_blocks_future_revisions(tmp_path):
             json={"revision_sequence": 2},
         ).json()
         assert tombstone["decision"] == "tombstoned"
-        record = client.get("/api/v1/knowledge/records/rfc-1").json()["record"]
-        assert record["tombstoned"] is True
+        assert client.get("/api/v1/knowledge/records/rfc-1").status_code == 404
         later = client.post(
             "/api/v1/knowledge/records",
             json=_knowledge_record(sequence=3, revision_id="rev-3", content="resurrected"),
         ).json()
         assert (later["decision"], later["stored"]) == ("tombstoned", False)
-        assert client.get("/api/v1/knowledge/records/rfc-1").json()["record"]["content"] == "the body"
+        assert client.get("/api/v1/knowledge/records/rfc-1").status_code == 404
 
 
 def test_knowledge_records_persist_across_restart(tmp_path):
@@ -1738,7 +1744,7 @@ def test_vector_generation_builder_copies_live_records_and_skips_tombstones(tmp_
         )
         assert [item["id"] for item in shadow] == ["z-live"]
         active = await vector_store.query("knowledge", [1.0, 0.0], 10)
-        assert {item["id"] for item in active} == {"a-deleted", "z-live"}
+        assert {item["id"] for item in active} == {"z-live"}
         status = await index_store.generation_status()
         generation = next(item for item in status["generations"] if item["generation_id"] == "generation-shadow")
         assert generation["checkpoints"]["vectors"]["sealed"] is True
