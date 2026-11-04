@@ -124,9 +124,29 @@ class InMemoryVectorStore:
         scored.sort(key=lambda item: (-item["score"], item["id"]))
         return scored[:max(0, top_k)]
 
-    async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:
+    async def list_records_for_source(self, name: str, source_id: str, limit: int = 10000) -> list[dict[str, Any]]:
+        if not isinstance(source_id, str) or not source_id:
+            raise ValueError("source_id is required")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        collection = self._collections.get(name, {})
+        active_records = collection.get("records", {})
+        matches = [
+            {"id": record_id, "embedding": item["embedding"],
+             "document": item["document"], "metadata": item["metadata"]}
+            for record_id, item in active_records.items()
+            if item.get("metadata", {}).get("source_id") == source_id
+            or item.get("metadata", {}).get("url") == source_id
+        ]
+        matches.sort(key=lambda item: item["id"])
+        if len(matches) > limit:
+            raise RuntimeError("source has too many vector records for one reconciliation page")
+        return matches
+
+    async def delete_generation_source(self, generation_id: str, source_id: str, name: str | None = None) -> int:
         removed = 0
-        for collection in self._collections.values():
+        targets = [self._collections[name]] if name is not None and name in self._collections else ([] if name is not None else list(self._collections.values()))
+        for collection in targets:
             generation = collection.get("generations", {}).get(generation_id, {})
             stale = [
                 record_id for record_id, item in generation.items()
@@ -137,6 +157,9 @@ class InMemoryVectorStore:
                 del generation[record_id]
             removed += len(stale)
         return removed
+
+    async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:
+        return await self.delete_generation_source(generation_id, source_id)
 
     async def delete_generation(self, generation_id: str) -> int:
         removed = 0

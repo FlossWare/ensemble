@@ -10,6 +10,7 @@ from ensemble.store import InMemoryDocumentStore, SqlDocumentStore
 from ensemble.graph_memory import InMemoryGraphStore
 from ensemble.vector_memory import InMemoryVectorStore
 from ensemble.memory_store import InMemoryMemoryStore
+from ensemble.knowledge_store import InMemoryKnowledgeStore, SqliteKnowledgeStore
 from ensemble.index_store import SqliteIndexStore
 from ensemble.index_memory import InMemoryIndexStore
 from ensemble.models import Document, Chunk
@@ -1106,14 +1107,20 @@ def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verifi
         assert initial["active_generation_id"] == "generation-0001"
         assert initial["epoch"] == 1
 
+        await store.record_revision("source-prebuild", 1, "revision-prebuild", {"chunking": "window-v1"})
         await store.create_generation("generation-0002")
         accepted = await store.record_revision("source-a", 1, "revision-a", {"chunking": "window-v1"})
         assert accepted["decision"] == "accepted"
         tombstoned = await store.record_tombstone("source-a", 2)
         assert tombstoned["decision"] == "tombstoned"
         journal = await store.list_generation_changes_after("generation-0002", 0, 10)
-        assert [item["tombstoned"] for item in journal] == [False, True]
-        assert await store.generation_change_high_watermark("generation-0002") == 2
+        assert [item["tombstoned"] for item in journal] == [False, False, True]
+        high_watermark = await store.generation_change_high_watermark("generation-0002")
+        with pytest.raises(RuntimeError, match="unacknowledged source mutations"):
+            await store.acquire_generation_write_fence("generation-0002", through_change_id=high_watermark)
+        assert await store.acknowledge_generation_change("source-prebuild", 1, tombstoned=False) == 1
+        assert await store.acknowledge_generation_change("source-a", 1, tombstoned=False) == 1
+        assert await store.acknowledge_generation_change("source-a", 2, tombstoned=True) == 1
         with pytest.raises(RuntimeError, match="must all be sealed"):
             await store.activate_generation(
                 "generation-0002", "generation-0001", 1,
@@ -1135,16 +1142,20 @@ def test_sqlite_index_generation_registry_requires_sealed_checkpoints_and_verifi
                 {"acknowledged_writes_verified": True, "tombstones_verified": False},
             )
         await store.record_generation_checkpoint(
-            "generation-0002", "index_reconciliation", {"cursor": 2}, sealed=True,
+            "generation-0002", "index_reconciliation", {"cursor": high_watermark}, sealed=True,
         )
-        await store.acquire_generation_write_fence("generation-0002", through_change_id=2)
+        for capability in ("documents_reconciliation", "vectors_reconciliation", "memory_reconciliation", "knowledge_reconciliation"):
+            await store.record_generation_checkpoint(
+                "generation-0002", capability, {"cursor": high_watermark}, sealed=True,
+            )
+        await store.acquire_generation_write_fence("generation-0002", through_change_id=high_watermark)
         fenced = await store.record_revision("source-b", 1, "revision-b", {"chunking": "window-v1"})
         assert fenced["decision"] == "fenced"
 
         cutover = await store.activate_generation(
             "generation-0002", "generation-0001", 1,
             {"acknowledged_writes_verified": True, "tombstones_verified": True,
-             "reconciled_through_change_id": 2},
+             "reconciled_through_change_id": high_watermark},
         )
         assert cutover == {"active_generation_id": "generation-0002", "epoch": 2}
         status = await store.generation_status()
@@ -1173,16 +1184,23 @@ def test_in_memory_generation_registry_enforces_single_build_and_cutover():
         assert (await store.record_tombstone("source-a", 2))["decision"] == "tombstoned"
         journal = await store.list_generation_changes_after("generation-0002", 0, 10)
         assert [item["tombstoned"] for item in journal] == [False, True]
-        for capability in ("index", "documents", "vectors", "memory", "knowledge", "index_reconciliation"):
+        assert await store.acknowledge_generation_change("source-a", 1, tombstoned=False) == 1
+        assert await store.acknowledge_generation_change("source-a", 2, tombstoned=True) == 1
+        high_watermark = await store.generation_change_high_watermark("generation-0002")
+        for capability in ("index", "documents", "vectors", "memory", "knowledge",
+                           "index_reconciliation", "documents_reconciliation", "vectors_reconciliation",
+                           "memory_reconciliation", "knowledge_reconciliation"):
             await store.record_generation_checkpoint(
-                "generation-0002", capability, {"cursor": "done" if capability != "index_reconciliation" else 2}, sealed=True,
+                "generation-0002", capability,
+                {"cursor": "done" if not capability.endswith("_reconciliation") else high_watermark},
+                sealed=True,
             )
-        await store.acquire_generation_write_fence("generation-0002", through_change_id=2)
+        await store.acquire_generation_write_fence("generation-0002", through_change_id=high_watermark)
         assert (await store.record_revision("source-b", 1, "revision-b", {"chunking": "window-v1"}))["decision"] == "fenced"
         result = await store.activate_generation(
             "generation-0002", "generation-0001", 1,
             {"acknowledged_writes_verified": True, "tombstones_verified": True,
-             "reconciled_through_change_id": 2},
+             "reconciled_through_change_id": high_watermark},
         )
         assert result["active_generation_id"] == "generation-0002"
         assert result["epoch"] == 2
@@ -1759,6 +1777,7 @@ def test_generation_change_reconciliation_is_resumable_and_fenced():
     store = InMemoryIndexStore()
 
     async def exercise():
+        await store.record_revision("source-prebuild", 1, "revision-prebuild", {"chunking": "window-v1"})
         await store.create_generation("generation-shadow")
         await store.record_generation_checkpoint(
             "generation-shadow", "index", {"cursor": "snapshot-complete"}, sealed=True,
@@ -1768,12 +1787,19 @@ def test_generation_change_reconciliation_is_resumable_and_fenced():
         await store.record_tombstone("source-a", 2)
 
         builder = IndexGenerationBuilder(store)
-        first = await builder.reconcile_index_changes_page("generation-shadow", page_size=2)
+        waiting = await builder.reconcile_index_changes_page("generation-shadow", page_size=3)
+        assert waiting["status"] == "waiting_for_ack"
+        assert waiting["page_count"] == 0
+        await store.acknowledge_generation_change("source-prebuild", 1, tombstoned=False)
+        await store.acknowledge_generation_change("source-a", 1, tombstoned=False)
+        await store.acknowledge_generation_change("source-b", 1, tombstoned=False)
+        await store.acknowledge_generation_change("source-a", 2, tombstoned=True)
+        first = await builder.reconcile_index_changes_page("generation-shadow", page_size=3)
         assert first["status"] == "in_progress"
         resumed_builder = IndexGenerationBuilder(store)
-        second = await resumed_builder.reconcile_index_changes_page("generation-shadow", page_size=2)
+        second = await resumed_builder.reconcile_index_changes_page("generation-shadow", page_size=3)
         assert second["status"] == "caught_up"
-        assert second["change_count"] == 3
+        assert second["change_count"] == 4
 
         source_a = await store.get_generation_source("generation-shadow", "source-a")
         source_b = await store.get_generation_source("generation-shadow", "source-b")
@@ -1781,11 +1807,183 @@ def test_generation_change_reconciliation_is_resumable_and_fenced():
         assert source_a["high_sequence"] == 2
         assert source_b["tombstoned"] is False
 
+        for capability in ("documents", "vectors", "memory", "knowledge"):
+            await store.record_generation_checkpoint(
+                "generation-shadow", capability, {"cursor": "snapshot-complete"}, sealed=True,
+            )
+        for capability in ("documents_reconciliation", "vectors_reconciliation",
+                           "memory_reconciliation", "knowledge_reconciliation"):
+            await store.record_generation_checkpoint(
+                "generation-shadow", capability, {"cursor": second["high_watermark"]}, sealed=False,
+            )
         await resumed_builder.fence_reconciled_generation("generation-shadow")
         blocked = await store.record_revision("source-c", 1, "revision-c", {"chunking": "window-v1"})
         assert blocked["decision"] == "fenced"
         assert await store.release_generation_write_fence("generation-shadow") is True
         accepted = await store.record_revision("source-c", 1, "revision-c", {"chunking": "window-v1"})
         assert accepted["decision"] == "accepted"
+
+    asyncio.run(exercise())
+
+
+def test_index_change_acknowledgement_rest_contract(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-ack.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    store = SqliteIndexStore(database_url)
+
+    async def prepare():
+        await store.initialize()
+        await store.create_generation("generation-ack")
+        await store.record_revision("source-ack", 1, "revision-ack", {"chunking": "window-v1"})
+
+    asyncio.run(prepare())
+    with TestClient(create_app(database_url=database_url)) as client:
+        response = client.post("/api/v1/index/changes/acknowledge", json={
+            "source_id": "source-ack",
+            "revision_sequence": 1,
+            "tombstoned": False,
+        })
+        assert response.status_code == 200
+        assert response.json()["acknowledged"] == 1
+
+    async def verify():
+        changes = await store.list_generation_changes_after("generation-ack", 0, 10)
+        assert len(changes) == 1
+        assert changes[0]["acknowledged"] is True
+        await store.close()
+
+    asyncio.run(verify())
+
+
+def test_generation_reconciles_updated_documents_and_vectors():
+    index_store = InMemoryIndexStore()
+    document_store = InMemoryDocumentStore()
+    vector_store = InMemoryVectorStore()
+
+    async def exercise():
+        await index_store.create_generation("generation-doc-vector")
+        first_document = Document("source-a", 1, "Source A", "original content", {"origin": "test"})
+        first_chunk = Chunk(first_document.id, 0, "original content", [1.0, 0.0], start=0, end=16)
+        await document_store.save(first_document, [first_chunk])
+        await vector_store.upsert("knowledge_chunks", "test-model", 2, [{
+            "id": "vector-a", "embedding": [1.0, 0.0], "document": "original content",
+            "metadata": {"source_id": "source-a", "revision": 1},
+        }])
+        await index_store.record_revision("source-a", 1, "revision-a1", {"chunking": "window-v1"})
+        await index_store.acknowledge_generation_change("source-a", 1, tombstoned=False)
+
+        builder = IndexGenerationBuilder(index_store, document_store, vector_store)
+        assert (await builder.copy_index_sources("generation-doc-vector", page_size=10))["status"] == "complete"
+        assert (await builder.copy_documents_page("generation-doc-vector", page_size=10))["status"] == "complete"
+        assert (await builder.copy_vectors_page("generation-doc-vector", page_size=10))["status"] == "complete"
+        assert (await builder.reconcile_index_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+        assert (await builder.reconcile_document_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+        assert (await builder.reconcile_vector_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+
+        updated_document = Document("source-a", 2, "Source A", "updated content", {"origin": "test"})
+        updated_chunk = Chunk(updated_document.id, 0, "updated content", [0.0, 1.0], start=0, end=15)
+        await document_store.save(updated_document, [updated_chunk])
+        await vector_store.upsert("knowledge_chunks", "test-model", 2, [{
+            "id": "vector-a", "embedding": [0.0, 1.0], "document": "updated content",
+            "metadata": {"source_id": "source-a", "revision": 2},
+        }])
+        await index_store.record_revision("source-a", 2, "revision-a2", {"chunking": "window-v1"})
+        await index_store.acknowledge_generation_change("source-a", 2, tombstoned=False)
+
+        assert (await builder.reconcile_index_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+        assert (await builder.reconcile_document_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+        assert (await builder.reconcile_vector_changes_page("generation-doc-vector", page_size=10))["status"] == "caught_up"
+
+        generation_chunks = await document_store.generation_all_chunks("generation-doc-vector")
+        assert len(generation_chunks) == 1
+        assert generation_chunks[0].document.revision == 2
+        assert generation_chunks[0].chunk.content == "updated content"
+        vector_hits = await vector_store.query_generation(
+            "generation-doc-vector", "knowledge_chunks", [0.0, 1.0], 10,
+        )
+        assert len(vector_hits) == 1
+        assert vector_hits[0]["document"] == "updated content"
+
+    asyncio.run(exercise())
+
+
+def test_generation_reconciles_knowledge_updates_and_tombstones():
+    index_store = InMemoryIndexStore()
+    knowledge_store = InMemoryKnowledgeStore()
+
+    async def exercise():
+        await index_store.create_generation("generation-knowledge")
+        await knowledge_store.put({
+            "source_id": "knowledge-a", "revision_sequence": 1,
+            "revision_id": "knowledge-revision-1", "title": "Knowledge A",
+            "content": "first knowledge content", "origin": "test",
+            "locator": "test://knowledge-a", "profiles": {"chunking": "window-v1"},
+        })
+        await index_store.record_revision("knowledge-a", 1, "knowledge-revision-1", {"knowledge": True})
+        await index_store.acknowledge_generation_change("knowledge-a", 1, tombstoned=False)
+
+        builder = IndexGenerationBuilder(index_store, knowledge_store=knowledge_store)
+        assert (await builder.copy_index_sources("generation-knowledge", page_size=10))["status"] == "complete"
+        assert (await builder.copy_knowledge_page("generation-knowledge", page_size=10))["status"] == "complete"
+        assert (await builder.reconcile_index_changes_page("generation-knowledge", page_size=10))["status"] == "caught_up"
+        assert (await builder.reconcile_knowledge_changes_page("generation-knowledge", page_size=10))["status"] == "caught_up"
+
+        await knowledge_store.put({
+            "source_id": "knowledge-a", "revision_sequence": 2,
+            "revision_id": "knowledge-revision-2", "title": "Knowledge A",
+            "content": "updated knowledge content", "origin": "test",
+            "locator": "test://knowledge-a", "profiles": {"chunking": "window-v1"},
+        })
+        await index_store.record_revision("knowledge-a", 2, "knowledge-revision-2", {"knowledge": True})
+        await index_store.acknowledge_generation_change("knowledge-a", 2, tombstoned=False)
+        assert (await builder.reconcile_index_changes_page("generation-knowledge", page_size=10))["status"] == "caught_up"
+        assert (await builder.reconcile_knowledge_changes_page("generation-knowledge", page_size=10))["status"] == "caught_up"
+        current = await knowledge_store.get_generation("generation-knowledge", "knowledge-a")
+        assert current["revision_sequence"] == 2
+        assert current["content"] == "updated knowledge content"
+
+        await index_store.record_tombstone("knowledge-a", 3)
+        await knowledge_store.tombstone("knowledge-a")
+        await index_store.acknowledge_generation_change("knowledge-a", 3, tombstoned=True)
+        assert (await builder.reconcile_index_changes_page("generation-knowledge", page_size=10))["status"] == "caught_up"
+        assert (await builder.reconcile_knowledge_changes_page("generation-knowledge", page_size=10))["status"] == "caught_up"
+        tombstone = await knowledge_store.get_generation("generation-knowledge", "knowledge-a")
+        assert tombstone["tombstoned"] is True
+
+    asyncio.run(exercise())
+
+
+def test_sqlite_knowledge_generation_storage_and_tombstones(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'knowledge-generations.db'}"
+    migration_config = Config("alembic.ini")
+    migration_config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(migration_config, "head")
+    index_store = SqliteIndexStore(database_url)
+    knowledge_store = SqliteKnowledgeStore(database_url)
+
+    async def exercise():
+        await index_store.initialize()
+        await knowledge_store.initialize()
+        await index_store.create_generation("generation-knowledge-sql")
+        record = {
+            "source_id": "knowledge-sql", "revision_sequence": 1,
+            "revision_id": "revision-sql-1", "title": "Knowledge SQL",
+            "content": "durable knowledge content", "origin": "test",
+            "locator": "test://knowledge-sql", "profiles": {"chunking": "window-v1"},
+        }
+        await knowledge_store.put(record)
+        active = await knowledge_store.get("knowledge-sql")
+        await knowledge_store.upsert_generation("generation-knowledge-sql", active)
+        shadow = await knowledge_store.get_generation("generation-knowledge-sql", "knowledge-sql")
+        assert shadow["revision_sequence"] == 1
+        assert shadow["provenance"]["locator"] == "test://knowledge-sql"
+        await knowledge_store.tombstone_generation_source("generation-knowledge-sql", "knowledge-sql")
+        tombstoned = await knowledge_store.get_generation("generation-knowledge-sql", "knowledge-sql")
+        assert tombstoned["tombstoned"] is True
+        assert await knowledge_store.delete_generation("generation-knowledge-sql") == 1
+        await knowledge_store.close()
+        await index_store.close()
 
     asyncio.run(exercise())

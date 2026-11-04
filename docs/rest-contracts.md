@@ -213,3 +213,15 @@ Entity resolution uses the Graph capability as its durable identity store. Exact
 Entity linking accepts two canonical entity node IDs and a typed relationship. Both endpoints must exist and be entity nodes. Graph remains responsible for durable relationships and traversal. Extraction does not write to Graph, and resolution does not create relationships.
 
 Hybrid Search includes the richer intent result and extracted entity candidates in its response. It does not automatically resolve or persist query entities; callers explicitly invoke resolution when durable identity is required.
+
+
+## Generation mutation acknowledgement
+
+- `POST /api/v1/index/changes/acknowledge` accepts `source_id`, `revision_sequence`, and `tombstoned`.
+- The endpoint marks the matching generation-journal mutation complete after its required capability materializations have succeeded.
+- A caller using `POST /api/v1/index/revisions` must not acknowledge immediately. It acknowledges only after Documents, Vectors, and any other required write path has completed.
+- A tombstone is acknowledged only after the source has been removed from all active retrieval materializations.
+- Rebuild replay stops at the first unacknowledged journal entry. Final write-fence acquisition fails while any unacknowledged mutation remains.
+- A blocked write during the final fence receives HTTP 503 with `Retry-After: 1`; callers must retry after cutover or fence release.
+
+This contract is an internal coordination primitive, not a public rebuild operation. Generation activation remains unavailable until all shadow materializations and recovery paths are complete.
