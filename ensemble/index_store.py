@@ -22,6 +22,27 @@ sources = Table(
 )
 
 
+generations = Table(
+    "ensemble_index_generations",
+    index_metadata,
+    Column("generation_id", String(64), primary_key=True),
+    Column("state", String(16), nullable=False),
+    Column("checkpoints", JSON, nullable=False),
+    Column("verification", JSON, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("activated_at", DateTime(timezone=True), nullable=True),
+)
+generation_control = Table(
+    "ensemble_index_generation_control",
+    index_metadata,
+    Column("singleton_id", Integer, primary_key=True),
+    Column("active_generation_id", String(64), nullable=False),
+    Column("epoch", Integer, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+
 class IndexStore(Protocol):
     async def initialize(self) -> None: ...
     async def close(self) -> None: ...
@@ -29,6 +50,11 @@ class IndexStore(Protocol):
     async def record_tombstone(self, source_id: str, sequence: int) -> dict[str, Any]: ...
     async def get_source(self, source_id: str) -> dict[str, Any] | None: ...
     async def list_sources(self, limit: int) -> list[dict[str, Any]]: ...
+    async def generation_status(self) -> dict[str, Any]: ...
+    async def create_generation(self, generation_id: str) -> dict[str, Any]: ...
+    async def record_generation_checkpoint(self, generation_id: str, capability: str, checkpoint: dict[str, Any], sealed: bool = False) -> dict[str, Any]: ...
+    async def activate_generation(self, generation_id: str, expected_active_generation_id: str, expected_epoch: int, verification: dict[str, Any]) -> dict[str, Any]: ...
+    async def abort_generation(self, generation_id: str, reason: str) -> dict[str, Any]: ...
 
 
 def _as_source(row: Any) -> dict[str, Any]:
@@ -49,11 +75,153 @@ class SqliteIndexStore:
     async def initialize(self) -> None:
         async with self.engine.connect() as connection:
             names = await connection.run_sync(lambda conn: __import__("sqlalchemy").inspect(conn).get_table_names())
-        if "ensemble_index_sources" not in names:
+        required = {
+            "ensemble_index_sources", "ensemble_index_generations",
+            "ensemble_index_generation_control",
+        }
+        if not required.issubset(names):
             raise RuntimeError("index schema is not initialized; run 'alembic upgrade head'")
 
     async def close(self) -> None:
         await self.engine.dispose()
+
+    async def generation_status(self) -> dict[str, Any]:
+        async with self.engine.connect() as connection:
+            control = (await connection.execute(select(generation_control).where(
+                generation_control.c.singleton_id == 1
+            ))).mappings().one()
+            rows = (await connection.execute(
+                select(generations).order_by(generations.c.created_at.desc())
+            )).mappings().all()
+        return {
+            "active_generation_id": control["active_generation_id"],
+            "epoch": control["epoch"],
+            "generations": [dict(row) for row in rows],
+        }
+
+    async def create_generation(self, generation_id: str) -> dict[str, Any]:
+        if not isinstance(generation_id, str) or not generation_id or len(generation_id) > 64:
+            raise ValueError("generation_id must contain 1-64 characters")
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            existing = (await connection.execute(select(generations).where(
+                generations.c.state == "building"
+            ))).mappings().first()
+            if existing:
+                raise RuntimeError("an index generation rebuild is already in progress")
+            await connection.execute(generations.insert().values(
+                generation_id=generation_id, state="building", checkpoints={},
+                verification={}, created_at=now, updated_at=now, activated_at=None,
+            ))
+            row = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().one()
+        return dict(row)
+
+    async def record_generation_checkpoint(
+        self, generation_id: str, capability: str,
+        checkpoint: dict[str, Any], sealed: bool = False,
+    ) -> dict[str, Any]:
+        if capability not in {"index", "memory", "knowledge"}:
+            raise ValueError("capability must be index, memory, or knowledge")
+        if not isinstance(checkpoint, dict):
+            raise ValueError("checkpoint must be an object")
+        import json
+        try:
+            json.dumps(checkpoint, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("checkpoint must contain finite JSON values") from exc
+        async with self.engine.begin() as connection:
+            row = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().first()
+            if row is None or row["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            checkpoints = dict(row["checkpoints"] or {})
+            previous = checkpoints.get(capability)
+            if previous and previous.get("sealed"):
+                raise RuntimeError(f"{capability} checkpoint is already sealed")
+            checkpoints[capability] = {"value": checkpoint, "sealed": bool(sealed)}
+            await connection.execute(generations.update().where(
+                generations.c.generation_id == generation_id,
+                generations.c.state == "building",
+            ).values(checkpoints=checkpoints, updated_at=datetime.now(timezone.utc)))
+            updated = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().one()
+        return dict(updated)
+
+    async def activate_generation(
+        self, generation_id: str, expected_active_generation_id: str,
+        expected_epoch: int, verification: dict[str, Any],
+    ) -> dict[str, Any]:
+        required = {"acknowledged_writes_verified", "tombstones_verified"}
+        if not isinstance(verification, dict) or not all(verification.get(key) is True for key in required):
+            raise ValueError("activation requires acknowledged-write and tombstone verification")
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            current_control = (await connection.execute(select(generation_control).where(
+                generation_control.c.singleton_id == 1
+            ))).mappings().one()
+            if (
+                current_control["active_generation_id"] != expected_active_generation_id
+                or current_control["epoch"] != expected_epoch
+            ):
+                raise RuntimeError("active generation changed; refresh status before cutover")
+            target = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().first()
+            if target is None or target["state"] != "building":
+                raise RuntimeError("target generation is not building")
+            checkpoints = target["checkpoints"] or {}
+            if not all(checkpoints.get(name, {}).get("sealed") is True for name in ("index", "memory", "knowledge")):
+                raise RuntimeError("index, memory, and knowledge checkpoints must all be sealed")
+            changed = await connection.execute(generation_control.update().where(
+                generation_control.c.singleton_id == 1,
+                generation_control.c.active_generation_id == expected_active_generation_id,
+                generation_control.c.epoch == expected_epoch,
+            ).values(
+                active_generation_id=generation_id, epoch=expected_epoch + 1,
+                updated_at=now,
+            ))
+            if changed.rowcount != 1:
+                raise RuntimeError("active generation changed; refresh status before cutover")
+            await connection.execute(generations.update().where(
+                generations.c.generation_id == expected_active_generation_id,
+                generations.c.state == "active",
+            ).values(state="retired", updated_at=now))
+            await connection.execute(generations.update().where(
+                generations.c.generation_id == generation_id,
+                generations.c.state == "building",
+            ).values(
+                state="active", verification=verification,
+                activated_at=now, updated_at=now,
+            ))
+            row = (await connection.execute(select(generation_control).where(
+                generation_control.c.singleton_id == 1
+            ))).mappings().one()
+        return {
+            "active_generation_id": row["active_generation_id"],
+            "epoch": row["epoch"],
+        }
+
+    async def abort_generation(self, generation_id: str, reason: str) -> dict[str, Any]:
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 2048:
+            raise ValueError("reason must contain 1-2048 characters")
+        async with self.engine.begin() as connection:
+            changed = await connection.execute(generations.update().where(
+                generations.c.generation_id == generation_id,
+                generations.c.state == "building",
+            ).values(
+                state="failed", verification={"failure": reason},
+                updated_at=datetime.now(timezone.utc),
+            ))
+            if changed.rowcount != 1:
+                raise RuntimeError("only a building generation can be aborted")
+            row = (await connection.execute(select(generations).where(
+                generations.c.generation_id == generation_id
+            ))).mappings().one()
+        return dict(row)
 
     async def record_revision(self, source_id: str, sequence: int, revision_id: str, profiles: dict[str, Any]) -> dict[str, Any]:
         async with self.engine.begin() as connection:
