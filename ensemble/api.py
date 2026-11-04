@@ -229,44 +229,62 @@ def create_app(
         else SqliteReclamationStore(database_url)
     )
 
+    # Serialize permanent source reclamation against creation of a new generation.
+    generation_lifecycle_lock = asyncio.Lock()
+
     async def reclaim_due_sources() -> int:
         jobs = await active_reclamation_store.claim_due(100)
         for job in jobs:
             source_id = job["source_id"]
             try:
-                # The authoritative Index tombstone and generation source
-                # tombstones are retained; source payloads are physically reclaimed.
-                # Graph source nodes and mention edges are derived materialized
-                # data too. Remove them before marking the Index source purged;
-                # shared entity nodes are retained.
-                await active_graph_store.reclaim_source(source_id)
-                # A permanent purge must remove source payloads from every
-                # retained generation, not merely hide them behind tombstones.
-                generation_status = await active_index_store.generation_status()
-                for generation in generation_status.get("generations", []):
-                    generation_id = generation.get("generation_id")
-                    if not generation_id:
+                async with generation_lifecycle_lock:
+                    # A builder may have read source payloads before a tombstone
+                    # and still be copying them into its generation. Defer the
+                    # physical purge until no generation is building and no
+                    # cutover write fence is held.
+                    generation_status = await active_index_store.generation_status()
+                    if any(
+                        item.get("state") == "building"
+                        for item in generation_status.get("generations", [])
+                    ):
+                        await active_reclamation_store.retry(
+                            source_id, "generation build in progress; reclamation deferred",
+                        )
                         continue
-                    # These stores are required participants in permanent purge.
-                    # Never silently skip a missing adapter operation and mark the
-                    # Index source purged while generation payloads still exist.
-                    await document_store.reclaim_generation_source(generation_id, source_id)
-                    await active_knowledge_store.reclaim_generation_source(generation_id, source_id)
-                    await active_vector_store.delete_generation_source(generation_id, source_id)
-                reclaimed = [
-                    await document_store.reclaim_source(source_id),
-                    await active_knowledge_store.reclaim_source(source_id),
-                    await active_vector_store.reclaim_source(source_id),
-                ]
-                if any(count > 500 for count in reclaimed):
-                    # A full page means there may be more rows. Retry the
-                    # idempotent source cleanup in another bounded pass.
-                    await active_reclamation_store.retry(source_id, "additional reclamation pages remain")
-                else:
-                    # Permanently mark the Index source only after all
-                    # materialized stores report that no more pages remain.
-                    await active_index_store.mark_purged(source_id)
-                    await active_reclamation_store.complete(source_id)
+                    await active_index_store.assert_generation_writes_open()
+
+                    # The authoritative Index tombstone and generation source
+                    # tombstones are retained; source payloads are physically reclaimed.
+                    # Graph source nodes and mention edges are derived materialized
+                    # data too. Remove them before marking the Index source purged;
+                    # shared entity nodes are retained.
+                    await active_graph_store.reclaim_source(source_id)
+                    # A permanent purge must remove source payloads from every
+                    # retained generation, not merely hide them behind tombstones.
+                    for generation in generation_status.get("generations", []):
+                        generation_id = generation.get("generation_id")
+                        if not generation_id:
+                            continue
+                        # These stores are required participants in permanent purge.
+                        # Never silently skip a missing adapter operation and mark the
+                        # Index source purged while generation payloads still exist.
+                        await document_store.reclaim_generation_source(generation_id, source_id)
+                        await active_knowledge_store.reclaim_generation_source(generation_id, source_id)
+                        await active_vector_store.delete_generation_source(generation_id, source_id)
+                    reclaimed = [
+                        await document_store.reclaim_source(source_id),
+                        await active_knowledge_store.reclaim_source(source_id),
+                        await active_vector_store.reclaim_source(source_id),
+                    ]
+                    if any(count > 500 for count in reclaimed):
+                        # A full page means there may be more rows. Retry the
+                        # idempotent source cleanup in another bounded pass.
+                        await active_reclamation_store.retry(source_id, "additional reclamation pages remain")
+                    else:
+                        # Permanently mark the Index source only after all
+                        # materialized stores report that no more pages remain.
+                        await active_index_store.mark_purged(source_id)
+                        await active_reclamation_store.complete(source_id)
             except Exception as exc:
                 await active_reclamation_store.retry(source_id, f"{type(exc).__name__}: {exc}")
         return len(jobs)
@@ -1011,7 +1029,8 @@ def create_app(
         if not isinstance(generation_id, str) or not generation_id or len(generation_id) > 64:
             raise HTTPException(status_code=400, detail="generation_id must contain 1-64 characters")
         try:
-            generation = await active_index_store.create_generation(generation_id)
+            async with generation_lifecycle_lock:
+                generation = await active_index_store.create_generation(generation_id)
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "generation": generation}
