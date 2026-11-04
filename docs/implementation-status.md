@@ -77,6 +77,20 @@ Not yet implemented:
 
 SQLite is the only persistence implementation in this repository. FTS5 provides the lexical index. Embeddings are stored as JSON and scored by exact scan in the application; this is not a scalable approximate-nearest-neighbor vector index.
 
+## Generation rebuild and cutover integration branch
+
+The integration branch `integration/generation-mainline-2026-11-04` contains the generation rebuild/cutover implementation; it has not yet been merged into `main`.
+
+Implemented in this branch:
+- Durable generation-scoped Memory snapshots and a mutation journal, including writes, append-once entries, deletes, imported Markdown metadata, and stale-source reconciliation.
+- Bounded REST copy and reconciliation operations for Index, Documents, Vectors, Memory, and Knowledge.
+- A shared write fence that blocks Index and Memory mutations during cutover; startup recovery releases an abandoned fence and reopens all reconciliation checkpoints.
+- Active-generation retrieval for lexical and vector candidates, with FTS5/BM25 scoring retained.
+- Post-activation document/vector/Knowledge writes, Index manifest changes, Memory snapshots, and tombstones are reflected in the active generation.
+- Activation is retry-safe when the original response is lost.
+
+The end-to-end cutover test covers initial ingestion, copy, reconciliation, fencing, activation, retrieval from the new generation, a subsequent write, and tombstone removal. Recent successful CI runs include 202 passed / 1 skipped and 201 passed / 1 skipped; the current integration head still requires its own completed CI result before review or merge.
+
 ## Partition isolation implementation
 
 Implemented in the current partition-isolation branch:
