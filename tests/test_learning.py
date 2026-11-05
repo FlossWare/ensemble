@@ -75,6 +75,13 @@ def test_learning_reset_requires_confirmation_and_preserves_thompson_state():
             "/api/v1/learning/outcomes",
             json={"task_id": "reset-1", "task_type": "test", "model": "haiku", "rating": 5, "tokens": 10, "cost": 0},
         )
+        artifact = {
+            "schema": "learning-artifact", "version": "0.1",
+            "artifact_type": "test.parameters", "source": "tests",
+            "created_at": "2026-11-05T00:00:00+00:00", "provenance": {},
+            "payload": {"run_id": "preserve-on-reset"},
+        }
+        assert http.post("/api/v1/learning/artifacts", json={"artifact": artifact}).status_code == 200
         denied = http.post("/api/v1/learning/reset", json={"confirm": False})
         reset = http.post("/api/v1/learning/reset", json={"confirm": True})
         assert denied.status_code == 400
@@ -82,6 +89,7 @@ def test_learning_reset_requires_confirmation_and_preserves_thompson_state():
         assert reset.json()["thompson_state_preserved"] is True
         assert http.get("/api/v1/learning/report").json()["total_outcomes"] == 0
         assert http.get("/api/v1/thompson/state").json()["state"]["models"]["haiku"]["calls"] == 1
+        assert len(http.get("/api/v1/learning/artifacts").json()["artifacts"]) == 1
 
 
 def test_learning_poc_action_contract_is_retained():
