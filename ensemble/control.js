@@ -698,9 +698,29 @@ document.getElementById("refresh-index").addEventListener("click",async()=>{
  try{indexResults.textContent=JSON.stringify(await controlJson("/api/v1/index/manifest?limit=100"),null,2);}
  catch(error){indexResults.textContent="Index inspection failed: "+error.message;}
 });
+function renderInventoryTable(container,columns,rows,emptyMessage){
+ container.replaceChildren();
+ if(!rows.length){container.textContent=emptyMessage;return;}
+ const table=document.createElement("table");
+ const head=document.createElement("tr");
+ for(const label of columns){const cell=document.createElement("th");cell.textContent=label;head.append(cell);}
+ table.append(head);
+ for(const values of rows){
+  const row=document.createElement("tr");
+  for(const value of values){const cell=document.createElement("td");cell.textContent=String(value??"n/a");row.append(cell);}
+  table.append(row);
+ }
+ container.append(table);
+}
+function renderVectorCollections(payload){
+ const collections=Array.isArray(payload?.collections)?payload.collections:[];
+ renderInventoryTable(vectorResults,["Collection","Embedding model","Dimensions","Records"],
+  collections.map(item=>[item.name,item.model,item.dimensions,item.count]),
+  "No vector collections are currently registered.");
+}
 document.getElementById("refresh-vectors").addEventListener("click",async()=>{
  vectorResults.textContent="Loading vector collections…";
- try{vectorResults.textContent=JSON.stringify(await controlJson("/api/v1/vector/collections"),null,2);}
+ try{renderVectorCollections(await controlJson("/api/v1/vector/collections"));}
  catch(error){vectorResults.textContent="Vector inspection failed: "+error.message;}
 });
 document.getElementById("vector-query-form").addEventListener("submit",async event=>{
@@ -831,10 +851,26 @@ document.getElementById("tokenization-preview").addEventListener("click",async()
  }catch(error){output.textContent="Tokenization failed: "+error.message;}
  finally{button.disabled=false;}
 });
+function renderGraphStatistics(stats){
+ const output=document.getElementById("graph-stats");
+ output.replaceChildren();
+ const metrics=document.createElement("div");metrics.className="metric-grid";
+ metrics.append(
+  metricCard("Nodes",stats.node_count??"n/a","Total graph nodes"),
+  metricCard("Edges",stats.edge_count??"n/a","Total relationships")
+ );
+ output.append(metrics);
+ const nodeHeading=document.createElement("h3");nodeHeading.textContent="Nodes by type";output.append(nodeHeading);
+ renderInventoryTable(output,["Node type","Count"],Object.entries(stats.nodes_by_type||{}),
+  "No graph nodes are recorded.");
+ const edgeHeading=document.createElement("h3");edgeHeading.textContent="Relationships by type";output.append(edgeHeading);
+ renderInventoryTable(output,["Relationship","Count"],Object.entries(stats.edges_by_relationship||{}),
+  "No graph relationships are recorded.");
+}
 document.getElementById("graph-stats-refresh").addEventListener("click",async()=>{
  const output=document.getElementById("graph-stats");
  output.textContent="Loading graph statistics…";
- try{output.textContent=JSON.stringify(await controlJson("/api/v1/graph/stats"),null,2);}
+ try{renderGraphStatistics(await controlJson("/api/v1/graph/stats"));}
  catch(error){output.textContent="Graph statistics failed: "+error.message;}
 });
 document.getElementById("graph-stats-refresh").click();
@@ -992,10 +1028,13 @@ function renderExecutionTrace(trace){
   traceDetail.append(empty);
   return;
  }
+ const durations=stages.map(stage=>Math.max(0,Number(stage.duration_ms)||0));
+ const maxDuration=Math.max(1,...durations);
  const list=document.createElement("ol");
  list.className="execution-trace-stages";
- for(const stage of stages){
+ for(const [index,stage] of stages.entries()){
   const item=document.createElement("li");
+  item.className="execution-trace-stage";
   const row=document.createElement("div");
   row.className="execution-trace-stage-heading";
   const name=document.createElement("strong");
@@ -1007,7 +1046,11 @@ function renderExecutionTrace(trace){
   duration.className="execution-trace-stage-duration";
   duration.textContent=stage.duration_ms==null?"duration unavailable":Number(stage.duration_ms).toFixed(3)+" ms";
   row.append(name,status,duration);
-  item.append(row);
+  const track=document.createElement("div");track.className="stage-duration-track";
+  const fill=document.createElement("div");fill.className="stage-duration-fill";
+  fill.style.width=Math.max(0,Math.min(100,durations[index]/maxDuration*100))+"%";
+  track.append(fill);
+  item.append(row,track);
   const details=Object.fromEntries(Object.entries(stage).filter(([key])=>!["name","status","duration_ms"].includes(key)));
   if(Object.keys(details).length){
    const values=document.createElement("pre");
@@ -1026,9 +1069,13 @@ async function refreshExecutionTraces(){
   const traces=Array.isArray(response.traces)?response.traces:[];
   if(!traces.length){traceList.textContent="No persisted traces yet.";return;}
   for(const trace of traces){
-   const button=document.createElement("button");
-   button.type="button";
-   button.textContent=[trace.operation,trace.status,trace.started_at,trace.trace_id].filter(Boolean).join(" · ");
+   const card=document.createElement("div");card.className="execution-trace-summary";
+   const heading=document.createElement("h4");
+   heading.textContent=[trace.operation,trace.status].filter(Boolean).join(" · ");
+   const metadata=document.createElement("p");
+   metadata.textContent=[trace.started_at,trace.duration_ms==null?null:Number(trace.duration_ms).toFixed(3)+" ms",
+    Array.isArray(trace.stages)?trace.stages.length+" stages":null,trace.trace_id].filter(Boolean).join(" · ");
+   const button=document.createElement("button");button.type="button";button.textContent="Inspect stages";
    button.addEventListener("click",async()=>{
     traceDetail.textContent="Loading trace…";
     try{
@@ -1036,7 +1083,7 @@ async function refreshExecutionTraces(){
      renderExecutionTrace(detail.trace);
     }catch(error){traceDetail.textContent="Trace inspection failed: "+error.message;}
    });
-   traceList.append(button);
+   card.append(heading,metadata,button);traceList.append(card);
   }
  }catch(error){traceList.textContent="Trace list failed: "+error.message;}
 }
