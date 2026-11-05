@@ -186,3 +186,62 @@ def test_memory_search_index_builds_each_concurrent_cold_document_once(monkeypat
         results = list(pool.map(lambda _: index.get("shared", content), range(8)))
     assert all(result is results[0] for result in results)
     assert calls == [content]
+
+
+def test_memory_event_ledger_preserves_session_end_envelope_and_timestamp_identity(tmp_path):
+    from ensemble.memory_store import InMemoryMemoryStore
+
+    async def verify(store):
+        first = await store.append(
+            "session_events",
+            {"event_type": "claude_code.session_end", "timestamp": "2026-11-05T12:00:00Z"},
+            event_id="session-event-1",
+        )
+        assert first["status"] == "stored"
+        duplicate = await store.append(
+            "session_events",
+            {"event_type": "claude_code.session_end", "timestamp": "2026-11-05T12:00:00Z"},
+            event_id="session-event-1",
+        )
+        assert duplicate["status"] == "duplicate"
+        try:
+            await store.append(
+                "session_events",
+                {"event_type": "claude_code.session_end", "timestamp": "2026-11-05T12:01:00Z"},
+                event_id="session-event-1",
+            )
+        except ValueError as exc:
+            assert "different payload" in str(exc)
+        else:
+            raise AssertionError("caller-supplied timestamp changes must conflict")
+
+        record = (await store.read_entries("session_events"))[0]
+        assert record["schema_version"] == 1
+        assert record["producer"] == "claude-code"
+        assert record["kind"] == "session_end"
+        assert record["timestamp"] == "2026-11-05T12:00:00Z"
+        assert len(record["payload_sha256"]) == 64
+        assert record["captured_at"].endswith("Z")
+
+        # Generated timestamps are metadata, not part of the caller's payload:
+        # a retry without a supplied timestamp must still be idempotent.
+        generated = await store.append("ordinary-events", {"event": "generated"}, event_id="generated-1")
+        retried = await store.append("ordinary-events", {"event": "generated"}, event_id="generated-1")
+        assert generated["status"] == "stored"
+        assert retried["status"] == "duplicate"
+
+    async def exercise():
+        memory = InMemoryMemoryStore()
+        await verify(memory)
+
+        database = tmp_path / "event-ledger.sqlite"
+        durable = SqliteMemoryStore(f"sqlite+aiosqlite:///{database}")
+        async with durable.engine.begin() as connection:
+            await connection.run_sync(memory_metadata.create_all)
+        await durable.initialize()
+        try:
+            await verify(durable)
+        finally:
+            await durable.close()
+
+    asyncio.run(exercise())
