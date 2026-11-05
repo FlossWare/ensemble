@@ -56,6 +56,7 @@ def test_thompson_rest_actions_record_state_reset_and_ping():
         assert reset.status_code == 200
         assert reset.json()["ok"] is True
         assert http.get("/api/v1/thompson/state").json()["state"]["models"]["haiku"]["calls"] == 0
+        assert len(http.get("/api/v1/thompson/selections").json()["selections"]) == 1
 
 
 def test_thompson_poc_action_contract_is_retained():
