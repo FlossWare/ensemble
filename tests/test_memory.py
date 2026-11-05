@@ -418,3 +418,78 @@ def test_context_tokenizer_status_is_reported_by_rest():
         assert body["ok"] is True
         assert body["exact"] is False
         assert body["id"] == "approx-char4"
+
+
+
+def test_memory_semantic_search_matches_identifiers_exactly_not_prefixes():
+    from ensemble.memory_store import _semantic_search
+
+    documents = [
+        ("exact", "The deployment run identifier is build-2026-11-04."),
+        ("prefix", "The deployment run identifier is build-2026-11-040."),
+    ]
+    results = _semantic_search(documents, set(), "build-2026-11-04", 10, None)
+    assert [item["file"] for item in results] == ["exact"]
+
+
+def test_memory_semantic_search_matches_identifier_inside_composite_event_id():
+    from ensemble.memory_store import _semantic_search
+
+    results = _semantic_search(
+        [("events", "Stored event id: session:run-4821:completion")],
+        set(), "run-4821", 10, None,
+    )
+    assert [item["file"] for item in results] == ["events"]
+
+
+def test_memory_semantic_search_handles_unicode_identifiers():
+    from ensemble.memory_store import _semantic_search
+
+    results = _semantic_search(
+        [("unicode", "追跡識別子は東京-2026です。")],
+        set(), "東京-2026", 10, None,
+    )
+    assert [item["file"] for item in results] == ["unicode"]
+
+
+def test_memory_semantic_search_handles_accented_prose():
+    from ensemble.memory_store import _semantic_search
+
+    results = _semantic_search(
+        [("notes", "The café index preserves résumé metadata.")],
+        set(), "café", 10, None,
+    )
+    assert [item["file"] for item in results] == ["notes"]
+
+
+def test_memory_semantic_search_strips_trailing_period_before_identifier_classification():
+    from ensemble.memory_store import _semantic_search
+
+    results = _semantic_search(
+        [("versions", "The exact schema version is 1.2.3.")],
+        set(), "1.2.3.", 10, None,
+    )
+    assert [item["file"] for item in results] == ["versions"]
+
+
+def test_memory_semantic_search_returns_no_results_for_unknown_identifier():
+    from ensemble.memory_store import _semantic_search
+
+    results = _semantic_search(
+        [("known", "The only identifier here is request-100.")],
+        set(), "request-101", 10, None,
+    )
+    assert results == []
+
+
+def test_memory_vectorizer_preserves_structured_identifiers():
+    from ensemble.memory_store import _vectorize_text
+
+    vector = _vectorize_text("run-4821 session:alpha.v2")
+    assert "run-4821" in vector
+    assert "run" in vector
+    assert "4821" in vector
+    assert "session:alpha.v2" in vector
+    assert "session" in vector
+    assert "alpha" in vector
+    assert "v2" in vector
