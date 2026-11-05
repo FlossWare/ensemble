@@ -7,6 +7,10 @@ from alembic import command
 from alembic.config import Config
 
 from ensemble.index_store import SqliteIndexStore
+from ensemble.api import create_app
+from ensemble.graph_memory import InMemoryGraphStore
+from ensemble.index_memory import InMemoryIndexStore
+from ensemble.store import InMemoryDocumentStore
 from ensemble.knowledge_store import SqliteKnowledgeStore
 from ensemble.memory_store import InMemoryMemoryStore
 from ensemble.models import Chunk, Document
@@ -252,5 +256,54 @@ def test_reclamation_can_use_short_deferral_for_generation_builds():
         job = queue._jobs["deferred-source"]
         remaining = (job["available_at"] - job["updated_at"]).total_seconds()
         assert remaining == 15
+
+    asyncio.run(exercise())
+
+
+
+def test_reclamation_worker_retries_partial_failure_before_marking_source_purged():
+    class FailOnceVectorStore(InMemoryVectorStore):
+        def __init__(self):
+            super().__init__()
+            self.fail_next_reclamation = True
+
+        async def reclaim_source(self, source_id):
+            if self.fail_next_reclamation:
+                self.fail_next_reclamation = False
+                raise RuntimeError("injected vector-store failure")
+            return await super().reclaim_source(source_id)
+
+    vectors = FailOnceVectorStore()
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        vector_store=vectors,
+        index_store=InMemoryIndexStore(),
+        graph_store=InMemoryGraphStore(),
+    )
+
+    async def exercise():
+        index = app.state.index_store
+        queue = app.state.reclamation_store
+        await index.record_revision("partial-source", 1, "revision-1", {})
+        await index.record_tombstone("partial-source", 2)
+        await queue.enqueue("partial-source")
+
+        # Earlier stores may already have been cleaned when Vector fails.
+        # The worker must retain the authoritative tombstone and retry.
+        assert await app.state.reclamation_runner() == 1
+        source = await index.get_source("partial-source")
+        assert source["tombstoned"] is True
+        assert source["purged"] is False
+        assert (await queue.status())["retry"] == 1
+        assert "injected vector-store failure" in queue._jobs["partial-source"]["last_error"]
+
+        # Make the retry immediately due, then verify idempotent completion.
+        from datetime import datetime, timezone
+        queue._jobs["partial-source"]["available_at"] = datetime.now(timezone.utc)
+        assert await app.state.reclamation_runner() == 1
+        source = await index.get_source("partial-source")
+        assert source["tombstoned"] is True
+        assert source["purged"] is True
+        assert (await queue.status())["complete"] == 1
 
     asyncio.run(exercise())

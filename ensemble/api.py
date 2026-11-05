@@ -604,6 +604,10 @@ def create_app(
     )
     app.middleware("http")(partition_scope_middleware)
     app.state.execution_trace_store = active_execution_trace_store
+    # Keep the durable maintenance runner addressable for in-process operations and tests.
+    app.state.reclamation_runner = reclaim_due_sources
+    app.state.reclamation_store = active_reclamation_store
+    app.state.index_store = active_index_store
     app.state.context_tokenizer = {
         "id": context_token_counter.tokenizer_id,
         "exact": context_token_counter.exact,
