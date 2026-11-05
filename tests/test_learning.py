@@ -156,3 +156,26 @@ def test_learning_artifact_does_not_acknowledge_unstored_memory_status():
         failed = http.post("/api/v1/learning/artifacts", json={"artifact": artifact})
         assert failed.status_code == 503
         assert len(http.get("/api/v1/learning/artifacts").json()["artifacts"]) == 1
+
+
+
+def test_in_memory_learning_artifacts_are_newest_first_like_sqlite():
+    import asyncio
+    from ensemble.learning_store import InMemoryLearningStore
+
+    async def exercise():
+        store = InMemoryLearningStore()
+        base = {
+            "schema": "learning-artifact", "version": "0.1",
+            "artifact_type": "ga-parameters", "source": "tests",
+            "created_at": "2026-11-05T00:00:00+00:00", "provenance": {},
+            "payload": {"run_id": "run-1"},
+        }
+        await store.record_artifact(base)
+        await store.record_artifact({**base, "payload": {"run_id": "run-2"}})
+        artifacts = await store.list_artifacts(2)
+        assert [item["artifact_key"] for item in artifacts] == [
+            "ga-parameters:run-2", "ga-parameters:run-1",
+        ]
+
+    asyncio.run(exercise())
