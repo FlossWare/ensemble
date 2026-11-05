@@ -223,7 +223,7 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 </section>
 <section id="thompson-panel">
 <h2>Thompson Router</h2>
-<p>Model-level Beta posteriors use alpha = successes + 1 and beta = failures + 1. The posterior mean is descriptive, not a guarantee of future performance. Selection is sampled; task-specific capability filtering and selection history are not implemented.</p>
+<p>Model-level Beta posteriors use alpha = successes + 1 and beta = failures + 1. The posterior mean is descriptive, not a guarantee of future performance. Selection is sampled; capability filtering remains outside the current POC contract. Recent selections are recorded for inspection.</p>
 <form id="thompson-select-form">
 <label for="thompson-task">Task type</label>
 <input id="thompson-task" type="text" value="unknown">
@@ -232,8 +232,10 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 <button type="submit">Select model</button>
 </form>
 <p id="thompson-selection">No selection requested.</p>
-<button id="thompson-refresh" type="button">Refresh model statistics</button>
+<button id="thompson-refresh" type="button">Refresh model statistics and selection history</button>
 <div id="thompson-state"></div>
+<h3>Recent selections</h3>
+<div id="thompson-history">Loading selection history...</div>
 </section>
 <section id="runtime-config">
 <h2>Runtime Configuration</h2>
