@@ -548,7 +548,7 @@ def test_memory_append_once_preserves_timestamp_and_exposes_ledger_metadata():
         assert record["captured_at"].endswith("Z")
 
         reserved = http.put(
-            "/api/v1/memory/memories/events/event-2",
+            "/api/v1/memory/memories/events/entries/event-2",
             json={"entry": {"event": "SessionEnd", "captured_at": "caller-value"}},
         )
         assert reserved.status_code == 400
