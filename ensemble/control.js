@@ -355,6 +355,31 @@ const thompsonMaxCost=document.getElementById("thompson-max-cost");
 const thompsonSelection=document.getElementById("thompson-selection");
 const thompsonRefresh=document.getElementById("thompson-refresh");
 const thompsonState=document.getElementById("thompson-state");
+const thompsonHistory=document.getElementById("thompson-history");
+async function refreshThompsonHistory(){
+ try{
+  const response=await fetch("/api/v1/thompson/selections?limit=50");
+  const payload=await response.json();
+  if(!response.ok)throw new Error(JSON.stringify(payload.detail||payload));
+  thompsonHistory.replaceChildren();
+  const selections=Array.isArray(payload.selections)?payload.selections:[];
+  if(!selections.length){thompsonHistory.textContent="No model selections recorded yet.";return;}
+  const table=document.createElement("table");
+  const head=document.createElement("tr");
+  for(const label of ["Selected model","Task type","Capability threshold","Max cost","Selected at","Request ID"]){
+   const cell=document.createElement("th");cell.textContent=label;head.append(cell);
+  }
+  table.append(head);
+  for(const selection of selections){
+   const row=document.createElement("tr");
+   const values=[selection.selected_model,selection.task_type,selection.required_capability,
+    selection.max_cost==null?"No limit":selection.max_cost,selection.created_at,selection.request_id];
+   for(const value of values){const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);}
+   table.append(row);
+  }
+  thompsonHistory.append(table);
+ }catch(error){thompsonHistory.textContent="Could not load selection history: "+error.message;}
+}
 async function refreshThompson(){
  thompsonRefresh.disabled=true;
  try{
@@ -403,11 +428,13 @@ thompsonForm.addEventListener("submit",async event=>{
  try{
   const result=await fetch("/api/v1/thompson/select",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
   const data=await result.json();if(!result.ok)throw new Error(JSON.stringify(data.detail||data));
-  thompsonSelection.textContent="Selected "+data.model+" (request "+data.request_id+")";
+  thompsonSelection.textContent="Selected "+data.model+" (selection "+data.selection_id+", request "+data.request_id+")";
+  await refreshThompsonHistory();
  }catch(error){thompsonSelection.textContent="Selection failed: "+error.message;}
 });
-thompsonRefresh.addEventListener("click",refreshThompson);
+thompsonRefresh.addEventListener("click",()=>{refreshThompson();refreshThompsonHistory();});
 refreshThompson();
+refreshThompsonHistory();
 
 const learningRefresh=document.getElementById("learning-refresh");
 const learningReset=document.getElementById("learning-reset");
