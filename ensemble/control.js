@@ -647,6 +647,26 @@ document.getElementById("refresh-vectors").addEventListener("click",async()=>{
  try{vectorResults.textContent=JSON.stringify(await controlJson("/api/v1/vector/collections"),null,2);}
  catch(error){vectorResults.textContent="Vector inspection failed: "+error.message;}
 });
+document.getElementById("vector-query-form").addEventListener("submit",async event=>{
+ event.preventDefault();
+ const output=document.getElementById("vector-query-results");
+ const collection=document.getElementById("vector-query-collection").value.trim();
+ const query=document.getElementById("vector-query-text").value.trim();
+ const topK=Number(document.getElementById("vector-query-limit").value);
+ output.textContent="Embedding query and searching collection…";
+ try{
+  const embedded=await controlJson("/api/v1/embeddings/embed","POST",{texts:[query],mode:"query"});
+  const vector=embedded.embeddings&&embedded.embeddings[0];
+  if(!Array.isArray(vector))throw new Error("Embedding provider returned no query vector.");
+  const result=await controlJson("/api/v1/vector/collections/"+encodeURIComponent(collection)+"/query","POST",{
+   embedding:vector,dimensions:embedded.dimensions,top_k:topK
+  });
+  output.textContent=JSON.stringify({
+   collection,embedding_model:embedded.model,dimensions:embedded.dimensions,
+   exact_scan:true,approximate_nearest_neighbor:false,results:result.results
+  },null,2);
+ }catch(error){output.textContent="Vector query failed: "+error.message;}
+});
 document.getElementById("source-lookup-form").addEventListener("submit",async event=>{
  event.preventDefault();
  const id=document.getElementById("source-id").value.trim();

@@ -48,6 +48,9 @@ def test_control_panel_is_served_by_the_api():
         assert "/api/v1/graph/stats" in script.text
         assert 'id="graph-stats-refresh"' in response.text
         assert "/api/v1/vector/ready" in script.text
+        assert "/api/v1/embeddings/embed" in script.text
+        assert "/api/v1/vector/collections/" in script.text
+        assert 'id="vector-query-form"' in response.text
         assert "/api/v1/memory/ready" in script.text
         assert script.status_code == 200
         assert "/api/v1/ga/runs" in script.text
