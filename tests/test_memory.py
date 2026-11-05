@@ -601,3 +601,24 @@ def test_memory_semantic_search_ranks_exact_operational_artifact_phrase_first():
         results = response.json()["results"]
         assert results[0]["file"] == "exact-artifact"
         assert results[0]["score"] == 1.0
+
+
+def test_memory_entry_endpoint_exposes_bounded_offset_pagination():
+    with client() as http:
+        for value in ("first", "second", "third"):
+            assert http.post(
+                "/api/v1/memory/memories/history/entries",
+                json={"entry": {"value": value}},
+            ).status_code == 200
+
+        first_page = http.get("/api/v1/memory/memories/history/entries?limit=2&offset=0")
+        second_page = http.get("/api/v1/memory/memories/history/entries?limit=2&offset=2")
+        invalid_offset = http.get("/api/v1/memory/memories/history/entries?limit=2&offset=-1")
+
+        assert first_page.status_code == 200
+        assert [item["value"] for item in first_page.json()["entries"]] == ["second", "third"]
+        assert first_page.json()["next_offset"] == 2
+        assert second_page.status_code == 200
+        assert [item["value"] for item in second_page.json()["entries"]] == ["first"]
+        assert second_page.json()["next_offset"] is None
+        assert invalid_offset.status_code == 400
