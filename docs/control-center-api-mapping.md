@@ -8,7 +8,7 @@
 | Workbench | Current behavior | REST operations | Known limitation |
 |---|---|---|---|
 | Platform status | Overall readiness and capability health/readiness | `GET /ready`, capability `/health` and `/ready` | No historical metrics or durable operation dashboard |
-| Retrieval Explorer | Hybrid search, result provenance, intent/entity diagnostics, optional reranking | `POST /api/v1/search/hybrid` | Does not yet compare each retrieval channel independently or show a correlated server-side trace |
+| Retrieval Explorer | Hybrid search, per-channel candidate counts/status, RRF contributions, final result provenance, intent/entity diagnostics, optional reranking | `POST /api/v1/search/hybrid` | Does not yet render each channel's complete ranked candidate list independently |
 | Context Assembly | Compose Memory and Hybrid retrieval context with a bounded extractive budget | `POST /api/v1/context/assemble` | Character-based token estimate; no model-backed summarizer |
 | Transcript ingestion | Submit structured session payload | `POST /api/v1/ingest/sessions` | Synchronous ingestion; no durable job/checkpoint UI |
 | Index and Vector | Manifest, collection list, source lookup, confirmed tombstone, embedding-backed vector similarity query with model/dimension checks | `GET /api/v1/index/manifest`, `GET /api/v1/vector/collections`, `POST /api/v1/embeddings/embed`, `POST /api/v1/vector/collections/{name}/query`, `GET /api/v1/index/sources/{source_id}`, `POST /api/v1/index/tombstones` | Exact vector scan, not ANN; no index-generation rebuild or cleanup-retry workbench |
@@ -19,7 +19,7 @@
 | Intent | Multi-intent classification and evidence inspection | `POST /api/v1/intent/classify` | Rule-based heuristic confidence, not model-calibrated |
 | Chunking | Profile inventory and non-persistent chunk preview | `GET /api/v1/chunking/profiles`, `POST /api/v1/chunking/chunk` | No persisted ingestion trace |
 | Tokenization | Analyzer profile inventory and token preview | `GET /api/v1/tokenization/profiles`, `POST /api/v1/tokenization/tokenize` | lexical-v1 only |
-| Pipeline Inspector | Sequential read-only probes for tokenization, entities, intent and chunking | Existing capability preview endpoints | Interactive diagnostic preview, not a correlated trace of a real ingestion |
+| Pipeline Inspector | Read-only diagnostic preview plus persisted trace list/detail for real ingestion and retrieval executions | Capability preview endpoints; `GET /api/v1/execution-traces`, `GET /api/v1/execution-traces/{trace_id}` | Preview probes are independent, not a replay; persisted traces are available only for instrumented operations and retain metadata rather than source content |
 | GA | Launch bounded runs, inspect history/results/candidates, approve export candidate | `/api/v1/ga/runs`, `/runs/{run_id}`, `/runs/{run_id}/promote` | Synthetic local evaluators; no live settings are applied |
 | Thompson | Inspect successes/failures, calls, cost/token totals, derived alpha/beta parameters and posterior mean; select model; reset after confirmation | `/api/v1/thompson/*` | Selection is sampled; task/capability filtering and selection history are not implemented |
 | Learning | Report, recent outcomes, portable artifacts, idempotent outcome/artifact recording, retry-safe Memory and Thompson acknowledgement, confirmed reset | `/api/v1/learning/*` | No automated Knowledge promotion; synthetic GA artifacts remain ineligible |
@@ -46,7 +46,7 @@ The Control Center is a REST consumer. It does not access SQLite directly and ha
 
 ## 3. Diagnostic semantics
 
-The Pipeline Inspector is intentionally an interactive preview. It invokes current capability operations independently and reports their results. It does not mutate persistence and does not claim to inspect a previous ingestion or retrieval execution.
+The Pipeline Inspector has two distinct read-only surfaces. Diagnostic preview invokes current capability operations independently and reports those probe results; it is not a replay and does not mutate persistence. Persisted trace inspection reads actual server-side execution traces for instrumented ingestion and retrieval operations, including recorded stages and timings. A preview result must never be represented as a persisted execution trace.
 
 The Context Assembly endpoint is a real server-side operation. It combines current retrieval candidates and optional Memory recall, preserves source metadata, applies deterministic extractive selection, and reports an approximate character-based token budget. It does not use a model tokenizer or model-backed summarizer.
 
