@@ -613,7 +613,8 @@ class SqliteMemoryStore:
             if {"payload_sha256", "captured_at"}.intersection(record):
                 raise ValueError("entry contains reserved Memory metadata fields")
             record["event_id"] = event_id
-            canonical, _ = _canonical_payload(record)
+            digest_record = {key: value for key, value in record.items() if key != "timestamp"}
+            canonical, _ = _canonical_payload(digest_record)
             digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         _canonical_payload(record)
         now = datetime.now(timezone.utc)
@@ -888,7 +889,8 @@ class InMemoryMemoryStore:
             if {"payload_sha256", "captured_at"}.intersection(record):
                 raise ValueError("entry contains reserved Memory metadata fields")
             record["event_id"] = event_id
-            canonical, _ = _canonical_payload(record)
+            digest_record = {key: value for key, value in record.items() if key != "timestamp"}
+            canonical, _ = _canonical_payload(digest_record)
             digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             existing = self._events.get((name, event_id))
             if existing is not None:

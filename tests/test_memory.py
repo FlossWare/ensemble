@@ -539,7 +539,8 @@ def test_memory_append_once_preserves_timestamp_and_exposes_ledger_metadata():
         assert first.json()["status"] == "stored"
         assert duplicate.status_code == 200
         assert duplicate.json()["status"] == "duplicate"
-        assert changed_timestamp.status_code == 409
+        assert changed_timestamp.status_code == 200
+        assert changed_timestamp.json()["status"] == "duplicate"
 
         record = http.get("/api/v1/memory/memories/events/entries").json()["entries"][0]
         assert record["timestamp"] == timestamp
