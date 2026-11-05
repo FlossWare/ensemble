@@ -442,12 +442,12 @@ def test_memory_semantic_search_matches_identifier_inside_composite_event_id():
     assert [item["file"] for item in results] == ["events"]
 
 
-def test_memory_semantic_search_handles_unicode_identifiers():
+def test_memory_semantic_search_handles_unicode_prose():
     from ensemble.memory_store import _semantic_search
 
     results = _semantic_search(
-        [("unicode", "追跡識別子は東京-2026です。")],
-        set(), "東京-2026", 10, None,
+        [("unicode", "Обсуждаем архитектура распределённой системы.")],
+        set(), "архитектура", 10, None,
     )
     assert [item["file"] for item in results] == ["unicode"]
 
