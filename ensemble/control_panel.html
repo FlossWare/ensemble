@@ -95,7 +95,9 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 </section>
 <section id="graph-workbench">
 <h2>Graph Workbench</h2>
-<p>Read-only node lookup, property-filtered queries, and bounded traversal. This view does not create or modify graph data.</p>
+<p>Read-only graph inventory, node lookup, property-filtered queries, and bounded traversal. Statistics are aggregate counts by node and relationship type.</p>
+<div class="toolbar"><button id="graph-stats-refresh" type="button">Refresh graph statistics</button></div>
+<pre id="graph-stats">Not loaded.</pre>
 <form id="graph-query-form"><label>Node type <input id="graph-node-type" type="text" maxlength="128" placeholder="session, file, etc."></label><label>Properties (JSON) <input id="graph-node-properties" type="text" value="{}" maxlength="2000"></label><button type="submit">Query nodes</button></form>
 <form id="graph-node-form"><label>Node ID <input id="graph-node-id" type="text" required maxlength="512"></label><button type="submit">Inspect node</button></form>
 <form id="graph-traverse-form"><label>Start node ID <input id="graph-start-id" type="text" required maxlength="512"></label><label>Direction <select id="graph-direction"><option value="out">Outgoing</option><option value="in">Incoming</option><option value="both">Both</option></select></label><label>Max depth <input id="graph-depth" type="number" min="1" max="3" value="1"></label><label>Edge type <input id="graph-edge-type" type="text" maxlength="128" placeholder="Optional"></label><button type="submit">Traverse</button></form>

@@ -755,6 +755,13 @@ document.getElementById("tokenization-preview").addEventListener("click",async()
  }catch(error){output.textContent="Tokenization failed: "+error.message;}
  finally{button.disabled=false;}
 });
+document.getElementById("graph-stats-refresh").addEventListener("click",async()=>{
+ const output=document.getElementById("graph-stats");
+ output.textContent="Loading graph statistics…";
+ try{output.textContent=JSON.stringify(await controlJson("/api/v1/graph/stats"),null,2);}
+ catch(error){output.textContent="Graph statistics failed: "+error.message;}
+});
+document.getElementById("graph-stats-refresh").click();
 document.getElementById("graph-query-form").addEventListener("submit",async event=>{
  event.preventDefault();const output=document.getElementById("graph-results");
  try{

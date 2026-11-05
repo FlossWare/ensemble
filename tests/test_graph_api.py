@@ -66,3 +66,30 @@ def test_graph_readiness_checks_persistent_store():
         response = client.get("/api/v1/graph/ready")
         assert response.status_code == 200
         assert response.json()["ready"] is True
+
+
+
+def test_graph_stats_reports_node_and_relationship_distributions():
+    with TestClient(create_app(store=InMemoryDocumentStore())) as client:
+        first = client.post("/api/v1/graph/nodes", json={
+            "id": "stats-source-1", "type": "source", "properties": {"source_id": "one"},
+        })
+        second = client.post("/api/v1/graph/nodes", json={
+            "id": "stats-entity-1", "type": "entity", "properties": {"name": "A"},
+        })
+        third = client.post("/api/v1/graph/nodes", json={
+            "id": "stats-entity-2", "type": "entity", "properties": {"name": "B"},
+        })
+        assert all(response.status_code == 200 for response in (first, second, third))
+        edge = client.post("/api/v1/graph/edges", json={
+            "source": "stats-source-1", "target": "stats-entity-1",
+            "type": "mentions", "properties": {},
+        })
+        assert edge.status_code == 200
+
+        stats = client.get("/api/v1/graph/stats")
+        assert stats.status_code == 200
+        assert stats.json()["node_count"] == 3
+        assert stats.json()["edge_count"] == 1
+        assert stats.json()["nodes_by_type"] == {"entity": 2, "source": 1}
+        assert stats.json()["edges_by_relationship"] == {"mentions": 1}

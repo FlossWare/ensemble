@@ -45,6 +45,7 @@ class GraphStore(Protocol):
     async def add_edge(self, source: str, target: str, edge_type: str, properties: dict[str, Any], edge_id: str | None = None) -> dict[str, Any]: ...
     async def get_node(self, node_id: str) -> dict[str, Any] | None: ...
     async def reclaim_source(self, source_id: str) -> int: ...
+    async def stats(self) -> dict[str, Any]: ...
     async def query_nodes(self, node_type: str | None, properties: dict[str, Any]) -> list[dict[str, Any]]: ...
     async def query_edges(self, from_type: str | None = None, to_type: str | None = None, relationship: str | None = None) -> list[dict[str, Any]]: ...
     async def traverse(self, start: str, direction: str = "out", max_depth: int = 1, edge_type: str | None = None) -> list[dict[str, Any]]: ...
@@ -130,6 +131,23 @@ class SqliteGraphStore:
         async with self.engine.connect() as connection:
             row = (await connection.execute(select(nodes).where(nodes.c.id == node_id))).mappings().first()
         return {"id": row["id"], "type": row["node_type"], "properties": row["properties"]} if row else None
+
+    async def stats(self) -> dict[str, Any]:
+        async with self.engine.connect() as connection:
+            node_rows = (await connection.execute(
+                select(nodes.c.node_type, func.count()).group_by(nodes.c.node_type).order_by(nodes.c.node_type)
+            )).all()
+            edge_rows = (await connection.execute(
+                select(edges.c.edge_type, func.count()).group_by(edges.c.edge_type).order_by(edges.c.edge_type)
+            )).all()
+        nodes_by_type = {name: int(count) for name, count in node_rows}
+        edges_by_relationship = {name: int(count) for name, count in edge_rows}
+        return {
+            "node_count": sum(nodes_by_type.values()),
+            "edge_count": sum(edges_by_relationship.values()),
+            "nodes_by_type": nodes_by_type,
+            "edges_by_relationship": edges_by_relationship,
+        }
 
     async def query_nodes(self, node_type: str | None, properties: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(properties, dict):

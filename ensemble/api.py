@@ -2952,6 +2952,13 @@ def create_app(
             raise HTTPException(status_code=503, detail="graph persistence unavailable") from exc
         return {"ok": True, "ready": True, "backend": "sqlite"}
 
+    @app.get("/api/v1/graph/stats", tags=["graph"])
+    async def graph_stats():
+        try:
+            return {"ok": True, **await active_graph_store.stats()}
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="graph statistics unavailable") from exc
+
     @app.post("/api/v1/graph/nodes", tags=["graph"])
     async def graph_add_node(payload: dict[str, Any]):
         try:

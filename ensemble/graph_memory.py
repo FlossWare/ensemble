@@ -63,6 +63,20 @@ class InMemoryGraphStore:
         record = self.nodes.get(node_id)
         return dict(record) if record else None
 
+    async def stats(self):
+        nodes_by_type = {}
+        edges_by_relationship = {}
+        for node in self.nodes.values():
+            nodes_by_type[node["type"]] = nodes_by_type.get(node["type"], 0) + 1
+        for edge in self.edges.values():
+            edges_by_relationship[edge["type"]] = edges_by_relationship.get(edge["type"], 0) + 1
+        return {
+            "node_count": len(self.nodes),
+            "edge_count": len(self.edges),
+            "nodes_by_type": dict(sorted(nodes_by_type.items())),
+            "edges_by_relationship": dict(sorted(edges_by_relationship.items())),
+        }
+
     async def query_nodes(self, node_type, properties):
         return [dict(record) for record in sorted(self.nodes.values(), key=lambda item: item["id"])
                 if (node_type is None or record["type"] == node_type)
