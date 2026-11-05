@@ -16,6 +16,12 @@ def test_sqlite_graph_store_persists_nodes_edges_and_traversal(tmp_path):
         left = await store.add_node("service", {"name": "memory"})
         right = await store.add_node("service", {"name": "knowledge"})
         edge = await store.add_edge(left["id"], right["id"], "feeds", {"enabled": True})
+        stats = await store.stats()
+        assert stats == {
+            "node_count": 2, "edge_count": 1,
+            "nodes_by_type": {"service": 2},
+            "edges_by_relationship": {"feeds": 1},
+        }
         assert (await store.get_node(left["id"]))["properties"]["name"] == "memory"
         assert (await store.query_edges(relationship="feeds"))[0]["id"] == edge["id"]
         assert (await store.traverse(left["id"]))[0]["node"]["id"] == right["id"]

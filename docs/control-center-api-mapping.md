@@ -1,6 +1,6 @@
 # Control Center API and UI Mapping
 
-**Status:** Review-branch implementation inventory for `review/core-services-2026-11-02`.
+**Status:** Integration-branch implementation inventory, updated 2026-11-05.
 **Purpose:** Describe the actual browser workbenches and their REST contracts. A UI panel is not proof of production readiness or complete capability parity.
 
 ## 1. Browser workbench coverage
@@ -14,15 +14,15 @@
 | Index and Vector | Manifest, collection list, source lookup, confirmed tombstone | `GET /api/v1/index/manifest`, `GET /api/v1/vector/collections`, `GET /api/v1/index/sources/{source_id}`, `POST /api/v1/index/tombstones` | No index-generation rebuild or cleanup-retry workbench |
 | Memory and Knowledge | Memory names, Knowledge status, Memory search, Knowledge record lookup | `/api/v1/memory/*`, `/api/v1/knowledge/records/{source_id}` | No complete event/session lifecycle workbench or scoped filesystem scanner |
 | URI ingestion | Preview followed by explicit ingestion | `POST /api/v1/ingest/urls/preview`, `POST /api/v1/ingest/urls` | Single-page fetch; no crawler or scheduled refresh |
-| Graph | Property-filtered node query, node lookup, bounded traversal | `POST /api/v1/graph/query`, `GET /api/v1/graph/nodes/{node_id}`, `POST /api/v1/graph/traverse` | No graph-wide visualization or activity history |
+| Graph | Aggregate node/edge counts by type and relationship, property-filtered node query, node lookup, bounded traversal | `GET /api/v1/graph/stats`, `POST /api/v1/graph/query`, `GET /api/v1/graph/nodes/{node_id}`, `POST /api/v1/graph/traverse` | No graph-wide visualization or activity history |
 | Entities | Non-mutating extraction preview, explicit canonical resolution and typed linking | `POST /api/v1/entities/extract`, `/resolve`, `/link` | Deterministic exact resolution; no fuzzy/ontology workflow |
 | Intent | Multi-intent classification and evidence inspection | `POST /api/v1/intent/classify` | Rule-based heuristic confidence, not model-calibrated |
 | Chunking | Profile inventory and non-persistent chunk preview | `GET /api/v1/chunking/profiles`, `POST /api/v1/chunking/chunk` | No persisted ingestion trace |
 | Tokenization | Analyzer profile inventory and token preview | `GET /api/v1/tokenization/profiles`, `POST /api/v1/tokenization/tokenize` | lexical-v1 only |
 | Pipeline Inspector | Sequential read-only probes for tokenization, entities, intent and chunking | Existing capability preview endpoints | Interactive diagnostic preview, not a correlated trace of a real ingestion |
 | GA | Launch bounded runs, inspect history/results/candidates, approve export candidate | `/api/v1/ga/runs`, `/runs/{run_id}`, `/runs/{run_id}/promote` | Synthetic local evaluators; no live settings are applied |
-| Thompson | Inspect state, select model, record outcomes, reset after confirmation | `/api/v1/thompson/*` | task/capability filtering is not implemented |
-| Learning | Report, recent outcomes, artifacts, confirmed reset | `/api/v1/learning/*` | Initial workflow; deeper parity and recovery remain open |
+| Thompson | Inspect successes/failures, calls, cost/token totals, derived alpha/beta parameters and posterior mean; select model; reset after confirmation | `/api/v1/thompson/*` | Selection is sampled; task/capability filtering and selection history are not implemented |
+| Learning | Report, recent outcomes, portable artifacts, idempotent outcome/artifact recording, retry-safe Memory and Thompson acknowledgement, confirmed reset | `/api/v1/learning/*` | No automated Knowledge promotion; synthetic GA artifacts remain ineligible |
 | Runtime configuration | Display listener and persistence status | `GET /api/v1/system/config` | Deliberately omits filesystem paths and database URLs |
 
 ## 2. REST capability inventory
