@@ -61,10 +61,13 @@ def build_ga_learning_artifact(run: dict[str, Any]) -> dict[str, Any]:
             selected_parameters[system] = dict(normalized[0]["parameters"])
             objectives[system] = normalized[0]["fitness"]
 
-    identity = json.dumps(
-        {"ga_run_id": run_id, "config": config, "result": result},
-        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
-    )
+    try:
+        identity = json.dumps(
+            {"ga_run_id": run_id, "config": config, "result": result},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        )
+    except ValueError as exc:
+        raise ValueError("GA result and configuration must contain finite JSON numbers") from exc
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
     artifact_run_id = f"ga-{run_id}-{digest}"
     payload = {

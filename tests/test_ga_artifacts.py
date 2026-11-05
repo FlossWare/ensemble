@@ -45,6 +45,6 @@ def test_ga_learning_artifact_rejects_invalid_candidate_parameters_and_fitness()
     run["result"]["best_by_system"]["compression"] = [
         {"fitness": math.nan, "parameters": {"compression_level": 4.0}},
     ]
-    artifact = build_ga_learning_artifact(run)
-    assert artifact["payload"]["selected_parameters"] == {}
+    with pytest.raises(ValueError, match="finite JSON numbers"):
+        build_ga_learning_artifact(run)
 
