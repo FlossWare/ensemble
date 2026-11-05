@@ -570,7 +570,7 @@ async function refreshOverview(){
  overviewMetrics.replaceChildren();
  try{
   const [health,graph,index,vectors,traces]=await Promise.allSettled([
-   controlJson("/health"),controlJson("/api/v1/graph/stats"),controlJson("/api/v1/index/manifest?limit=1"),
+   controlJson("/health"),controlJson("/api/v1/graph/stats"),controlJson("/api/v1/index/manifest?limit=500"),
    controlJson("/api/v1/vector/collections"),controlJson("/api/v1/execution-traces?limit=100")
   ]);
   const value=(result)=>result.status==="fulfilled"?result.value:null;
@@ -582,7 +582,7 @@ async function refreshOverview(){
    metricCard("Graph nodes",findCount(graphData,["node_count","nodes_count","total_nodes"])??"n/a","Current graph inventory"),
    metricCard("Graph edges",findCount(graphData,["edge_count","edges_count","total_edges"])??"n/a","Current relationship inventory"),
    metricCard("Vector collections",Array.isArray(collections)?collections.length:"n/a","Configured collections"),
-   metricCard("Index sources",findCount(indexData,["total_sources","source_count","count"])??"n/a","Manifest summary"),
+   metricCard("Index sources",Array.isArray(indexData?.sources)?indexData.sources.length:"n/a","Sources in first 500 manifest entries"),
    metricCard("Execution traces",Array.isArray(traceItems)?traceItems.length:"n/a","Recent trace records returned"),
    metricCard("Capability checks",document.getElementById("capability-summary").textContent||"Pending","Refresh Capability Explorer for detail")
   ];

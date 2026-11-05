@@ -76,6 +76,8 @@ def test_control_panel_is_served_by_the_api():
         assert "RRF contributions" in script.text
         assert "channel-bars" in script.text
         assert "refreshOverview" in script.text
+        assert '/api/v1/index/manifest?limit=500' in script.text
+        assert "Sources in first 500 manifest entries" in script.text
         assert "/api/v1/context/assemble" in script.text
         assert "/api/v1/index/manifest" in script.text
         assert "/api/v1/memory/search/hybrid" in script.text
