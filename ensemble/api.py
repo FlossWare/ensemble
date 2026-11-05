@@ -2549,7 +2549,7 @@ def create_app(
     @app.post("/api/v1/memory/search/semantic", tags=["memory"])
     async def memory_search_semantic(payload: dict[str, Any]):
         try:
-            top_k = payload.get("top_k", payload.get("limit", 10))
+            top_k = payload.get("limit", payload.get("top_k", 10))
             result = await active_memory_store.search_semantic(
                 payload.get("query", ""), top_k, payload.get("source")
             )
@@ -2560,7 +2560,7 @@ def create_app(
     @app.post("/api/v1/memory/search/hybrid", tags=["memory"])
     async def memory_search_hybrid(payload: dict[str, Any]):
         try:
-            top_k = payload.get("top_k", payload.get("limit", 10))
+            top_k = payload.get("limit", payload.get("top_k", 10))
             result = await active_memory_store.search_hybrid(payload.get("query", ""), top_k)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

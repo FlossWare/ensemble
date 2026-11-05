@@ -492,3 +492,34 @@ def test_memory_vectorizer_preserves_structured_identifiers():
     assert "session:alpha.v2" in vector
     assert "session" in vector
     assert "alpha" in vector
+
+
+
+def test_memory_semantic_search_limit_takes_precedence_over_top_k_alias():
+    with client() as http:
+        for index in range(5):
+            response = http.put(
+                f"/api/v1/memory/memories/retrieval-{index}",
+                json={"content": f"# Retrieval {index}\n\nretrieval contract detail {index}"},
+            )
+            assert response.status_code == 200
+
+        limited = http.post(
+            "/api/v1/memory/search/semantic",
+            json={"query": "retrieval contract detail", "limit": 1, "top_k": 4},
+        )
+        top_k_only = http.post(
+            "/api/v1/memory/search/semantic",
+            json={"query": "retrieval contract detail", "top_k": 3},
+        )
+        limit_only = http.post(
+            "/api/v1/memory/search/semantic",
+            json={"query": "retrieval contract detail", "limit": 2},
+        )
+
+        assert limited.status_code == 200
+        assert top_k_only.status_code == 200
+        assert limit_only.status_code == 200
+        assert len(limited.json()["results"]) == 1
+        assert len(top_k_only.json()["results"]) == 3
+        assert len(limit_only.json()["results"]) == 2
