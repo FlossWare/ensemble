@@ -365,13 +365,15 @@ async function refreshThompson(){
   thompsonState.replaceChildren();
   const table=document.createElement("table");
   const head=document.createElement("tr");
-  for(const label of ["Model","Successes","Failures","Calls","Avg cost","Total cost","Tokens","Action"]){
+  for(const label of ["Model","Successes","Failures","Alpha","Beta","Posterior mean","Calls","Avg cost","Total cost","Tokens","Action"]){
    const cell=document.createElement("th");cell.textContent=label;head.append(cell);
   }
   table.append(head);
   for(const [name,stats] of Object.entries(models)){
    const row=document.createElement("tr");
-   const values=[name,stats.successes,stats.failures,stats.calls,
+   const alpha=Number(stats.successes)+1,beta=Number(stats.failures)+1;
+   const posteriorMean=alpha/(alpha+beta);
+   const values=[name,stats.successes,stats.failures,alpha,beta,posteriorMean.toFixed(4),stats.calls,
     stats.calls?(stats.total_cost/stats.calls).toFixed(6):"0",
     Number(stats.total_cost).toFixed(6),stats.total_tokens];
    for(const value of values){const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);}

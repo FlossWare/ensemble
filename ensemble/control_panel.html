@@ -192,7 +192,7 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 </section>
 <section id="thompson-panel">
 <h2>Thompson Router</h2>
-<p>Model-level Beta posteriors and cost-aware selection. Task-specific capability filtering is not implemented in the POC contract yet.</p>
+<p>Model-level Beta posteriors use alpha = successes + 1 and beta = failures + 1. The posterior mean is descriptive, not a guarantee of future performance. Selection is sampled; task-specific capability filtering and selection history are not implemented.</p>
 <form id="thompson-select-form">
 <label for="thompson-task">Task type</label>
 <input id="thompson-task" type="text" value="unknown">

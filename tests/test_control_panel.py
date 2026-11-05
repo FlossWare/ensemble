@@ -51,6 +51,8 @@ def test_control_panel_is_served_by_the_api():
         assert "/api/v1/ga/runs" in script.text
         assert "Approve for export" in script.text
         assert "/api/v1/thompson/state" in script.text
+        assert "Posterior mean" in script.text
+        assert "const posteriorMean=alpha/(alpha+beta)" in script.text
         assert 'textContent="Reset"' in script.text
         assert "/api/v1/search/hybrid" in script.text
         assert "renderRetrievalPipeline" in script.text
