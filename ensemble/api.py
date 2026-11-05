@@ -2334,12 +2334,20 @@ def create_app(
         max_cost = payload.get("max_cost", float("inf"))
         if "request_id" in payload and (not isinstance(payload["request_id"], str) or len(payload["request_id"]) > 256):
             raise HTTPException(status_code=400, detail="request_id must be a string of at most 256 characters")
+        request_id = payload.get("request_id") or str(uuid4())
+        selection_id = str(uuid4())
         try:
             state = await active_thompson_store.get_state()
             model = thompson_select_model(state, task_type, required_capability, max_cost, thompson_rng)
+            await active_thompson_store.record_selection(
+                selection_id=selection_id, selected_model=model, task_type=task_type,
+                required_capability=required_capability,
+                max_cost=float(max_cost) if math.isfinite(float(max_cost)) else None,
+                request_id=request_id,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "model": model, "request_id": payload.get("request_id") or str(uuid4())}
+        return {"ok": True, "model": model, "selection_id": selection_id, "request_id": request_id}
 
     async def thompson_record(payload: dict[str, Any]):
         task_type = payload.get("task_type", "unknown")
@@ -2391,6 +2399,14 @@ def create_app(
     @app.post("/api/v1/thompson/select", tags=["thompson"])
     async def thompson_select_route(payload: dict[str, Any]):
         return await thompson_select(payload)
+
+    @app.get("/api/v1/thompson/selections", tags=["thompson"])
+    async def thompson_selections(limit: int = 50):
+        try:
+            selections = await active_thompson_store.recent_selections(limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "selections": selections}
 
     @app.post("/api/v1/search/feedback", tags=["search"])
     async def search_feedback(payload: dict[str, Any]):
