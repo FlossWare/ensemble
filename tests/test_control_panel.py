@@ -24,6 +24,9 @@ def test_control_panel_is_served_by_the_api():
         assert 'href="#graph-workbench"' in response.text
         assert 'href="#pipeline-inspector"' in response.text
         assert 'id="platform-status"' in response.text
+        assert 'id="overview-metrics"' in response.text
+        assert 'id="refresh-overview"' in response.text
+        assert 'class="metric-grid"' in response.text
         assert "@media(max-width:760px)" in response.text
         assert "prefers-reduced-motion" in response.text
         assert "Genetic Algorithm tuning" in response.text
@@ -71,6 +74,8 @@ def test_control_panel_is_served_by_the_api():
         assert "/api/v1/search/hybrid" in script.text
         assert "renderRetrievalPipeline" in script.text
         assert "RRF contributions" in script.text
+        assert "channel-bars" in script.text
+        assert "refreshOverview" in script.text
         assert "/api/v1/context/assemble" in script.text
         assert "/api/v1/index/manifest" in script.text
         assert "/api/v1/memory/search/hybrid" in script.text

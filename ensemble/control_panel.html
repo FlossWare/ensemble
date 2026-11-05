@@ -22,6 +22,17 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 #partition-session{border-color:#32665f;background:linear-gradient(110deg,#12302f,#142238)}
 @media(max-width:760px){.app-shell{display:block}.sidebar{position:static;height:auto;border:0;border-bottom:1px solid var(--line);padding:.5rem}.sidebar nav{display:flex;overflow-x:auto;gap:.25rem}.sidebar .nav-label{display:none}.sidebar nav a{white-space:nowrap}.main-content{padding:1rem .75rem}.page-heading{align-items:flex-start;flex-direction:column}.app-header{height:60px;padding:0 1rem}section{padding:1rem}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{transition:none!important}}
+
+.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem;margin:1rem 0}
+.metric-card{background:#0c192a;border:1px solid #293d56;border-radius:11px;padding:.9rem 1rem;min-width:0}
+.metric-card .metric-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;color:#8fa5bd}
+.metric-card .metric-value{font-size:1.65rem;font-weight:750;letter-spacing:-.04em;margin-top:.25rem;color:#eaf4ff;overflow-wrap:anywhere}
+.metric-card .metric-note{font-size:.76rem;color:#8fa5bd;margin-top:.15rem}
+.channel-bars{display:grid;gap:.7rem;margin:.9rem 0}.channel-bar-row{display:grid;grid-template-columns:95px minmax(80px,1fr) 52px;gap:.7rem;align-items:center;font-size:.82rem}
+.channel-track{height:9px;border-radius:20px;background:#26374d;overflow:hidden}.channel-fill{height:100%;border-radius:20px;background:linear-gradient(90deg,#238e9b,#58d6c4)}
+.rrf-score{font-variant-numeric:tabular-nums;font-weight:650;color:#a8eee1}
+@media(max-width:900px){.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:420px){.metric-grid{grid-template-columns:1fr}.channel-bar-row{grid-template-columns:75px minmax(50px,1fr) 45px}}
 </style>
 </head>
 <body>
@@ -39,7 +50,7 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 <p class="muted">Credentials stay in this browser tab's session storage. The partition name selects only a partition authorized by the token.</p>
 <div class="toolbar"><input id="partition-token" type="password" autocomplete="off" placeholder="Bearer token"><input id="partition-id" type="text" maxlength="128" placeholder="Partition (optional for single-partition tokens)"><button id="connect-partition" type="button">Connect</button><button id="clear-partition" type="button">Clear</button><span id="partition-session-status">Local default session.</span></div>
 </section>
-<section id="platform-status"><h2>Platform status</h2><button id="refresh-health" type="button">Refresh readiness</button><pre id="health-result">Not checked.</pre></section>
+<section id="platform-status"><h2>Platform overview</h2><p class="muted">Live operational snapshot. Counts are read from the current local stores and execution trace ledger.</p><div id="overview-metrics" class="metric-grid"><div class="metric-card"><div class="metric-label">Service</div><div class="metric-value">…</div><div class="metric-note">Checking readiness</div></div></div><div class="toolbar"><button id="refresh-health" type="button">Refresh readiness</button><button id="refresh-overview" type="button">Refresh overview metrics</button></div><pre id="health-result">Not checked.</pre></section>
 <section id="capability-explorer">
 <h2>Capability Explorer</h2>
 <p class="muted">Live health checks for the single Ensemble process and its capability endpoint groups.</p>

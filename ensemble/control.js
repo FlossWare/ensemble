@@ -550,6 +550,48 @@ async function refreshCapabilityTable(){
 refreshCapabilities.addEventListener("click",refreshCapabilityTable);
 refreshCapabilityTable();
 
+
+const overviewMetrics=document.getElementById("overview-metrics");
+function metricCard(label,value,note){
+ const card=document.createElement("div");card.className="metric-card";
+ const heading=document.createElement("div");heading.className="metric-label";heading.textContent=label;
+ const number=document.createElement("div");number.className="metric-value";number.textContent=String(value);
+ const detail=document.createElement("div");detail.className="metric-note";detail.textContent=note||"";
+ card.append(heading,number,detail);return card;
+}
+function findCount(payload,keys){
+ if(!payload||typeof payload!=="object")return null;
+ for(const key of keys){if(typeof payload[key]==="number")return payload[key];}
+ for(const value of Object.values(payload)){if(value&&typeof value==="object"){const found=findCount(value,keys);if(found!==null)return found;}}
+ return null;
+}
+async function refreshOverview(){
+ const button=document.getElementById("refresh-overview");button.disabled=true;
+ overviewMetrics.replaceChildren();
+ try{
+  const [health,graph,index,vectors,traces]=await Promise.allSettled([
+   controlJson("/health"),controlJson("/api/v1/graph/stats"),controlJson("/api/v1/index/manifest?limit=1"),
+   controlJson("/api/v1/vector/collections"),controlJson("/api/v1/execution-traces?limit=100")
+  ]);
+  const value=(result)=>result.status==="fulfilled"?result.value:null;
+  const graphData=value(graph),indexData=value(index),vectorData=value(vectors),traceData=value(traces),healthData=value(health);
+  const collections=Array.isArray(vectorData)?vectorData:(vectorData?.collections||[]);
+  const traceItems=Array.isArray(traceData)?traceData:(traceData?.traces||[]);
+  const cards=[
+   metricCard("Service",healthData?"Online":"Unavailable",healthData?"Health endpoint responded":"Health endpoint unavailable"),
+   metricCard("Graph nodes",findCount(graphData,["node_count","nodes_count","total_nodes"])??"n/a","Current graph inventory"),
+   metricCard("Graph edges",findCount(graphData,["edge_count","edges_count","total_edges"])??"n/a","Current relationship inventory"),
+   metricCard("Vector collections",Array.isArray(collections)?collections.length:"n/a","Configured collections"),
+   metricCard("Index sources",findCount(indexData,["total_sources","source_count","count"])??"n/a","Manifest summary"),
+   metricCard("Execution traces",Array.isArray(traceItems)?traceItems.length:"n/a","Recent trace records returned"),
+   metricCard("Capability checks",document.getElementById("capability-summary").textContent||"Pending","Refresh Capability Explorer for detail")
+  ];
+  overviewMetrics.append(...cards);
+ }catch(error){overviewMetrics.append(metricCard("Overview","Unavailable",error.message));}
+ finally{button.disabled=false;}
+}
+document.getElementById("refresh-overview").addEventListener("click",refreshOverview);
+refreshOverview();
 const retrievalForm=document.getElementById("retrieval-form");
 const retrievalQuery=document.getElementById("retrieval-query");
 const retrievalLimit=document.getElementById("retrieval-limit");
@@ -579,7 +621,21 @@ function renderRetrievalPipeline(result){
   }
   channelTable.append(row);
  }
+
  retrievalResults.append(channelTable);
+ const chart=document.createElement("div");chart.className="channel-bars";
+ const maxCandidates=Math.max(1,...Object.values(fusion.channels||{}).map(channel=>Number(channel.candidate_count)||0));
+ for(const [name,details] of Object.entries(fusion.channels||{})){
+  const line=document.createElement("div");line.className="channel-bar-row";
+  const label=document.createElement("span");label.textContent=name;
+  const track=document.createElement("div");track.className="channel-track";
+  const fill=document.createElement("div");fill.className="channel-fill";
+  fill.style.width=Math.max(0,Math.min(100,(Number(details.candidate_count)||0)/maxCandidates*100))+"%";
+  track.append(fill);
+  const count=document.createElement("strong");count.textContent=String(details.candidate_count??0);
+  line.append(label,track,count);chart.append(line);
+ }
+ retrievalResults.append(chart);
  const fusionTitle=document.createElement("h3");fusionTitle.textContent="RRF contributions";retrievalResults.append(fusionTitle);
  const fusionTable=document.createElement("table");
  const fusionHead=document.createElement("tr");
