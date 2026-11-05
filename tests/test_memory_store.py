@@ -113,3 +113,50 @@ def test_memory_hybrid_uses_shared_configured_rrf_constant(monkeypatch):
         "keyword": round(1 / 21, 6),
         "semantic": round(1 / 21, 6),
     }
+
+
+def test_semantic_search_reuses_cached_chunks_and_vectors_until_content_changes(monkeypatch):
+    import ensemble.memory_store as memory_module
+    from ensemble.memory_store import InMemoryMemoryStore
+
+    async def exercise():
+        memory_module._memory_search_index.clear()
+        store = InMemoryMemoryStore()
+        await store.write("notes", "# Retrieval\\nVectorized content remains stable across repeated searches.")
+        original = memory_module._vectorize_text
+        calls = []
+
+        def counted(value):
+            calls.append(value)
+            return original(value)
+
+        monkeypatch.setattr(memory_module, "_vectorize_text", counted)
+        first = await store.search_semantic("retrieval")
+        second = await store.search_semantic("retrieval")
+        assert first and second
+        # One query vector per search, but the document chunk is vectorized once.
+        assert calls.count("# Retrieval\\nVectorized content remains stable across repeated searches.") == 1
+
+        await store.write("notes", "# Retrieval\\nUpdated content has a new vector representation.")
+        updated = await store.search_semantic("updated")
+        assert updated and "Updated content" in updated[0]["content"]
+        assert calls.count("# Retrieval\\nUpdated content has a new vector representation.") == 1
+        memory_module._memory_search_index.clear()
+
+    asyncio.run(exercise())
+
+
+def test_memory_search_index_is_bounded_and_skips_oversized_documents():
+    from ensemble.memory_store import _MemorySearchIndex
+
+    index = _MemorySearchIndex(max_bytes=8, max_document_bytes=8)
+    first = index.get("one", "alpha")
+    assert first[0]["vector"]
+    assert index._cached_bytes == 5
+    second = index.get("two", "bravo")
+    assert second[0]["vector"]
+    assert index._cached_bytes <= 8
+    assert len(index._cache) == 1
+    oversized = index.get("large", "0123456789")
+    assert oversized[0]["vector"]
+    assert "large" not in [name for name, _ in index._cache]

@@ -5,6 +5,8 @@ import json
 import math
 import os
 import re
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -294,6 +296,75 @@ def _keyword_search(documents: list[tuple[str, str]], active_knowledge: set[str]
     return sorted(results, key=lambda item: (-item["score"], item["file"], item["section"]))[:limit]
 
 
+class _MemorySearchIndex:
+    """Bounded process-local cache of chunks and vectors for Memory documents."""
+
+    def __init__(self, max_bytes: int = 32 * 1024 * 1024, max_document_bytes: int = 2 * 1024 * 1024):
+        self.max_bytes = max_bytes
+        self.max_document_bytes = max_document_bytes
+        self._lock = threading.Lock()
+        self._cache: OrderedDict[tuple[str, str], tuple[int, tuple[dict[str, Any], ...]]] = OrderedDict()
+        self._locks: dict[tuple[str, str], threading.Lock] = {}
+        self._cached_bytes = 0
+
+    def _build(self, content: str) -> tuple[dict[str, Any], ...]:
+        chunks = _chunk_markdown(content) or [{"header": "full", "content": content}]
+        indexed = []
+        for chunk in chunks:
+            value = chunk["content"]
+            vector = _vectorize_text(value)
+            indexed.append({
+                "header": chunk["header"],
+                "size_bytes": len(value.encode("utf-8")),
+                "folded": value.casefold(),
+                "vector": vector,
+                "magnitude": math.sqrt(sum(weight * weight for weight in vector.values())),
+            })
+        return tuple(indexed)
+
+    def get(self, name: str, content: str) -> tuple[dict[str, Any], ...]:
+        size = len(content.encode("utf-8"))
+        if size > self.max_document_bytes or self.max_bytes <= 0:
+            return self._build(content)
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        key = (name, digest)
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None:
+                self._cache.move_to_end(key)
+                return cached[1]
+            build_lock = self._locks.setdefault(key, threading.Lock())
+        with build_lock:
+            with self._lock:
+                cached = self._cache.get(key)
+                if cached is not None:
+                    self._cache.move_to_end(key)
+                    return cached[1]
+            indexed = self._build(content)
+            with self._lock:
+                previous = self._cache.pop(key, None)
+                if previous is not None:
+                    self._cached_bytes -= previous[0]
+                while self._cache and self._cached_bytes + size > self.max_bytes:
+                    _, (evicted_size, _) = self._cache.popitem(last=False)
+                    self._cached_bytes -= evicted_size
+                if size <= self.max_bytes:
+                    self._cache[key] = (size, indexed)
+                    self._cached_bytes += size
+                if self._locks.get(key) is build_lock:
+                    self._locks.pop(key, None)
+            return indexed
+
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+            self._locks.clear()
+            self._cached_bytes = 0
+
+
+_memory_search_index = _MemorySearchIndex()
+
+
 def _semantic_search(documents: list[tuple[str, str]], active_knowledge: set[str], query: str, top_k: int, source: str | None) -> list[dict[str, Any]]:
     if not isinstance(query, str) or not query.strip():
         return []
@@ -324,15 +395,15 @@ def _semantic_search(documents: list[tuple[str, str]], active_knowledge: set[str
             continue
         if source == "memory" and is_knowledge:
             continue
-        for chunk in _chunk_markdown(content) or [{"header": "full", "content": content}]:
-            exact = bool(pattern.search(chunk["content"].casefold())) if identifier else normalized in chunk["content"].casefold()
+        for chunk in _memory_search_index.get(name, content):
+            exact = bool(pattern.search(chunk["folded"])) if identifier else normalized in chunk["folded"]
             if identifier and not exact:
                 continue
-            score = 1.0 if exact else _cosine(query_vector, _vectorize_text(chunk["content"]))
+            score = 1.0 if exact else _cosine(query_vector, chunk["vector"])
             if exact or score > 0.1:
                 result = {
                     "file": name, "section": chunk["header"], "score": score,
-                    "size_bytes": len(chunk["content"].encode("utf-8")), "content": content,
+                    "size_bytes": chunk["size_bytes"], "content": content,
                 }
                 if is_knowledge:
                     result["source"] = "claude-code"
