@@ -693,10 +693,16 @@ class SqliteMemoryStore:
             if {"payload_sha256", "captured_at"}.intersection(record):
                 raise ValueError("entry contains reserved Memory metadata fields")
             record["event_id"] = event_id
-            # A caller-supplied timestamp is part of the event payload and must
-            # participate in idempotency. The generated fallback timestamp is
-            # added only after hashing, so retries remain stable.
-            canonical, _ = _canonical_payload(record)
+            # A caller-supplied timestamp is part of ordinary event identity.
+            # Transcript ingestion is the deliberate exception: its stable ID is
+            # based on session/message/content, so a corrected source timestamp
+            # must not duplicate or conflict with the same transcript message.
+            identity_record = (
+                {key: value for key, value in record.items() if key != "timestamp"}
+                if name == "session-events" else record
+            )
+            # The generated fallback timestamp is added only after hashing.
+            canonical, _ = _canonical_payload(identity_record)
             digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             # Match the POC ledger envelope without including service metadata
             # in the caller-payload digest.
@@ -978,10 +984,16 @@ class InMemoryMemoryStore:
             if {"payload_sha256", "captured_at"}.intersection(record):
                 raise ValueError("entry contains reserved Memory metadata fields")
             record["event_id"] = event_id
-            # A caller-supplied timestamp is part of the event payload and must
-            # participate in idempotency. The generated fallback timestamp is
-            # added only after hashing, so retries remain stable.
-            canonical, _ = _canonical_payload(record)
+            # A caller-supplied timestamp is part of ordinary event identity.
+            # Transcript ingestion is the deliberate exception: its stable ID is
+            # based on session/message/content, so a corrected source timestamp
+            # must not duplicate or conflict with the same transcript message.
+            identity_record = (
+                {key: value for key, value in record.items() if key != "timestamp"}
+                if name == "session-events" else record
+            )
+            # The generated fallback timestamp is added only after hashing.
+            canonical, _ = _canonical_payload(identity_record)
             digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             # Match the POC ledger envelope without including service metadata
             # in the caller-payload digest.
