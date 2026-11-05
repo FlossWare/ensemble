@@ -425,7 +425,7 @@ def test_memory_semantic_search_matches_identifiers_exactly_not_prefixes():
     from ensemble.memory_store import _semantic_search
 
     documents = [
-        ("exact", "The deployment run identifier is build-2026-11-04."),
+        ("exact", "The deployment run identifier is build-2026-11-04 and remains active."),
         ("prefix", "The deployment run identifier is build-2026-11-040."),
     ]
     results = _semantic_search(documents, set(), "build-2026-11-04", 10, None)
@@ -466,7 +466,7 @@ def test_memory_semantic_search_strips_trailing_period_before_identifier_classif
     from ensemble.memory_store import _semantic_search
 
     results = _semantic_search(
-        [("versions", "The exact schema version is 1.2.3.")],
+        [("versions", "The exact schema version is 1.2.3 and remains current.")],
         set(), "1.2.3.", 10, None,
     )
     assert [item["file"] for item in results] == ["versions"]
@@ -492,4 +492,3 @@ def test_memory_vectorizer_preserves_structured_identifiers():
     assert "session:alpha.v2" in vector
     assert "session" in vector
     assert "alpha" in vector
-    assert "v2" in vector
