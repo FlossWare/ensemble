@@ -299,9 +299,15 @@ def _keyword_search(documents: list[tuple[str, str]], active_knowledge: set[str]
 class _MemorySearchIndex:
     """Bounded process-local cache of chunks and vectors for Memory documents."""
 
-    def __init__(self, max_bytes: int = 32 * 1024 * 1024, max_document_bytes: int = 2 * 1024 * 1024):
+    def __init__(
+        self, max_bytes: int = 32 * 1024 * 1024,
+        max_document_bytes: int = 2 * 1024 * 1024, max_entries: int = 512,
+    ):
+        if max_bytes < 0 or max_document_bytes < 0 or max_entries < 1:
+            raise ValueError("Memory search cache limits must be non-negative and max_entries positive")
         self.max_bytes = max_bytes
         self.max_document_bytes = max_document_bytes
+        self.max_entries = max_entries
         self._lock = threading.Lock()
         self._cache: OrderedDict[tuple[str, str], tuple[int, tuple[dict[str, Any], ...]]] = OrderedDict()
         self._locks: dict[tuple[str, str], threading.Lock] = {}
@@ -345,7 +351,10 @@ class _MemorySearchIndex:
                 previous = self._cache.pop(key, None)
                 if previous is not None:
                     self._cached_bytes -= previous[0]
-                while self._cache and self._cached_bytes + size > self.max_bytes:
+                while self._cache and (
+                    self._cached_bytes + size > self.max_bytes
+                    or len(self._cache) >= self.max_entries
+                ):
                     _, (evicted_size, _) = self._cache.popitem(last=False)
                     self._cached_bytes -= evicted_size
                 if size <= self.max_bytes:

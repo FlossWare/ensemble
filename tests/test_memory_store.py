@@ -149,7 +149,7 @@ def test_semantic_search_reuses_cached_chunks_and_vectors_until_content_changes(
 def test_memory_search_index_is_bounded_and_skips_oversized_documents():
     from ensemble.memory_store import _MemorySearchIndex
 
-    index = _MemorySearchIndex(max_bytes=8, max_document_bytes=8)
+    index = _MemorySearchIndex(max_bytes=8, max_document_bytes=8, max_entries=1)
     first = index.get("one", "alpha")
     assert first[0]["vector"]
     assert index._cached_bytes == 5
@@ -160,3 +160,29 @@ def test_memory_search_index_is_bounded_and_skips_oversized_documents():
     oversized = index.get("large", "0123456789")
     assert oversized[0]["vector"]
     assert "large" not in [name for name, _ in index._cache]
+
+
+def test_memory_search_index_builds_each_concurrent_cold_document_once(monkeypatch):
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    import ensemble.memory_store as memory_module
+    from ensemble.memory_store import _MemorySearchIndex
+
+    index = _MemorySearchIndex()
+    original = memory_module._vectorize_text
+    calls = []
+    calls_lock = threading.Lock()
+
+    def counted(value):
+        with calls_lock:
+            calls.append(value)
+        time.sleep(0.01)
+        return original(value)
+
+    monkeypatch.setattr(memory_module, "_vectorize_text", counted)
+    content = "# Shared\\nConcurrent cold searches should share one index build."
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: index.get("shared", content), range(8)))
+    assert all(result is results[0] for result in results)
+    assert calls == [content]
