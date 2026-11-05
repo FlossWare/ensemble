@@ -261,6 +261,20 @@ class InMemoryDocumentStore:
                 document.metadata["_generation_tombstoned"] = True
         return 1
 
+    async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int:
+        """Remove one bounded page of a source's documents from a generation."""
+        if not generation_id or not source_id:
+            raise ValueError("generation_id and source_id are required")
+        generation = self._generation_data.get(generation_id, {})
+        keys = sorted(
+            (key for key in generation if key[0] == source_id),
+            key=lambda key: key[1],
+        )
+        selected = keys[:500]
+        for key in selected:
+            del generation[key]
+        return 501 if len(keys) > 500 else len(selected)
+
     async def delete_generation(self, generation_id: str) -> int:
         self._generation_tombstones.pop(generation_id, None)
         return len(self._generation_data.pop(generation_id, {}))

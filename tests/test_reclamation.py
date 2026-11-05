@@ -307,3 +307,29 @@ def test_reclamation_worker_retries_partial_failure_before_marking_source_purged
         assert (await queue.status())["complete"] == 1
 
     asyncio.run(exercise())
+
+
+
+def test_inmemory_generation_document_reclamation_is_bounded():
+    from ensemble.models import Document
+
+    store = InMemoryDocumentStore()
+
+    async def exercise():
+        for revision in range(1, 502):
+            document = Document(
+                source_id="large-source", revision=revision,
+                title="Large source", content=f"revision {revision}",
+            )
+            await store.upsert_generation("generation", document, [])
+        assert await store.reclaim_generation_source(
+            "generation", "large-source",
+        ) == 501
+        assert await store.reclaim_generation_source(
+            "generation", "large-source",
+        ) == 1
+        assert await store.reclaim_generation_source(
+            "generation", "large-source",
+        ) == 0
+
+    asyncio.run(exercise())
