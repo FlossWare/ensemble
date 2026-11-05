@@ -529,10 +529,10 @@ def test_memory_append_once_preserves_timestamp_and_exposes_ledger_metadata():
     timestamp = "2026-10-08T23:00:00Z"
     payload = {"entry": {"event": "SessionEnd", "timestamp": timestamp}}
     with client() as http:
-        first = http.put("/api/v1/memory/memories/events/event-1", json=payload)
-        duplicate = http.put("/api/v1/memory/memories/events/event-1", json=payload)
+        first = http.put("/api/v1/memory/memories/events/entries/event-1", json=payload)
+        duplicate = http.put("/api/v1/memory/memories/events/entries/event-1", json=payload)
         changed_timestamp = http.put(
-            "/api/v1/memory/memories/events/event-1",
+            "/api/v1/memory/memories/events/entries/event-1",
             json={"entry": {"event": "SessionEnd", "timestamp": "2026-10-08T23:01:00Z"}},
         )
         assert first.status_code == 200
