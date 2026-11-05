@@ -693,19 +693,18 @@ class SqliteMemoryStore:
             if {"payload_sha256", "captured_at"}.intersection(record):
                 raise ValueError("entry contains reserved Memory metadata fields")
             record["event_id"] = event_id
-            # Preserve the POC's stable SessionEnd ledger envelope. The
-            # consumer-specific hook remains outside Ensemble; the ledger
-            # contract itself belongs to Memory.
-            envelope = (
-                {"schema_version": 1, "producer": "claude-code", "kind": "session_end"}
-                if name == "session_events" else {}
-            )
-            record = {**envelope, **record}
             # A caller-supplied timestamp is part of the event payload and must
             # participate in idempotency. The generated fallback timestamp is
             # added only after hashing, so retries remain stable.
             canonical, _ = _canonical_payload(record)
             digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            # Match the POC ledger envelope without including service metadata
+            # in the caller-payload digest.
+            envelope = (
+                {"schema_version": 1, "producer": "claude-code", "kind": "session_end"}
+                if name == "session_events" else {}
+            )
+            record = {**envelope, **record}
         _canonical_payload(record)
         now = datetime.now(timezone.utc)
         record.setdefault("timestamp", now.isoformat().replace("+00:00", "Z"))
@@ -979,19 +978,18 @@ class InMemoryMemoryStore:
             if {"payload_sha256", "captured_at"}.intersection(record):
                 raise ValueError("entry contains reserved Memory metadata fields")
             record["event_id"] = event_id
-            # Preserve the POC's stable SessionEnd ledger envelope. The
-            # consumer-specific hook remains outside Ensemble; the ledger
-            # contract itself belongs to Memory.
-            envelope = (
-                {"schema_version": 1, "producer": "claude-code", "kind": "session_end"}
-                if name == "session_events" else {}
-            )
-            record = {**envelope, **record}
             # A caller-supplied timestamp is part of the event payload and must
             # participate in idempotency. The generated fallback timestamp is
             # added only after hashing, so retries remain stable.
             canonical, _ = _canonical_payload(record)
             digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            # Match the POC ledger envelope without including service metadata
+            # in the caller-payload digest.
+            envelope = (
+                {"schema_version": 1, "producer": "claude-code", "kind": "session_end"}
+                if name == "session_events" else {}
+            )
+            record = {**envelope, **record}
             existing = self._events.get((name, event_id))
             if existing is not None:
                 if existing != digest:
