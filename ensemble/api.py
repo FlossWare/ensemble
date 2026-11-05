@@ -41,6 +41,7 @@ from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpo
 from .file_ingestion import extract_pdf, PDFExtractionError, MAX_PDF_BYTES
 from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
 from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
+from .ga_artifacts import build_ga_learning_artifact
 from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
 from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
@@ -2509,6 +2510,20 @@ def create_app(
         if run is None:
             raise HTTPException(status_code=404, detail="GA run not found")
         return {"ok": True, "run": run}
+
+    @app.post("/api/v1/ga/runs/{run_id}/artifact", tags=["ga"])
+    async def ga_record_learning_artifact(run_id: str):
+        run = await active_ga_store.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="GA run not found")
+        if run["status"] != "completed" or not run.get("result"):
+            raise HTTPException(status_code=409, detail="only completed GA runs can create learning artifacts")
+        try:
+            artifact = build_ga_learning_artifact(run)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=f"GA result cannot be represented as a learning artifact: {exc}") from exc
+        return await record_learning_artifact({"artifact": artifact})
+
 
     @app.post("/api/v1/ga/runs/{run_id}/promote", tags=["ga"])
     async def ga_promote_candidate(run_id: str, payload: dict[str, Any]):
