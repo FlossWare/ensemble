@@ -88,6 +88,12 @@ def test_control_panel_is_served_by_the_api():
         assert "/api/v1/execution-traces" in script.text
         assert "renderExecutionTrace" in script.text
         assert "Execution stages (" in script.text
+        assert "renderGraphStatistics" in script.text
+        assert "Nodes by type" in script.text
+        assert "renderVectorCollections" in script.text
+        assert "Embedding model" in script.text
+        assert "stage-duration-track" in script.text
+        assert "Inspect stages" in script.text
         assert "duration_ms" in script.text
 
 
