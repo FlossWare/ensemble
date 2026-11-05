@@ -405,7 +405,7 @@ async function refreshThompson(){
    const action=document.createElement("td");
    const reset=document.createElement("button");reset.type="button";reset.textContent="Reset";
    reset.addEventListener("click",async()=>{
-    if(!window.confirm("Reset Thompson history for "+name+"?"))return;
+    if(!window.confirm("Reset Thompson statistics for "+name+"?"))return;
     reset.disabled=true;
     try{
      const result=await fetch("/api/v1/thompson/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:name})});
