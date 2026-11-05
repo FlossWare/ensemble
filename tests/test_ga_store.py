@@ -71,3 +71,24 @@ def test_interrupted_ga_runs_are_failed_after_store_restart(tmp_path):
         await reopened.close()
 
     asyncio.run(exercise())
+
+
+def test_in_memory_ga_store_normalizes_run_timestamps_like_sqlite():
+    import asyncio
+    from datetime import datetime, timezone
+    from ensemble.ga_store import InMemoryGAStore
+
+    async def exercise():
+        store = InMemoryGAStore()
+        run = await store.create_run({"population_size": 15})
+        await store.update_run(
+            run["id"], status="completed", started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc), result={"best_by_system": {}},
+        )
+        fetched = await store.get_run(run["id"])
+        listed = (await store.list_runs())[0]
+        assert isinstance(fetched["completed_at"], str)
+        assert isinstance(fetched["started_at"], str)
+        assert isinstance(listed["completed_at"], str)
+
+    asyncio.run(exercise())
