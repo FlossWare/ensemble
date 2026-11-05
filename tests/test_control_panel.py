@@ -17,6 +17,15 @@ def test_control_panel_is_served_by_the_api():
         response = client.get("/control")
         assert response.status_code == 200
         assert "Ensemble Control Center" in response.text
+        assert 'class="app-header"' in response.text
+        assert 'class="app-shell"' in response.text
+        assert 'class="sidebar"' in response.text
+        assert 'href="#retrieval-explorer"' in response.text
+        assert 'href="#graph-workbench"' in response.text
+        assert 'href="#pipeline-inspector"' in response.text
+        assert 'id="platform-status"' in response.text
+        assert "@media(max-width:760px)" in response.text
+        assert "prefers-reduced-motion" in response.text
         assert "Genetic Algorithm tuning" in response.text
         assert "Start GA run" in response.text
         assert "Thompson Router" in response.text
