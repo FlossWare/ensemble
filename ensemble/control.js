@@ -659,7 +659,7 @@ document.getElementById("vector-query-form").addEventListener("submit",async eve
   const vector=embedded.embeddings&&embedded.embeddings[0];
   if(!Array.isArray(vector))throw new Error("Embedding provider returned no query vector.");
   const result=await controlJson("/api/v1/vector/collections/"+encodeURIComponent(collection)+"/query","POST",{
-   embedding:vector,dimensions:embedded.dimensions,top_k:topK
+   embedding:vector,dimensions:embedded.dimensions,model:embedded.model,top_k:topK
   });
   output.textContent=JSON.stringify({
    collection,embedding_model:embedded.model,dimensions:embedded.dimensions,

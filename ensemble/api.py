@@ -1891,10 +1891,20 @@ def create_app(
         if not isinstance(vector, list):
             raise HTTPException(status_code=400, detail="embedding must be a list")
         status = embeddings.status()
+        requested_model = payload.get("model")
+        if requested_model is not None and (
+            not isinstance(requested_model, str) or not requested_model or len(requested_model) > 512
+        ):
+            raise HTTPException(status_code=400, detail="model must be a non-empty string of at most 512 characters")
+        collection = next(
+            (item for item in await active_vector_store.list_collections() if item["name"] == name),
+            None,
+        )
+        if collection is not None and requested_model is not None and requested_model != collection["model"]:
+            raise HTTPException(status_code=409, detail="query embedding model does not match vector collection model")
         dimensions = payload.get("dimensions") or status.get("dimensions")
         if not isinstance(dimensions, int) or isinstance(dimensions, bool) or len(vector) != dimensions:
             # Existing collections define the authoritative dimension when no provider is configured.
-            collection = next((item for item in await active_vector_store.list_collections() if item["name"] == name), None)
             dimensions = collection["dimensions"] if collection else dimensions
         if not isinstance(dimensions, int) or len(vector) != dimensions:
             raise HTTPException(status_code=400, detail="embedding dimension does not match collection")
