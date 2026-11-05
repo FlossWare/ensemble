@@ -24,7 +24,10 @@ def test_sqlite_memory_knowledge_and_event_records_survive_restart(tmp_path):
 
         reopened = SqliteMemoryStore(url)
         await reopened.initialize()
-        assert (await reopened.read_entries("session"))[0]["result"] == "persisted"
+        event_record = (await reopened.read_entries("session"))[0]
+        assert event_record["result"] == "persisted"
+        assert len(event_record["payload_sha256"]) == 64
+        assert event_record["captured_at"].endswith("Z")
         assert (await reopened.knowledge_status())["indexed_document_count"] == 1
         assert (await reopened.append("session", {"result": "persisted"}, event_id="event-1"))["status"] == "duplicate"
         await reopened.reconcile_claude_markdown("claude-code", "/repo", [])

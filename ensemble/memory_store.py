@@ -613,8 +613,7 @@ class SqliteMemoryStore:
             if {"payload_sha256", "captured_at"}.intersection(record):
                 raise ValueError("entry contains reserved Memory metadata fields")
             record["event_id"] = event_id
-            digest_record = {key: value for key, value in record.items() if key != "timestamp"}
-            canonical, _ = _canonical_payload(digest_record)
+            canonical, _ = _canonical_payload(record)
             digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         _canonical_payload(record)
         now = datetime.now(timezone.utc)
@@ -652,9 +651,21 @@ class SqliteMemoryStore:
             raise ValueError(f"limit must be an integer between 1 and {MAX_ENTRIES}")
         async with self.engine.connect() as connection:
             rows = (await connection.execute(
-                select(entries.c.payload).where(entries.c.name == name).order_by(entries.c.id.desc()).limit(limit)
+                select(entries.c.payload, entries.c.event_id, entries.c.payload_sha256, entries.c.created_at)
+                .where(entries.c.name == name).order_by(entries.c.id.desc()).limit(limit)
             )).all()
-        return [row[0] for row in reversed(rows)]
+        records = []
+        for row in reversed(rows):
+            record = dict(row.payload)
+            if row.event_id is not None:
+                captured_at = row.created_at
+                if captured_at.tzinfo is None:
+                    captured_at = captured_at.replace(tzinfo=timezone.utc)
+                record.setdefault("event_id", row.event_id)
+                record["payload_sha256"] = row.payload_sha256
+                record["captured_at"] = captured_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            records.append(record)
+        return records
 
     async def list_names(self) -> list[str]:
         async with self.engine.connect() as connection:
@@ -816,6 +827,7 @@ class InMemoryMemoryStore:
     def __init__(self):
         self._memories: dict[str, str] = {}
         self._entries: dict[str, list[dict[str, Any]]] = {}
+        self._entry_metadata: dict[str, list[dict[str, Any]]] = {}
         self._events: dict[tuple[str, str], str] = {}
         self.sources: dict[str, dict[str, Any]] = {}
 
@@ -843,6 +855,7 @@ class InMemoryMemoryStore:
         validate_memory_name(name)
         memory_deleted = name in self._memories
         entries_deleted = len(self._entries.pop(name, []))
+        self._entry_metadata.pop(name, None)
         self._memories.pop(name, None)
         for key in [key for key in self._events if key[0] == name]:
             self._events.pop(key, None)
@@ -875,8 +888,7 @@ class InMemoryMemoryStore:
             if {"payload_sha256", "captured_at"}.intersection(record):
                 raise ValueError("entry contains reserved Memory metadata fields")
             record["event_id"] = event_id
-            digest_record = {key: value for key, value in record.items() if key != "timestamp"}
-            canonical, _ = _canonical_payload(digest_record)
+            canonical, _ = _canonical_payload(record)
             digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             existing = self._events.get((name, event_id))
             if existing is not None:
@@ -884,18 +896,29 @@ class InMemoryMemoryStore:
                     raise ValueError("event_id already exists with different payload")
                 return {"status": "duplicate", "event_id": event_id}
         _canonical_payload(record)
-        record.setdefault("timestamp", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+        now = datetime.now(timezone.utc)
+        record.setdefault("timestamp", now.isoformat().replace("+00:00", "Z"))
         self._memories.setdefault(name, "")
         self._entries.setdefault(name, []).append(record)
+        metadata = {}
         if event_id is not None:
+            metadata = {"payload_sha256": digest, "captured_at": now.isoformat().replace("+00:00", "Z")}
             self._events[(name, event_id)] = digest
+        self._entry_metadata.setdefault(name, []).append(metadata)
         return {"status": "stored", **({"event_id": event_id} if event_id else {})}
 
     async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]:
         validate_memory_name(name)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_ENTRIES:
             raise ValueError(f"limit must be an integer between 1 and {MAX_ENTRIES}")
-        return list(self._entries.get(name, [])[-limit:])
+        records = self._entries.get(name, [])[-limit:]
+        metadata = self._entry_metadata.get(name, [])[-limit:]
+        result = []
+        for record, envelope in zip(records, metadata):
+            item = dict(record)
+            item.update(envelope)
+            result.append(item)
+        return result
 
     async def list_names(self) -> list[str]:
         return sorted(set(self._memories) | set(self._entries))
