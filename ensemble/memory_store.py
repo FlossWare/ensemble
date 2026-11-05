@@ -429,7 +429,7 @@ class MemoryStore(Protocol):
     async def delete(self, name: str) -> dict[str, Any]: ...
     async def append(self, name: str, payload: dict[str, Any], event_id: str | None = None) -> dict[str, str]: ...
     async def list_names(self) -> list[str]: ...
-    async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]: ...
+    async def read_entries(self, name: str, limit: int = MAX_ENTRIES, offset: int = 0) -> list[dict[str, Any]]: ...
     async def search(self, keywords: list[str], limit: int = 50) -> list[dict[str, Any]]: ...
     async def search_semantic(self, query: str, top_k: int = 10, source: str | None = None) -> list[dict[str, Any]]: ...
     async def search_hybrid(self, query: str, top_k: int = 10) -> list[dict[str, Any]]: ...
@@ -741,14 +741,16 @@ class SqliteMemoryStore:
                 raise ValueError("event_id already exists with different payload")
             return {"status": "duplicate", "event_id": event_id}
 
-    async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]:
+    async def read_entries(self, name: str, limit: int = MAX_ENTRIES, offset: int = 0) -> list[dict[str, Any]]:
         validate_memory_name(name)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_ENTRIES:
             raise ValueError(f"limit must be an integer between 1 and {MAX_ENTRIES}")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
         async with self.engine.connect() as connection:
             rows = (await connection.execute(
                 select(entries.c.payload, entries.c.event_id, entries.c.payload_sha256, entries.c.created_at)
-                .where(entries.c.name == name).order_by(entries.c.id.desc()).limit(limit)
+                .where(entries.c.name == name).order_by(entries.c.id.desc()).limit(limit).offset(offset)
             )).all()
         records = []
         for row in reversed(rows):
@@ -871,7 +873,19 @@ class SqliteMemoryStore:
         current_lineage = context.get("lineage", [])
         if not isinstance(current_lineage, (list, tuple)) or any(not isinstance(item, str) for item in current_lineage):
             raise ValueError("context.lineage must be a list of strings")
-        records = await self.read_entries(name)
+        pages = []
+        offset = 0
+        while True:
+            page = await self.read_entries(name, limit=MAX_ENTRIES, offset=offset)
+            if not page:
+                break
+            pages.append(page)
+            if len(page) < MAX_ENTRIES:
+                break
+            offset += len(page)
+        # Pages are fetched newest-first; restore chronological order so
+        # relationship tie-breaking matches the append-only POC ledger.
+        records = [record for page in reversed(pages) for record in page]
         matches = []
         for index, record in enumerate(records):
             if _entry_is_expired(record):
@@ -1019,12 +1033,18 @@ class InMemoryMemoryStore:
         self._entry_metadata.setdefault(name, []).append(metadata)
         return {"status": "stored", **({"event_id": event_id} if event_id else {})}
 
-    async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]:
+    async def read_entries(self, name: str, limit: int = MAX_ENTRIES, offset: int = 0) -> list[dict[str, Any]]:
         validate_memory_name(name)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_ENTRIES:
             raise ValueError(f"limit must be an integer between 1 and {MAX_ENTRIES}")
-        records = self._entries.get(name, [])[-limit:]
-        metadata = self._entry_metadata.get(name, [])[-limit:]
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
+        stored_records = self._entries.get(name, [])
+        stored_metadata = self._entry_metadata.get(name, [])
+        end = max(len(stored_records) - offset, 0)
+        start = max(end - limit, 0)
+        records = stored_records[start:end]
+        metadata = stored_metadata[start:end]
         result = []
         for record, envelope in zip(records, metadata):
             item = dict(record)

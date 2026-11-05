@@ -2884,12 +2884,15 @@ def create_app(
         return {"ok": True, **result}
 
     @app.get("/api/v1/memory/memories/{name}/entries", tags=["memory"])
-    async def memory_entries(name: str, limit: int = 1000):
+    async def memory_entries(name: str, limit: int = 1000, offset: int = 0):
         try:
-            result = await active_memory_store.read_entries(name, limit)
+            result = await active_memory_store.read_entries(name, limit, offset)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "entries": result}
+        return {
+            "ok": True, "entries": result, "limit": limit, "offset": offset,
+            "next_offset": offset + len(result) if len(result) == limit else None,
+        }
 
     @app.post("/api/v1/memory/recall", tags=["memory"])
     async def memory_recall(payload: dict[str, Any]):

@@ -245,3 +245,58 @@ def test_memory_event_ledger_preserves_session_end_envelope_and_timestamp_identi
             await durable.close()
 
     asyncio.run(exercise())
+
+
+def test_memory_entry_pagination_and_recall_cover_the_complete_ledger(tmp_path):
+    from datetime import datetime, timezone
+    from sqlalchemy import insert
+    from ensemble.memory_store import entries
+
+    database = tmp_path / "memory-ledger-pagination.sqlite"
+    store = SqliteMemoryStore(f"sqlite+aiosqlite:///{database}")
+
+    async def exercise():
+        async with store.engine.begin() as connection:
+            await connection.run_sync(memory_metadata.create_all)
+        await store.initialize()
+        try:
+            await store.write("execution", "")
+            now = datetime.now(timezone.utc)
+            rows = []
+            for index in range(1005):
+                context = (
+                    {"request_id": "request-old", "execution_id": "parent",
+                     "objective": "original parent", "lineage": ["parent"]}
+                    if index == 0 else
+                    {"request_id": f"other-{index}", "execution_id": f"execution-{index}",
+                     "objective": "unrelated", "lineage": [f"execution-{index}"]}
+                )
+                rows.append({
+                    "name": "execution", "event_id": None, "payload_sha256": None,
+                    "payload": {"result": f"record-{index}", "execution_context": context},
+                    "created_at": now,
+                })
+            async with store.engine.begin() as connection:
+                await connection.execute(insert(entries), rows)
+
+            newest = await store.read_entries("execution", limit=1000, offset=0)
+            older = await store.read_entries("execution", limit=1000, offset=1000)
+            assert len(newest) == 1000
+            assert len(older) == 5
+            assert newest[0]["result"] == "record-5"
+            assert newest[-1]["result"] == "record-1004"
+            assert [item["result"] for item in older] == [
+                "record-0", "record-1", "record-2", "record-3", "record-4",
+            ]
+
+            recalled = await store.retrieve("execution", {
+                "request_id": "request-old", "execution_id": "child",
+                "parent_execution_id": "parent", "objective": "continue",
+                "lineage": ["parent", "child"],
+            })
+            assert recalled[0]["relation"] == "parent"
+            assert recalled[0]["record"]["result"] == "record-0"
+        finally:
+            await store.close()
+
+    asyncio.run(exercise())
