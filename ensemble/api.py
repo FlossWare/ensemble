@@ -2181,16 +2181,20 @@ def create_app(
                 },
                 event_id=task_id,
             )
+            if memory_result.get("status") not in {"stored", "duplicate"}:
+                raise RuntimeError("Learning outcome Memory event was not acknowledged")
             await active_thompson_store.record_outcome_once(
                 event_id=task_id, model=outcome["model"],
                 success=outcome["rating"] >= 3, cost=outcome["cost"], tokens=outcome["tokens"],
             )
             thompson_state = await active_thompson_store.get_state()
-            await active_memory_store.append(
+            snapshot_result = await active_memory_store.append(
                 "thompson-state",
                 {"event_type": "thompson.state", "source": "learning-service", "task_id": task_id, "state": thompson_state},
                 event_id="thompson-state-" + hashlib.sha256(task_id.encode("utf-8")).hexdigest(),
             )
+            if snapshot_result.get("status") not in {"stored", "duplicate"}:
+                raise RuntimeError("Thompson state Memory snapshot was not acknowledged")
             await active_learning_store.complete_outcome(task_id, True, True)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -2215,6 +2219,8 @@ def create_app(
                 {"event_type": "learning.artifact", "source": "learning-service", "artifact": artifact},
                 event_id="learning-artifact-" + hashlib.sha256(f"{artifact_type}:{run_id}".encode("utf-8")).hexdigest(),
             )
+            if memory_result.get("status") not in {"stored", "duplicate"}:
+                raise RuntimeError("Learning artifact Memory event was not acknowledged")
         except (KeyError, TypeError) as exc:
             raise HTTPException(status_code=400, detail="artifact must contain artifact_type and payload.run_id") from exc
         except OverflowError as exc:
