@@ -552,3 +552,52 @@ def test_memory_append_once_preserves_timestamp_and_exposes_ledger_metadata():
             json={"entry": {"event": "SessionEnd", "captured_at": "caller-value"}},
         )
         assert reserved.status_code == 400
+
+
+def test_memory_semantic_search_returns_content_and_respects_source_filters():
+    import hashlib
+
+    knowledge = "# Durable knowledge\\nDurable provenance is preserved in imported knowledge documents."
+    digest = hashlib.sha256(knowledge.encode("utf-8")).hexdigest()
+    with client() as http:
+        assert http.put(
+            "/api/v1/memory/memories/notes",
+            json={"content": "# Memory\\nMemory provenance remains available to semantic search."},
+        ).status_code == 200
+        imported = http.post("/api/v1/memory/sources/import", json={
+            "path": "/workspace/knowledge.md", "content": knowledge,
+            "sha256": digest, "metadata": {"scope": "/workspace"},
+        })
+        assert imported.status_code == 200
+
+        memory = http.post("/api/v1/memory/search/semantic", json={
+            "query": "provenance", "source": "memory",
+        })
+        durable = http.post("/api/v1/memory/search/semantic", json={
+            "query": "provenance", "source": "claude-code",
+        })
+        assert memory.status_code == durable.status_code == 200
+        assert memory.json()["results"]
+        assert durable.json()["results"]
+        assert all(not item["file"].startswith("claude-code-") for item in memory.json()["results"])
+        assert all(item["file"].startswith("claude-code-") for item in durable.json()["results"])
+        assert "Memory provenance" in memory.json()["results"][0]["content"]
+        assert "Durable provenance" in durable.json()["results"][0]["content"]
+
+
+def test_memory_semantic_search_ranks_exact_operational_artifact_phrase_first():
+    with client() as http:
+        for name, content in (
+            ("exact-artifact", "# Learning\\nThe operational learning artifact records the GA decision."),
+            ("related-artifact", "# Learning\\nOperational learning artifacts can record many GA decisions."),
+        ):
+            assert http.put(
+                f"/api/v1/memory/memories/{name}", json={"content": content},
+            ).status_code == 200
+        response = http.post("/api/v1/memory/search/semantic", json={
+            "query": "operational learning artifact", "limit": 10,
+        })
+        assert response.status_code == 200
+        results = response.json()["results"]
+        assert results[0]["file"] == "exact-artifact"
+        assert results[0]["score"] == 1.0
