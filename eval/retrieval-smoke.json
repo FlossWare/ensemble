@@ -1,0 +1,71 @@
+{
+  "kind": "synthetic-retrieval-smoke",
+  "description": "Small deterministic smoke corpus for exercising Ensemble lexical/vector/hybrid retrieval. These judgments are fixture-specific and are not a production relevance benchmark.",
+  "k": 3,
+  "documents": [
+    {
+      "source_id": "eval-smoke/source-lifecycle",
+      "title": "Source lifecycle and generation recovery",
+      "content": "Source lifecycle protects indexed content across revisions. Tombstones hide deleted sources, generation rebuilds copy source records, reconciliation catches writes during a build, and interrupted cutover recovery keeps the write fence fail-closed. Permanent reclamation removes source-owned documents, vectors, knowledge, and graph edges only after safe recovery."
+    },
+    {
+      "source_id": "eval-smoke/thompson",
+      "title": "Thompson sampling and model selection",
+      "content": "Thompson sampling selects models from Beta posteriors. Alpha equals successes plus one and beta equals failures plus one. Cost-aware filtering excludes models above the per-call cost limit, while untested models remain eligible. Selection is sampled rather than choosing the posterior mean."
+    },
+    {
+      "source_id": "eval-smoke/vector",
+      "title": "Vector collections and embedding similarity",
+      "content": "Vector collections store embedding vectors with a model identity and fixed dimensions. Similarity queries compare query embeddings with stored vectors using cosine or dot-product scores. An exact scan is not an approximate-nearest-neighbor index, and queries must use the same embedding model as the collection."
+    },
+    {
+      "source_id": "eval-smoke/chunking",
+      "title": "Chunking profiles and boundaries",
+      "content": "Chunking profiles define chunk size, overlap, boundaries, and metadata. A preview shows the resulting chunk boundaries without persisting records. Ingestion stores the selected profile and chunk provenance so later retrieval can explain where each chunk came from."
+    },
+    {
+      "source_id": "eval-smoke/pipeline",
+      "title": "Pipeline execution traces and inspection",
+      "content": "Pipeline execution traces record ingestion and retrieval stages, status, duration, warnings, and stable identifiers. The Pipeline Inspector distinguishes actual persisted execution traces from independent diagnostic previews. A skipped or unavailable stage must not be shown as successfully executed."
+    }
+  ],
+  "queries": [
+    {
+      "id": "q-lifecycle",
+      "text": "interrupted generation cutover recovery write fence tombstone reclamation",
+      "relevance": {
+        "eval-smoke/source-lifecycle": 3,
+        "eval-smoke/pipeline": 1
+      }
+    },
+    {
+      "id": "q-thompson",
+      "text": "Thompson beta posterior alpha successes failures cost filtering",
+      "relevance": {
+        "eval-smoke/thompson": 3
+      }
+    },
+    {
+      "id": "q-vector",
+      "text": "vector collection embedding model dimensions similarity exact scan",
+      "relevance": {
+        "eval-smoke/vector": 3
+      }
+    },
+    {
+      "id": "q-chunking",
+      "text": "chunking profile overlap chunk boundaries preview metadata",
+      "relevance": {
+        "eval-smoke/chunking": 3
+      }
+    },
+    {
+      "id": "q-pipeline",
+      "text": "Pipeline Inspector persisted execution trace ingestion retrieval stages duration",
+      "relevance": {
+        "eval-smoke/pipeline": 3,
+        "eval-smoke/source-lifecycle": 1
+      }
+    }
+  ]
+}
