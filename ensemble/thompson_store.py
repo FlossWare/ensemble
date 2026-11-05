@@ -7,7 +7,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from sqlalchemy import Column, DateTime, Float, Integer, MetaData, String, Table, select, update
+from sqlalchemy import Column, DateTime, Float, Integer, MetaData, String, Table, delete, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -33,6 +33,17 @@ thompson_events = Table(
     Column("payload_sha256", String(64), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
+thompson_selections = Table(
+    "ensemble_thompson_selections", thompson_metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("selection_id", String(36), nullable=False, unique=True),
+    Column("selected_model", String(256), nullable=False),
+    Column("task_type", String(128), nullable=False),
+    Column("required_capability", Float, nullable=False),
+    Column("max_cost", Float, nullable=True),
+    Column("request_id", String(256), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
 
 
 class ThompsonStore(Protocol):
@@ -42,6 +53,8 @@ class ThompsonStore(Protocol):
     async def record_outcome(self, model: str, success: bool, cost: float, tokens: int) -> bool: ...
     async def record_outcome_once(self, event_id: str, model: str, success: bool, cost: float, tokens: int) -> bool: ...
     async def reset(self, model: str) -> bool: ...
+    async def record_selection(self, selection_id: str, selected_model: str, task_type: str, required_capability: float, max_cost: float | None, request_id: str) -> None: ...
+    async def recent_selections(self, limit: int = 50) -> list[dict[str, Any]]: ...
 
 
 class SqliteThompsonStore:
@@ -55,7 +68,7 @@ class SqliteThompsonStore:
         async with self.engine.connect() as connection:
             from sqlalchemy import inspect
             names = await connection.run_sync(lambda conn: inspect(conn).get_table_names())
-        if not {"ensemble_thompson_models", "ensemble_thompson_events"}.issubset(names):
+        if not {"ensemble_thompson_models", "ensemble_thompson_events", "ensemble_thompson_selections"}.issubset(names):
             raise RuntimeError("Thompson schema is not initialized; run 'alembic upgrade head'")
 
     async def close(self) -> None:
@@ -147,6 +160,52 @@ class SqliteThompsonStore:
             )
         return result.rowcount > 0
 
+    async def record_selection(self, selection_id: str, selected_model: str, task_type: str,
+                               required_capability: float, max_cost: float | None, request_id: str) -> None:
+        _validate_selection(selection_id, selected_model, task_type, required_capability, max_cost, request_id)
+        async with self.engine.begin() as connection:
+            await connection.execute(thompson_selections.insert().values(
+                selection_id=selection_id, selected_model=selected_model, task_type=task_type,
+                required_capability=float(required_capability), max_cost=max_cost,
+                request_id=request_id, created_at=datetime.now(timezone.utc),
+            ))
+            stale = select(thompson_selections.c.id).order_by(thompson_selections.c.id.desc()).offset(5000)
+            await connection.execute(delete(thompson_selections).where(thompson_selections.c.id.in_(stale)))
+
+    async def recent_selections(self, limit: int = 50) -> list[dict[str, Any]]:
+        _validate_selection_limit(limit)
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(
+                select(thompson_selections).order_by(thompson_selections.c.id.desc()).limit(limit)
+            )).mappings().all()
+        return [_public_selection(dict(row)) for row in rows]
+
+
+
+def _validate_selection(selection_id: Any, selected_model: Any, task_type: Any,
+                        required_capability: Any, max_cost: Any, request_id: Any) -> None:
+    for value, label, maximum in (
+        (selection_id, "selection_id", 36), (selected_model, "selected_model", 256),
+        (task_type, "task_type", 128), (request_id, "request_id", 256),
+    ):
+        if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+            raise ValueError(f"{label} must be a non-empty string of at most {maximum} characters")
+    if isinstance(required_capability, bool) or not isinstance(required_capability, (int, float)) or not math.isfinite(float(required_capability)) or not 0 <= required_capability <= 1:
+        raise ValueError("required_capability must be between 0 and 1")
+    if max_cost is not None and (isinstance(max_cost, bool) or not isinstance(max_cost, (int, float)) or not math.isfinite(float(max_cost)) or max_cost < 0):
+        raise ValueError("max_cost must be a finite non-negative number or null")
+
+
+def _validate_selection_limit(limit: Any) -> None:
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer between 1 and 100")
+
+
+def _public_selection(row: dict[str, Any]) -> dict[str, Any]:
+    row.pop("id", None)
+    if row.get("created_at") is not None:
+        row["created_at"] = row["created_at"].isoformat()
+    return row
 
 def _validate_outcome(model: Any, success: Any, cost: Any, tokens: Any) -> None:
     if not isinstance(model, str) or not model.strip() or len(model) > 256:
@@ -163,6 +222,7 @@ class InMemoryThompsonStore:
     def __init__(self):
         self.models: dict[str, dict[str, Any]] = {}
         self.events: dict[str, str] = {}
+        self.selections: list[dict[str, Any]] = []
 
     async def initialize(self) -> None:
         return None
@@ -221,3 +281,19 @@ class InMemoryThompsonStore:
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
         return True
+
+    async def record_selection(self, selection_id: str, selected_model: str, task_type: str,
+                               required_capability: float, max_cost: float | None, request_id: str) -> None:
+        _validate_selection(selection_id, selected_model, task_type, required_capability, max_cost, request_id)
+        if any(item["selection_id"] == selection_id for item in self.selections):
+            raise ValueError("selection_id already exists")
+        self.selections.append({
+            "selection_id": selection_id, "selected_model": selected_model, "task_type": task_type,
+            "required_capability": float(required_capability), "max_cost": max_cost,
+            "request_id": request_id, "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        self.selections = self.selections[-5000:]
+
+    async def recent_selections(self, limit: int = 50) -> list[dict[str, Any]]:
+        _validate_selection_limit(limit)
+        return [dict(item) for item in reversed(self.selections[-limit:])]
