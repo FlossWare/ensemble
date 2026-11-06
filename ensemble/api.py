@@ -1397,15 +1397,16 @@ def create_app(
         return {"ok": True, "record": record}
 
     @app.post("/api/v1/knowledge/sources/tombstone", tags=["knowledge"])
-    async def knowledge_source_tombstone(payload: dict[str, Any]):
+    async def knowledge_source_tombstone(payload: dict[str, Any], request: Request):
         source_id = payload.get("source_id")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
-        try:
-            await active_index_store.assert_generation_writes_open()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        source = await active_index_store.get_source(source_id)
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        await internal.request("GET", "/api/v1/index/generation-writes/ready", request=request)
+        source_response = await internal.request(
+            "GET", f"/api/v1/index/sources/{source_id}", request=request,
+        )
+        source = source_response.get("source")
         if source is None or source.get("tombstoned") is not True:
             raise HTTPException(status_code=409, detail="source must be tombstoned through the Index lifecycle first")
         await active_knowledge_store.tombstone(source_id)
@@ -1428,15 +1429,16 @@ def create_app(
         )
 
     @app.post("/api/v1/documents/sources/tombstone", tags=["documents"])
-    async def documents_source_tombstone(payload: dict[str, Any]):
+    async def documents_source_tombstone(payload: dict[str, Any], request: Request):
         source_id = payload.get("source_id")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
-        try:
-            await active_index_store.assert_generation_writes_open()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        source = await active_index_store.get_source(source_id)
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        await internal.request("GET", "/api/v1/index/generation-writes/ready", request=request)
+        source_response = await internal.request(
+            "GET", f"/api/v1/index/sources/{source_id}", request=request,
+        )
+        source = source_response.get("source")
         if source is None or source.get("tombstoned") is not True:
             raise HTTPException(status_code=409, detail="source must be tombstoned through the Index lifecycle first")
         await document_store.tombstone_source(source_id)
@@ -1446,10 +1448,14 @@ def create_app(
         return {"ok": True, "source_id": source_id}
 
     @app.post("/api/v1/documents/records", tags=["documents"])
-    async def documents_ingest(payload: dict[str, Any]):
+    async def documents_ingest(payload: dict[str, Any], request: Request):
         try:
             document = DocumentIn.model_validate(payload.get("document", {}))
-            source = await active_index_store.get_source(document.source_id)
+            internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+            source_response = await internal.request(
+                "GET", f"/api/v1/index/sources/{document.source_id}", request=request,
+            )
+            source = source_response.get("source")
             if (
                 source is None or source.get("tombstoned") or source.get("purged")
                 or source.get("high_sequence") != document.revision
