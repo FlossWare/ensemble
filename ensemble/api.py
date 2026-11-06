@@ -3237,6 +3237,74 @@ def create_app(
             raise HTTPException(status_code=503, detail="memory persistence unavailable") from exc
         return {"ok": True, "ready": True, "backend": "sqlite"}
 
+    @app.get("/api/v1/memory/generations/source-upper-bound", tags=["memory"])
+    async def memory_generation_source_upper_bound():
+        return {"upper_bound": await active_memory_store.memory_generation_upper_bound()}
+
+    @app.post("/api/v1/memory/generations/sources/page", tags=["memory"])
+    async def memory_generation_sources_page(payload: dict[str, Any]):
+        limit = payload.get("limit", 500)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 10000")
+        try:
+            names = await active_memory_store.list_memory_names_after(
+                payload.get("cursor"), payload.get("upper_bound"), limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"names": names}
+
+    @app.post("/api/v1/memory/generations/snapshots/query", tags=["memory"])
+    async def memory_generation_snapshots_query(payload: dict[str, Any]):
+        names = payload.get("names")
+        if not isinstance(names, list) or not names or len(names) > 200 or any(not isinstance(name, str) for name in names):
+            raise HTTPException(status_code=400, detail="names must contain 1-200 memory names")
+        snapshots = {}
+        for name in names:
+            try:
+                snapshot = await active_memory_store.get_memory_snapshot(name)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if snapshot is not None:
+                snapshots[name] = snapshot
+        return {"snapshots": snapshots}
+
+    @app.put("/api/v1/memory/generations/{generation_id}/snapshots/{name}", tags=["memory"])
+    async def memory_generation_snapshot_put(generation_id: str, name: str, payload: dict[str, Any]):
+        try:
+            await active_memory_store.put_memory_generation_snapshot(
+                generation_id, name, payload.get("snapshot"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/api/v1/memory/generations/{generation_id}/changes/page", tags=["memory"])
+    async def memory_generation_changes_page(generation_id: str, payload: dict[str, Any]):
+        try:
+            changes = await active_memory_store.list_memory_generation_changes_after(
+                generation_id, payload.get("after_change_id", 0), payload.get("limit", 500),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"changes": changes}
+
+    @app.get("/api/v1/memory/generations/{generation_id}/changes/high-watermark", tags=["memory"])
+    async def memory_generation_changes_high_watermark(generation_id: str):
+        return {"high_watermark": await active_memory_store.memory_generation_change_high_watermark(generation_id)}
+
+    @app.post("/api/v1/memory/generations/{generation_id}/changes/acknowledgements", tags=["memory"])
+    async def memory_generation_changes_acknowledge(generation_id: str, payload: dict[str, Any]):
+        through = payload.get("through_change_id")
+        if isinstance(through, bool) or not isinstance(through, int) or through < 0:
+            raise HTTPException(status_code=400, detail="through_change_id must be a non-negative integer")
+        count = await active_memory_store.acknowledge_memory_generation_changes(generation_id, through)
+        return {"ok": True, "acknowledged": count}
+
+    @app.get("/api/v1/memory/generations/{generation_id}/changes/pending", tags=["memory"])
+    async def memory_generation_changes_pending(generation_id: str):
+        return {"pending": await active_memory_store.pending_memory_generation_changes(generation_id)}
+
     @app.get("/api/v1/memory/memories", tags=["memory"])
     async def memory_list():
         return {"ok": True, "memories": await active_memory_store.list_names()}
