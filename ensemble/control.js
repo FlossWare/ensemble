@@ -1176,11 +1176,22 @@ document.getElementById("collab-contribution-form").addEventListener("submit",ev
  event.preventDefault();
  collabRun(async()=>{
   const {projectId,actorId}=collabContext();
-  return await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/contributions","POST",{
+  const result=await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/contributions","POST",{
    actor_id:actorId,kind:collabValue("collab-contribution-kind"),
    work_item_id:collabValue("collab-work-item")||undefined,
    source_ref:collabValue("collab-source-ref")||undefined,
    summary:collabValue("collab-contribution-summary")
+  });
+  document.getElementById("collab-contribution-id").value=result.contribution.id;
+  return result;
+ });
+});
+document.getElementById("collab-review-contribution").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {actorId}=collabContext();
+  return await controlJson("/api/v1/collaboration/contributions/"+encodeURIComponent(collabValue("collab-contribution-id"))+"/review","POST",{
+   actor_id:actorId,status:collabValue("collab-review-status"),
+   rationale:collabValue("collab-review-rationale")
   });
  });
 });
