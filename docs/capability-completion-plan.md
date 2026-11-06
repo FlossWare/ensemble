@@ -205,7 +205,7 @@ These are implemented slices, not a declaration that the platform is production-
 
 ## Pre-review completion policy (2026-11-06)
 
-The repository's open issues are part of the completion scope. No outside review is requested until all open issues are implemented or explicitly resolved with a documented, accepted scope decision, all acceptance criteria are verified, and the quality gates pass.
+The repository's issues are part of the completion scope. No outside review is requested until feature parity is complete, all issues are implemented or explicitly resolved with a documented accepted scope decision, all acceptance criteria and tests are verified, and the outstanding PR queue is consolidated. SonarCloud/SonarQube is deliberately deferred until that implementation-completion point; it is not an active implementation gate.
 
 Required validation for each capability:
 
@@ -217,7 +217,7 @@ Required validation for each capability:
 - **End-to-end tests:** complete ingestion, retrieval, deletion/reclamation, rebuild/cutover, and collaboration workflows rather than isolated route assertions.
 - **Java/Python parity tests:** required only where both implementations exist. The current repository implementation is Python-only; do not invent a second runtime solely to satisfy a cross-language issue. Any language expansion requires an explicit implementation decision and matching contract tests.
 
-The GitHub Actions workflow must expose clear validation stages and run the full suite. Tests must not be weakened, skipped, or reclassified merely to make CI green. Skips and warnings must be explained. SonarCloud is restored and must meet its configured quality gate before outside review.
+The GitHub Actions workflow must expose clear validation stages and run the full suite. Tests must not be weakened, skipped, or reclassified merely to make CI green. Skips and warnings must be explained. After feature parity, issue closure, test completion, and PR consolidation, run SonarCloud and require its configured quality gate before outside review.
 
 ### Open issue completion order
 
@@ -258,7 +258,7 @@ The implementation scope covered by PR #47 is now complete and all repository is
 - #45 closed as completed: human/agent handoffs, checkpoints, lifecycle transitions, and Control Center workflows.
 - #46 closed as completed: provenance-linked synthesis, competing proposals, objections, and human-gated decisions.
 
-Latest verified code/test head before this documentation update: `849175c4fcaca535659b42404af6ce54424be6d4`, with 345 passed and 1 skipped. SonarCloud remains a separate blocking gate (new-code Security and Reliability ratings are C, required A). Do not request outside review or merge until the Sonar findings are resolved and the latest head passes all checks.
+Latest verified code/test head: `29362779405a0890fc5d274bbadf77813522fd3c`, with 345 passed, 1 skipped, and 0 failures; the current PR Python workflow is successful. SonarCloud is intentionally deferred until feature parity, issue resolution, tests, and PR consolidation are complete. No outside reviewers are to be requested during implementation, and the PR must not be merged yet.
 
 ## Generic contract audit
 
