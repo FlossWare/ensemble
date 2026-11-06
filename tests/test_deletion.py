@@ -11,6 +11,13 @@ from ensemble.deletion import (
     ImmediateReclamationStrategy,
     RetentionDeletionDecorator,
     RetryingDeletionDecorator,
+    DeletionResult,
+    DeletionStrategy,
+    DeletionStrategyDecorator,
+    ReclamationJob,
+    ReclamationQueue,
+    TContext,
+    TValue,
 )
 
 
@@ -222,3 +229,14 @@ def test_api_rejects_invalid_retention_metadata_before_tombstoning():
         source = client.get("/api/v1/index/sources/invalid-retention-source")
         assert source.status_code == 200
         assert source.json()["source"]["tombstoned"] is False
+
+
+
+def test_generic_deletion_contracts_preserve_context_and_result_parameters():
+    from typing import get_type_hints
+
+    assert DeletionStrategy.__parameters__ == (TContext, TValue)
+    assert DeletionStrategyDecorator.__parameters__ == (TContext, TValue)
+    assert RetryingDeletionDecorator.__parameters__ == (TContext, TValue)
+    assert DeletionResult.__parameters__ == (TValue,)
+    assert get_type_hints(ReclamationQueue.enqueue)["return"] is ReclamationJob
