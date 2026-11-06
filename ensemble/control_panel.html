@@ -281,6 +281,11 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 <button id="collab-refresh" type="button">Refresh activity</button>
 <button id="collab-synthesize" type="button">Generate synthesis</button>
 </div>
+<div class="toolbar">
+<input id="collab-member-id" type="text" maxlength="256" placeholder="Participant ID to add">
+<select id="collab-member-role"><option value="read">Read</option><option value="contribute">Contribute</option><option value="review">Review</option><option value="approve">Approve</option></select>
+<button id="collab-add-member" type="button">Add project member</button>
+</div>
 <h3>Contributions</h3>
 <form id="collab-contribution-form">
 <input id="collab-contribution-kind" type="text" maxlength="64" value="implementation" required placeholder="Contribution type">
