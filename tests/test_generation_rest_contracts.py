@@ -11,6 +11,8 @@ def test_index_generation_source_copy_uses_internal_rest_contracts():
     index_store = InMemoryIndexStore()
     asyncio.run(index_store.record_revision("source-a", 1, "revision-a", {"profile": "v1"}))
     asyncio.run(index_store.record_revision("source-b", 1, "revision-b", {"profile": "v1"}))
+    asyncio.run(index_store.acknowledge_generation_change("source-a", 1, False))
+    asyncio.run(index_store.acknowledge_generation_change("source-b", 1, False))
     asyncio.run(index_store.create_generation("generation-rest-copy"))
 
     app = create_app(store=InMemoryDocumentStore(), index_store=index_store)
