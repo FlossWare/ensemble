@@ -126,10 +126,83 @@ class IndexGenerationBuilder:
 
 
     async def copy_documents_page(
-        self, generation_id: str, *, page_size: int = 500,
+        self, generation_id: str, *, page_size: int = 500, request: Any = None,
     ) -> dict[str, Any]:
         if self.document_store is None:
             raise RuntimeError("document store is required for the document generation pass")
+        if self.internal_client is not None:
+            status = await self.internal_client.request(
+                "GET", "/api/v1/index/generations", request=request,
+            )
+            generation = next(
+                (item for item in status["generations"] if item["generation_id"] == generation_id),
+                None,
+            )
+            if generation is None or generation["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            checkpoints = generation.get("checkpoints") or {}
+            index_checkpoint = checkpoints.get("index") or {}
+            if index_checkpoint.get("sealed") is not True:
+                raise RuntimeError("Index source copy must be sealed before document copy")
+            previous = checkpoints.get("documents") or {}
+            if previous.get("sealed") is True:
+                value = previous.get("value") or {}
+                return {
+                    "generation_id": generation_id, "status": "complete", "page_count": 0,
+                    "source_count": value.get("source_count", 0),
+                    "document_count": value.get("document_count", 0),
+                    "chunk_count": value.get("chunk_count", 0),
+                    "tombstone_count": value.get("tombstone_count", 0),
+                    "cursor": value.get("cursor"),
+                    "upper_bound": value.get("source_upper_bound"),
+                }
+            prior = previous.get("value") or {}
+            index_value = index_checkpoint.get("value") or {}
+            upper_bound = index_value.get("source_upper_bound")
+            cursor = prior.get("cursor")
+            source_count = int(prior.get("source_count", 0))
+            document_count = int(prior.get("document_count", 0))
+            chunk_count = int(prior.get("chunk_count", 0))
+            tombstone_count = int(prior.get("tombstone_count", 0))
+            page = (await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/sources/page",
+                request=request, json={"cursor": cursor, "upper_bound": upper_bound, "limit": page_size},
+            )).get("sources", [])
+            for source in page:
+                result = await self.internal_client.request(
+                    "POST", f"/api/v1/documents/generations/{generation_id}/sources",
+                    request=request, json={"source": source},
+                )
+                if source.get("tombstoned"):
+                    await self.internal_client.request(
+                        "POST", f"/api/v1/vector/generations/{generation_id}/sources/tombstone",
+                        request=request, json={"source_id": source["source_id"]},
+                    )
+                    tombstone_count += 1
+                else:
+                    document_count += result.get("document_count", 0)
+                    chunk_count += result.get("chunk_count", 0)
+            next_cursor = page[-1]["source_id"] if page else cursor
+            source_count += len(page)
+            complete = upper_bound is None or next_cursor == upper_bound or len(page) < page_size
+            checkpoint = {
+                "source_upper_bound": upper_bound, "cursor": next_cursor,
+                "source_count": source_count, "document_count": document_count,
+                "chunk_count": chunk_count, "tombstone_count": tombstone_count,
+            }
+            await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/checkpoints",
+                request=request, json={"capability": "documents", "checkpoint": checkpoint, "sealed": complete},
+            )
+            return {
+                "generation_id": generation_id,
+                "status": "complete" if complete else "in_progress",
+                "page_count": len(page), "source_count": source_count,
+                "document_count": document_count, "chunk_count": chunk_count,
+                "tombstone_count": tombstone_count, "cursor": next_cursor,
+                "upper_bound": upper_bound,
+            }
+
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
 
