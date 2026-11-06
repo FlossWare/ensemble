@@ -759,6 +759,11 @@ def create_app(
     search = SearchService(
         document_store, embeddings, active_reranker, active_vector_store, active_index_store,
         active_thompson_store,
+        internal_client=InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+            "thompson": os.getenv("ENSEMBLE_THOMPSON_REST_URL"),
+        }),
     )
     ranking_provider = configured_ranking_provider(active_reranker)
 
@@ -4258,9 +4263,11 @@ def create_app(
             raise HTTPException(status_code=502, detail="lexical document ingestion failed") from exc
 
     @app.post("/api/v1/search/lexical", tags=["search"])
-    async def lexical_search(request: SearchIn):
+    async def lexical_search(search_request: SearchIn, http_request: Request):
         try:
-            results = await search.lexical_search(request.query, request.limit)
+            results = await search.lexical_search(
+                search_request.query, search_request.limit, request=http_request,
+            )
             return {"ok": True, "results": results, "retrieval": "lexical"}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -4326,6 +4333,7 @@ def create_app(
             result = await search.search_with_status(
                 search_request.query, search_request.limit,
                 rerank=search_request.rerank, trace=record_retrieval_stage,
+                request=request,
             )
             fusion = result.get("fusion") or {}
             channels = fusion.get("channels") or {}
@@ -4950,9 +4958,11 @@ def create_app(
             raise HTTPException(status_code=502, detail="document ingestion failed") from exc
 
     @app.post("/api/v1/search", response_model=list[SearchHit], tags=["search"])
-    async def search_documents(request: SearchIn):
+    async def search_documents(search_request: SearchIn, http_request: Request):
         try:
-            return await search.search(request.query, request.limit)
+            return await search.search(
+                search_request.query, search_request.limit, request=http_request,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
