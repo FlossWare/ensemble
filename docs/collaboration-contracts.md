@@ -9,7 +9,7 @@
 - Handoffs are structured continuity records, not chat transcripts. The contract supports incremental checkpoints so interrupted sessions can preserve the last known state without waiting for a final summary.
 - REST resource shapes are language-neutral. Python types, database tables, and model/provider identifiers are implementation metadata, not public type requirements.
 - The initial implementation uses the existing SQLite database and one application. It introduces neither a service nor another database.
-- Membership roles describe read, contribute, review, approve, and owner capabilities. They are domain concepts, not a replacement for enterprise IAM.
+- Membership roles describe read, contribute, review, approve, and owner capabilities. Project read routes require a `viewer_id` query parameter and enforce membership; write routes enforce the corresponding contribution/review/approval role. When bearer authentication is enabled, the viewer/actor must match the authenticated principal. These are domain-level authorization concepts, not a replacement for enterprise IAM.
 - Contributions and handoff events/checkpoints are append-only records. Mutable lifecycle resources use optimistic version checks; source records remain addressable.
 
 ## Identity and projects
@@ -81,7 +81,7 @@ Proposals preserve title, summary, rationale, human-approval policy, and status.
 | POST / GET | `/proposals/{id}/objections`, `/proposals/{id}` | Add objections and inspect proposal history |
 | POST / GET | `/proposals/{id}/decisions`, `/projects/{id}/decisions` | Record and query attributable decisions |
 
-All collection endpoints are bounded to 500 records per request. IDs are stable opaque strings. All writes are attributable to participant IDs; when bearer authentication is enabled, a supplied actor must match the authenticated principal.
+Project-scoped read routes require `viewer_id` and return 403 for non-members. All collection endpoints are bounded to 500 records per request. IDs are stable opaque strings. All writes are attributable to participant IDs; when bearer authentication is enabled, a supplied actor must match the authenticated principal.
 
 ## Persistence and compatibility
 
