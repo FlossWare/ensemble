@@ -299,7 +299,7 @@ def test_reclamation_worker_retries_partial_failure_before_marking_source_purged
         assert "injected vector-store failure" in queue._jobs["partial-source"]["last_error"]
 
         # Make the retry immediately due, then verify idempotent completion.
-        from datetime import datetime, timezone
+        from datetime import datetime, timedelta, timezone
         queue._jobs["partial-source"]["available_at"] = datetime.now(timezone.utc)
         assert await app.state.reclamation_runner() == 1
         source = await index.get_source("partial-source")
@@ -591,7 +591,7 @@ def test_sqlite_legal_erasure_override_metadata_survives_restart(tmp_path):
 
     async def exercise():
         requested_at = datetime.now(timezone.utc)
-        requested_retain_until = requested_at + __import__("datetime").timedelta(days=90)
+        requested_retain_until = requested_at + timedelta(days=90)
         first = SqliteReclamationStore(database_url)
         await first.initialize()
         job = await first.enqueue(
