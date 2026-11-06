@@ -58,6 +58,7 @@ from .crawl_store import CrawlJobStore, SqliteCrawlJobStore, InMemoryCrawlJobSto
 from .context_tokens import ContextTokenCounter, ApproximateContextTokenCounter, configured_context_token_counter
 from .source_schedule_store import SourceScheduleStore, SqliteSourceScheduleStore, InMemorySourceScheduleStore
 from .execution_trace_store import ExecutionTraceStore, SqliteExecutionTraceStore, InMemoryExecutionTraceStore, traces as execution_traces
+from .collaboration import CollaborationStore, SqliteCollaborationStore, InMemoryCollaborationStore, create_collaboration_router
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -302,6 +303,11 @@ def create_app(
         else SqliteReclamationStore(database_url)
     )
     active_deletion_strategy = deletion_strategy or DeferredReclamationStrategy(active_reclamation_store)
+
+    active_collaboration_store = collaboration_store or (
+        InMemoryCollaborationStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteCollaborationStore(database_url)
+    )
 
     active_crawl_store = crawl_store or (
         InMemoryCrawlJobStore() if isinstance(document_store, InMemoryDocumentStore)
@@ -630,7 +636,7 @@ def create_app(
         description="REST-first memory, knowledge, and retrieval platform.",
         lifespan=lifespan,
     )
-    app.middleware("http")(partition_scope_middleware)
+    app.middleware("http")(partition_scope_middleware)\n    app.include_router(create_collaboration_router(active_collaboration_store))
     app.state.execution_trace_store = active_execution_trace_store
     # Keep the durable maintenance runner addressable for in-process operations and tests.
     app.state.reclamation_runner = reclaim_due_sources
@@ -1196,7 +1202,7 @@ def create_app(
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning", "crawl_jobs", "source_schedules"],
+            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning", "crawl_jobs", "source_schedules", "collaboration"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
