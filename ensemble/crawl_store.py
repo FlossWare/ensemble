@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, MetaData, String, Table, Text, select, update
@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.engine import make_url
 
 from .partitioning import PartitionedAsyncEngine
+
+CRAWL_JOB_LEASE_SECONDS = 300
 
 metadata = MetaData()
 crawl_jobs = Table(
@@ -51,6 +53,7 @@ class CrawlJobStore(Protocol):
     async def close(self) -> None: ...
     async def enqueue(self, uri: str, max_pages: int, max_depth: int, *, auto_ingest: bool = False, schedule_id: str | None = None) -> dict[str, Any]: ...
     async def claim_next(self) -> dict[str, Any] | None: ...
+    async def heartbeat(self, job_id: str) -> bool: ...
     async def complete(self, job_id: str, result: dict[str, Any]) -> dict[str, Any]: ...
     async def update_ingestion(self, job_id: str, ingestion: dict[str, Any]) -> dict[str, Any]: ...
     async def fail(self, job_id: str, error: str) -> None: ...
@@ -114,6 +117,15 @@ class SqliteCrawlJobStore:
             ))).mappings().first()
         return _record(claimed)
 
+    async def heartbeat(self, job_id: str) -> bool:
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            changed = await connection.execute(update(crawl_jobs).where(
+                crawl_jobs.c.job_id == job_id,
+                crawl_jobs.c.status.in_({"running", "completed"}),
+            ).values(updated_at=now))
+        return changed.rowcount == 1
+
     async def complete(self, job_id: str, result: dict[str, Any]) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         async with self.engine.begin() as connection:
@@ -173,9 +185,11 @@ class SqliteCrawlJobStore:
 
     async def recover_interrupted(self) -> int:
         now = datetime.now(timezone.utc)
+        stale_before = now - timedelta(seconds=CRAWL_JOB_LEASE_SECONDS)
         async with self.engine.begin() as connection:
             changed = await connection.execute(update(crawl_jobs).where(
                 crawl_jobs.c.status == "running",
+                crawl_jobs.c.updated_at <= stale_before,
             ).values(
                 status="interrupted",
                 last_error="Process restarted before the crawl completed; retry this job to resume.",
@@ -185,6 +199,7 @@ class SqliteCrawlJobStore:
             rows = (await connection.execute(select(crawl_jobs).where(
                 crawl_jobs.c.status == "completed",
                 crawl_jobs.c.ingestion.is_not(None),
+                crawl_jobs.c.updated_at <= stale_before,
             ))).mappings().all()
             for row in rows:
                 ingestion = row["ingestion"]
@@ -230,6 +245,13 @@ class InMemoryCrawlJobStore:
         row.update(status="running", attempts=row["attempts"] + 1, updated_at=datetime.now(timezone.utc).isoformat())
         return dict(row)
 
+    async def heartbeat(self, job_id: str) -> bool:
+        row = self._jobs.get(job_id)
+        if row is None or row["status"] not in {"running", "completed"}:
+            return False
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        return True
+
     async def complete(self, job_id: str, result: dict[str, Any]) -> dict[str, Any]:
         row = self._jobs.get(job_id)
         if row is None or row["status"] != "running": raise ValueError("running crawl job not found")
@@ -267,13 +289,19 @@ class InMemoryCrawlJobStore:
 
     async def recover_interrupted(self) -> int:
         recovered = 0
-        now = datetime.now(timezone.utc).isoformat()
+        now_dt = datetime.now(timezone.utc)
+        stale_before = now_dt - timedelta(seconds=CRAWL_JOB_LEASE_SECONDS)
+        now = now_dt.isoformat()
         for row in self._jobs.values():
-            if row["status"] == "running":
+            updated = datetime.fromisoformat(row["updated_at"])
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            stale = updated <= stale_before
+            if row["status"] == "running" and stale:
                 row.update(status="interrupted", last_error="Process restarted before the crawl completed; retry this job to resume.", updated_at=now)
                 recovered += 1
             ingestion = row.get("ingestion")
-            if row["status"] == "completed" and isinstance(ingestion, dict) and ingestion.get("status") == "running":
+            if stale and row["status"] == "completed" and isinstance(ingestion, dict) and ingestion.get("status") == "running":
                 for page in ingestion.get("pages", []):
                     if isinstance(page, dict) and page.get("status") == "running":
                         page.update(
