@@ -91,8 +91,8 @@ def test_retention_decorator_persists_future_deadline_for_durable_queue():
         ))
         assert eligible.state == "queued"
         erasure = await strategy.execute(DeletionContext(
-            "source-3", retain_until=now + timedelta(days=30),
-            erasure_required=True,
+            "source-3", reason="verified erasure request",
+            retain_until=now + timedelta(days=30), erasure_required=True,
         ))
         assert erasure.state == "queued"
         assert queue.jobs[2]["retain_until"] is None
