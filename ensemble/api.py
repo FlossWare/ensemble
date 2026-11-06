@@ -47,6 +47,7 @@ from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
 from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
 from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryReclamationStore
+from .deletion import DeletionContext, DeletionStrategy, DeferredReclamationStrategy
 from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
 from .partitioning import (
@@ -248,6 +249,7 @@ def create_app(
     transcript_store: TranscriptCheckpointStore | None = None,
     crawl_store: CrawlJobStore | None = None,
     source_schedule_store: SourceScheduleStore | None = None,
+    deletion_strategy: DeletionStrategy[DeletionContext, dict[str, Any]] | None = None,
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
     context_token_counter = configured_context_token_counter()
@@ -298,6 +300,7 @@ def create_app(
         InMemoryReclamationStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteReclamationStore(database_url)
     )
+    active_deletion_strategy = deletion_strategy or DeferredReclamationStrategy(active_reclamation_store)
 
     active_crawl_store = crawl_store or (
         InMemoryCrawlJobStore() if isinstance(document_store, InMemoryDocumentStore)
@@ -1656,7 +1659,10 @@ def create_app(
                     }],
                 }
             try:
-                reclamation = await active_reclamation_store.enqueue(source_id)
+                deletion_result = await active_deletion_strategy.execute(
+                    DeletionContext(source_id=source_id)
+                )
+                reclamation = deletion_result.value
             except Exception as exc:
                 cleanup["status"] = "partial"
                 cleanup["retryable"] = True
