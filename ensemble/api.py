@@ -1685,6 +1685,15 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "ready": True}
 
+    @app.get("/api/v1/index/vector-writes/ready", tags=["index"])
+    async def index_vector_writes_ready():
+        try:
+            await active_index_store.assert_generation_writes_open()
+            await active_index_store.assert_standalone_vector_writes_open()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "ready": True}
+
     @app.post("/api/v1/index/generation-changes/acknowledgements", tags=["index"])
     async def index_generation_change_acknowledge(payload: dict[str, Any]):
         source_id = payload.get("source_id")
@@ -1966,7 +1975,7 @@ def create_app(
         return {"ok": True, "found": await active_vector_store.existing(name, ids)}
 
     @app.put("/api/v1/vector/collections/{name}/records", tags=["vector"])
-    async def vector_upsert(name: str, payload: dict[str, Any]):
+    async def vector_upsert(name: str, payload: dict[str, Any], request: Request):
         _validate_vector_collection_name(name)
         ids, vectors = payload.get("ids"), payload.get("embeddings")
         documents_payload, metadatas = payload.get("documents"), payload.get("metadatas")
@@ -2006,8 +2015,8 @@ def create_app(
                 raise HTTPException(status_code=400, detail="embedding values must be finite")
             items.append({"id": record_id, "embedding": vector, "document": document, "metadata": metadata})
         try:
-            await active_index_store.assert_generation_writes_open()
-            await active_index_store.assert_standalone_vector_writes_open()
+            internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+            await internal.request("GET", "/api/v1/index/vector-writes/ready", request=request)
             count = await active_vector_store.upsert(name, model, dimensions, items)
             active_generation = await active_generation_id()
             if active_generation is not None:
@@ -2019,7 +2028,7 @@ def create_app(
         return {"ok": True, "upserted": count}
 
     @app.patch("/api/v1/vector/collections/{name}/records/metadata", tags=["vector"])
-    async def vector_metadata(name: str, payload: dict[str, Any]):
+    async def vector_metadata(name: str, payload: dict[str, Any], request: Request):
         _validate_vector_collection_name(name)
         ids, metadatas = payload.get("ids"), payload.get("metadatas")
         if not isinstance(ids, list) or not isinstance(metadatas, list) or not ids or len(ids) != len(metadatas) or len(ids) > 256:
@@ -2030,11 +2039,8 @@ def create_app(
             {"id": record_id, "metadata": metadata}
             for record_id, metadata in zip(ids, metadatas)
         ]
-        try:
-            await active_index_store.assert_generation_writes_open()
-            await active_index_store.assert_standalone_vector_writes_open()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        await internal.request("GET", "/api/v1/index/vector-writes/ready", request=request)
         updated = await active_vector_store.update_metadata(name, changes)
         active_generation = await active_generation_id()
         if active_generation is not None:
@@ -2044,18 +2050,15 @@ def create_app(
         return {"ok": True, "updated": updated}
 
     @app.post("/api/v1/vector/collections/{name}/records/prune", tags=["vector"])
-    async def vector_delete_superseded(name: str, payload: dict[str, Any]):
+    async def vector_delete_superseded(name: str, payload: dict[str, Any], request: Request):
         _validate_vector_collection_name(name)
         url, digest = payload.get("url"), payload.get("keep_sha256")
         if not isinstance(url, str) or not url or len(url) > 2048:
             raise HTTPException(status_code=400, detail="url must be a non-empty string of at most 2048 characters")
         if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             raise HTTPException(status_code=400, detail="keep_sha256 must be a lowercase hex SHA-256")
-        try:
-            await active_index_store.assert_generation_writes_open()
-            await active_index_store.assert_standalone_vector_writes_open()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        await internal.request("GET", "/api/v1/index/vector-writes/ready", request=request)
         deleted = await active_vector_store.delete_superseded(name, url, digest)
         active_generation = await active_generation_id()
         if active_generation is not None:
