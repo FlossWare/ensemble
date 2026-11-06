@@ -12,7 +12,7 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "ensemble_collaboration_records",
-        sa.Column("record_id", sa.String(length=64), primary_key=True),
+        sa.Column("record_id", sa.String(length=256), primary_key=True),
         sa.Column("record_type", sa.String(length=32), nullable=False),
         sa.Column("project_id", sa.String(length=128), nullable=True),
         sa.Column("actor_id", sa.String(length=256), nullable=True),
