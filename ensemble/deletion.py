@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Generic, Protocol, TypeVar
 
 TContext = TypeVar("TContext")
@@ -74,7 +74,7 @@ class ImmediateReclamationStrategy:
         self._drain = drain
 
     async def execute(self, context: DeletionContext) -> DeletionResult[dict[str, Any]]:
-        job = await self._queue.enqueue(context.source_id)
+        job = await self._queue.enqueue(context.source_id, actor=context.actor, reason=context.reason, requested_at=context.requested_at, retain_until=context.retain_until)
         processed = await self._drain()
         return DeletionResult(
             source_id=context.source_id,
@@ -96,7 +96,7 @@ class DeletionStrategyDecorator(Generic[TContext, TValue]):
 
 
 class RetentionDeletionDecorator(DeletionStrategyDecorator[DeletionContext, TValue], Generic[TValue]):
-    """Prevent physical deletion before the context's retention deadline."""
+    """Persist retention deadlines so reclamation cannot run before eligibility."""
 
     def __init__(self, inner: DeletionStrategy[DeletionContext, TValue]):
         super().__init__(inner)
