@@ -182,3 +182,15 @@ def test_restart_recovery_marks_in_progress_page_ingestion_interrupted():
     assert recovered == 1
     assert state["status"] == "partial"
     assert state["pages"][0]["status"] == "interrupted"
+
+
+def test_restart_recovery_preserves_fresh_running_job_lease():
+    store = InMemoryCrawlJobStore()
+    job = asyncio.run(store.enqueue("https://example.com/", 1, 0))
+    asyncio.run(store.claim_next())
+
+    recovered = asyncio.run(store.recover_interrupted())
+
+    assert recovered == 0
+    active = asyncio.run(store.get(job["job_id"]))
+    assert active["status"] == "running"
