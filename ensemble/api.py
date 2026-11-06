@@ -309,7 +309,7 @@ def create_app(
         await active_reclamation_store.record_audit(
             context.source_id, "strategy_result", actor=context.actor,
             reason=context.reason,
-            details={"state": result.state, "retryable": result.retryable},
+            details={\n                "state": result.state, "retryable": result.retryable,\n                "erasure_required": context.erasure_required,\n                "requested_retain_until": context.retain_until.isoformat() if context.retain_until else None,\n                "retention_overridden": context.erasure_required and context.retain_until is not None,\n            },
         )
 
     base_deletion_strategy = deletion_strategy or DeferredReclamationStrategy(active_reclamation_store)
@@ -1694,6 +1694,11 @@ def create_app(
         if actor is None:
             actor = scope.principal_id
         reason = payload.get("reason")
+        erasure_required = payload.get("erasure_required", False)
+        if not isinstance(erasure_required, bool):
+            raise HTTPException(status_code=400, detail="erasure_required must be a boolean")
+        if erasure_required and (not isinstance(reason, str) or not reason.strip()):
+            raise HTTPException(status_code=400, detail="reason is required when erasure_required is true")
         retain_until_value = payload.get("retain_until")
         if actor is not None and (not isinstance(actor, str) or not actor.strip() or len(actor) > 256):
             raise HTTPException(status_code=400, detail="actor must be a non-empty string of at most 256 characters")
