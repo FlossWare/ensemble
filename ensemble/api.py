@@ -1174,9 +1174,10 @@ def create_app(
         if not cleanup["failed"]:
             try:
                 source_response = await internal.request(
-                    "GET", f"/api/v1/index/sources/{source_id}", request=request,
+                    "POST", "/api/v1/index/sources/query", request=request,
+                    json={"source_ids": [source_id]},
                 )
-                source = source_response.get("source") or {}
+                source = (source_response.get("sources") or {}).get(source_id) or {}
                 if await active_generation_id() is not None and source:
                     await internal.request(
                         "POST", "/api/v1/index/generation-changes/acknowledgements",
@@ -1404,9 +1405,10 @@ def create_app(
         internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
         await internal.request("GET", "/api/v1/index/generation-writes/ready", request=request)
         source_response = await internal.request(
-            "GET", f"/api/v1/index/sources/{source_id}", request=request,
+            "POST", "/api/v1/index/sources/query", request=request,
+            json={"source_ids": [source_id]},
         )
-        source = source_response.get("source")
+        source = (source_response.get("sources") or {}).get(source_id)
         if source is None or source.get("tombstoned") is not True:
             raise HTTPException(status_code=409, detail="source must be tombstoned through the Index lifecycle first")
         await active_knowledge_store.tombstone(source_id)
@@ -1436,9 +1438,10 @@ def create_app(
         internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
         await internal.request("GET", "/api/v1/index/generation-writes/ready", request=request)
         source_response = await internal.request(
-            "GET", f"/api/v1/index/sources/{source_id}", request=request,
+            "POST", "/api/v1/index/sources/query", request=request,
+            json={"source_ids": [source_id]},
         )
-        source = source_response.get("source")
+        source = (source_response.get("sources") or {}).get(source_id)
         if source is None or source.get("tombstoned") is not True:
             raise HTTPException(status_code=409, detail="source must be tombstoned through the Index lifecycle first")
         await document_store.tombstone_source(source_id)
@@ -1453,9 +1456,10 @@ def create_app(
             document = DocumentIn.model_validate(payload.get("document", {}))
             internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
             source_response = await internal.request(
-                "GET", f"/api/v1/index/sources/{document.source_id}", request=request,
+                "POST", "/api/v1/index/sources/query", request=request,
+                json={"source_ids": [document.source_id]},
             )
-            source = source_response.get("source")
+            source = (source_response.get("sources") or {}).get(document.source_id)
             if (
                 source is None or source.get("tombstoned") or source.get("purged")
                 or source.get("high_sequence") != document.revision
