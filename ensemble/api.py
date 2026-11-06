@@ -309,7 +309,12 @@ def create_app(
         await active_reclamation_store.record_audit(
             context.source_id, "strategy_result", actor=context.actor,
             reason=context.reason,
-            details={\n                "state": result.state, "retryable": result.retryable,\n                "erasure_required": context.erasure_required,\n                "requested_retain_until": context.retain_until.isoformat() if context.retain_until else None,\n                "retention_overridden": context.erasure_required and context.retain_until is not None,\n            },
+            details={
+                "state": result.state, "retryable": result.retryable,
+                "erasure_required": context.erasure_required,
+                "requested_retain_until": context.retain_until.isoformat() if context.retain_until else None,
+                "retention_overridden": context.erasure_required and context.retain_until is not None,
+            },
         )
 
     base_deletion_strategy = deletion_strategy or DeferredReclamationStrategy(active_reclamation_store)
@@ -1730,7 +1735,7 @@ def create_app(
                     DeletionContext(
                         source_id=source_id, actor=actor.strip() if actor else None,
                         reason=reason, requested_at=datetime.now(timezone.utc),
-                        retain_until=retain_until,
+                        retain_until=retain_until, erasure_required=erasure_required,
                     )
                 )
                 reclamation = deletion_result.value
