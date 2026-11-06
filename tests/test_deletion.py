@@ -11,7 +11,6 @@ from ensemble.deletion import (
     ImmediateReclamationStrategy,
     RetentionDeletionDecorator,
     RetryingDeletionDecorator,
-    DeletionResult,
     DeletionStrategy,
     DeletionStrategyDecorator,
     ReclamationJob,
