@@ -113,6 +113,7 @@ The public generation-copy operation uses these contracts through the internal R
 | GET | /api/v1/vector/generations/collections | List collections and capture record upper bounds |
 | POST | /api/v1/vector/generations/{generation_id}/collections/{name}/records/page | Read a bounded Vector record page |
 | POST | /api/v1/vector/generations/{generation_id}/collections/{name}/records | Copy records into the target Vector generation |
+| POST | /api/v1/vector/collections/{name}/query | Run similarity search against a base or named generation collection |
 | POST | /api/v1/index/generations/{generation_id}/sources/query | Resolve source snapshots in the target Index generation |
 
 The generation orchestrator pages source metadata through Index REST, then delegates document and vector generation mutations to their owning capability APIs. These operations are bounded by source page and generation ID. Capability base URLs may be configured independently with `ENSEMBLE_INDEX_REST_URL`, `ENSEMBLE_DOCUMENTS_REST_URL`, `ENSEMBLE_VECTOR_REST_URL`, `ENSEMBLE_MEMORY_REST_URL`, and `ENSEMBLE_KNOWLEDGE_REST_URL`; unset values retain the in-process ASGI transport.
