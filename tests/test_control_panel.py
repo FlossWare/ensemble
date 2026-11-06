@@ -99,6 +99,8 @@ def test_control_panel_is_served_by_the_api():
         assert "duration_ms" in script.text
         assert "Project Collaboration" in response.text
         assert 'id="collab-refresh"' in response.text
+        assert 'id="collab-handoff-supersede"' in response.text
+        assert '"/supersede"' in script.text
         refresh_handler = script.text.split('document.getElementById("collab-refresh")')[1]
         assert 'const {projectId,actorId}=collabContext();' in refresh_handler
 
