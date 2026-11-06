@@ -242,3 +242,41 @@ def test_sqlite_collaboration_records_survive_restart_and_migrations(tmp_path):
         await second.close()
 
     asyncio.run(exercise())
+
+
+
+def test_synthesis_strategy_is_replaceable_through_application_composition():
+    class FixedSynthesis:
+        def generate(self, contributions):
+            return [{
+                "text": "Injected synthesis",
+                "contribution_ids": [item["id"] for item in contributions],
+                "source_refs": [],
+                "strategy": "test",
+            }]
+
+    with TestClient(create_app(
+        store=InMemoryDocumentStore(),
+        collaboration_store=InMemoryCollaborationStore(),
+        synthesis_strategy=FixedSynthesis(),
+    )) as client:
+        client.post("/api/v1/collaboration/participants", json={
+            "participant_id": "human:synth",
+            "display_name": "Synth Owner",
+            "participant_type": "human",
+        })
+        project = client.post("/api/v1/collaboration/projects", json={
+            "name": "Synthesis strategy project",
+            "owner_id": "human:synth",
+        }).json()["project"]
+        client.post(f"/api/v1/collaboration/projects/{project['id']}/contributions", json={
+            "actor_id": "human:synth",
+            "kind": "note",
+            "summary": "A source contribution.",
+        })
+        result = client.post(f"/api/v1/collaboration/projects/{project['id']}/syntheses", json={
+            "actor_id": "human:synth",
+        })
+        assert result.status_code == 200
+        assert result.json()["synthesis"]["payload"]["statements"][0]["text"] == "Injected synthesis"
+        assert result.json()["synthesis"]["payload"]["statements"][0]["strategy"] == "test"
