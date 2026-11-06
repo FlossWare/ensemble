@@ -97,6 +97,11 @@ def test_control_panel_is_served_by_the_api():
         assert "stage-duration-track" in script.text
         assert "Inspect stages" in script.text
         assert "duration_ms" in script.text
+        assert "Project Collaboration" in response.text
+        assert 'id="collab-refresh"' in response.text
+        refresh_handler = script.text.split('document.getElementById("collab-refresh")')[1]
+        assert 'const {projectId,actorId}=collabContext();' in refresh_handler
+
 
 
 def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch):
