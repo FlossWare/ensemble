@@ -1644,10 +1644,10 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/copy/documents", tags=["index"])
-    async def index_generation_copy_documents(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_copy_documents(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.copy_documents_page(
-                generation_id, page_size=payload.get("page_size", 500),
+                generation_id, page_size=payload.get("page_size", 500), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
