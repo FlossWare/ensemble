@@ -614,3 +614,20 @@ def test_sqlite_legal_erasure_override_metadata_survives_restart(tmp_path):
         await second.close()
 
     asyncio.run(exercise())
+
+
+
+def test_duplicate_enqueue_does_not_reset_a_running_reclamation_claim():
+    queue = InMemoryReclamationStore()
+
+    async def exercise():
+        await queue.enqueue("running-idempotent-source", actor="human:first")
+        claimed = await queue.claim_due(1)
+        assert len(claimed) == 1
+        await queue.enqueue("running-idempotent-source", actor="human:second", reason="duplicate request")
+        current = await queue.get_job("running-idempotent-source")
+        assert current["state"] == "running"
+        assert current["actor"] == "human:first"
+        assert await queue.claim_due(1) == []
+
+    asyncio.run(exercise())
