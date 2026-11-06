@@ -109,6 +109,7 @@ The public generation-copy operation uses these contracts through the internal R
 | POST | /api/v1/index/generations/{generation_id}/sources/page | Read a page of source snapshots from the target generation |
 | POST | /api/v1/documents/generations/{generation_id}/sources | Copy or tombstone one source in the Documents generation |
 | POST | /api/v1/vector/generations/{generation_id}/sources/tombstone | Tombstone one source in the Vector generation |
+| POST | /api/v1/vector/generations/{generation_id}/sources/reconcile | Reconcile one source across all target Vector collections |
 | GET | /api/v1/vector/generations/collections | List collections and capture record upper bounds |
 | POST | /api/v1/vector/generations/{generation_id}/collections/{name}/records/page | Read a bounded Vector record page |
 | POST | /api/v1/vector/generations/{generation_id}/collections/{name}/records | Copy records into the target Vector generation |
