@@ -11,9 +11,9 @@ Complete the intended Ensemble platform as a standalone, client-independent REST
 - REST is canonical. MCP and coding-agent integrations remain adapters outside core Ensemble.
 - SQLite remains Ensemble's only persistence implementation.
 - Preserve existing working behavior and migrations.
-- During this phase, prioritize implementation and end-to-end workflows over expanding the test suite.
-- Continue running the existing tests when practical. Fix regressions introduced by implementation; do not knowingly leave the repository broken.
-- Do not create tests merely to mirror POC tests. Defer systematic test expansion until the capability set is substantially complete.
+- Implement capabilities and their unit/integration tests together. End-to-end behavior is the completion criterion, not route presence.
+- Run the full test suite for every meaningful change. Add regression tests for every fixed defect and failure mode.
+- Do not mirror POC tests mechanically. Derive tests from Ensemble contracts, acceptance criteria, failure modes, persistence boundaries, and end-to-end workflows.
 - Update implementation status and this plan as capabilities become usable, not merely when routes or stubs exist.
 
 ## Completed on main
@@ -154,7 +154,6 @@ Remaining before production readiness:
 
 ## Deferred work
 
-- Systematic expansion of unit, integration, failure-injection, and coverage tests.
 - POC test-suite reproduction or test-count matching.
 - Provider prompt-cache optimization.
 - Client-specific hooks and prompt injection; these belong in client adapters such as `ensemble-claude`, not Ensemble core.
@@ -164,7 +163,7 @@ Remaining before production readiness:
 
 A capability is complete when it has a usable contract, a working implementation, durable behavior where state is involved, clear failure/degradation semantics, and is connected to the end-to-end workflows that depend on it. A route stub, UI panel, or isolated algorithm is not by itself a completed capability.
 
-Existing tests should continue to be run when practical. New test development is deliberately deprioritized during this functionality phase, but regressions and known failures must not be concealed.
+Unit, integration, migration, restart/recovery, concurrency, and failure-injection tests are part of the implementation, not post-parity cleanup. Every issue must have tests mapped to its acceptance criteria. The full suite must pass before the issue is closed or the work is presented for review.
 
 ## Current source-lifecycle integration work
 
@@ -202,3 +201,33 @@ These are implemented slices, not a declaration that the platform is production-
 5. Finish Control Center usability and real execution diagnostics, while keeping all operations REST-backed.
 6. Complete operational readiness: backup/restore, migrations/upgrade, observability, rate limits, authentication/authorization, and partition enforcement.
 7. Verify the local embedding/reranking runtime matrix and decide when exact vector scans require a local ANN implementation.
+
+
+## Pre-review completion policy (2026-11-06)
+
+The repository's open issues are part of the completion scope. No outside review is requested until all open issues are implemented or explicitly resolved with a documented, accepted scope decision, all acceptance criteria are verified, and the quality gates pass.
+
+Required validation for each capability:
+
+- **Unit tests:** domain transitions, validation, deterministic algorithms, strategy/decorator composition, error mapping, and boundary conditions.
+- **Persistence/integration tests:** SQLite migrations, transaction boundaries, reopen/restart durability, idempotent retries, partition isolation, and cross-store consistency.
+- **REST integration tests:** request/response contracts, authorization and partition scoping, invalid transitions, error semantics, and Control Center API workflows where applicable.
+- **Concurrency tests:** competing updates, duplicate dispatch, lease/heartbeat behavior, and race-sensitive lifecycle operations.
+- **Failure-injection tests:** partial writes, interrupted operations, unavailable dependencies, rollback, retry, and recovery.
+- **End-to-end tests:** complete ingestion, retrieval, deletion/reclamation, rebuild/cutover, and collaboration workflows rather than isolated route assertions.
+- **Java/Python parity tests:** required only where both implementations exist. The current repository implementation is Python-only; do not invent a second runtime solely to satisfy a cross-language issue. Any language expansion requires an explicit implementation decision and matching contract tests.
+
+The GitHub Actions workflow must expose clear validation stages and run the full suite. Tests must not be weakened, skipped, or reclassified merely to make CI green. Skips and warnings must be explained. SonarCloud is restored and must meet its configured quality gate before outside review.
+
+### Open issue completion order
+
+1. #27 pluggable deletion lifecycle, including derived-data cleanup, retry/idempotency, and restore/purge boundaries.
+2. #26 generic contract audit/refinement, applied where Python typing materially improves safety; REST remains language-neutral.
+3. #43 collaboration and contributor identity contracts.
+4. #44 attributable contributions and activity history.
+5. #45 human/agent handoffs.
+6. #46 project synthesis, competing proposals, and attributable decisions.
+
+Issues #43–46 are no longer treated as review-exempt merely because their original descriptions call them post-parity. They must be completed before the final review gate. Their dependencies remain enforced: #43 before #44; #44 before #45 and #46.
+
+An issue is complete only when implementation, documentation, tests, and acceptance criteria are all satisfied. Closing an issue because code exists or a route responds is not sufficient.
