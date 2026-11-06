@@ -308,10 +308,120 @@ class IndexGenerationBuilder:
 
 
     async def copy_vectors_page(
-        self, generation_id: str, *, page_size: int = 500,
+        self, generation_id: str, *, page_size: int = 500, request: Any = None,
     ) -> dict[str, Any]:
         if self.vector_store is None:
             raise RuntimeError("vector store is required for the vector generation pass")
+        if self.internal_client is not None:
+            status = await self.internal_client.request(
+                "GET", "/api/v1/index/generations", request=request,
+            )
+            generation = next(
+                (item for item in status["generations"] if item["generation_id"] == generation_id),
+                None,
+            )
+            if generation is None or generation["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            checkpoints = generation.get("checkpoints") or {}
+            if (checkpoints.get("index") or {}).get("sealed") is not True:
+                raise RuntimeError("Index source copy must be sealed before vector copy")
+            if (checkpoints.get("documents") or {}).get("sealed") is not True:
+                raise RuntimeError("Document copy must be sealed before vector copy")
+            previous = checkpoints.get("vectors") or {}
+            if previous.get("sealed") is True:
+                value = previous.get("value") or {}
+                return {
+                    "generation_id": generation_id, "status": "complete", "page_count": 0,
+                    "copied_record_count": value.get("copied_record_count", 0),
+                    "skipped_tombstone_count": value.get("skipped_tombstone_count", 0),
+                    "collection_index": value.get("collection_index", 0),
+                }
+            value = previous.get("value") or {}
+            if value:
+                collections = value["collections"]
+                collection_index = int(value.get("collection_index", 0))
+                cursor = value.get("cursor")
+                copied_record_count = int(value.get("copied_record_count", 0))
+                skipped_tombstone_count = int(value.get("skipped_tombstone_count", 0))
+            else:
+                collections = (await self.internal_client.request(
+                    "GET", "/api/v1/vector/generations/collections", request=request,
+                )).get("collections", [])
+                collection_index = 0
+                cursor = None
+                copied_record_count = skipped_tombstone_count = 0
+            page_count = 0
+            if collection_index < len(collections):
+                collection = collections[collection_index]
+                page = (await self.internal_client.request(
+                    "POST",
+                    f"/api/v1/vector/generations/{generation_id}/collections/{collection['name']}/records/page",
+                    request=request,
+                    json={"cursor": cursor, "upper_bound": collection["upper_bound"], "limit": page_size},
+                )).get("records", [])
+                to_copy = []
+                source_ids = []
+                for item in page:
+                    metadata = item.get("metadata") or {}
+                    source_id = metadata.get("source_id") or metadata.get("url")
+                    if not isinstance(source_id, str) or not source_id:
+                        raise RuntimeError(f"vector record {item['id']} in {collection['name']} has no source identity")
+                    source_ids.append(source_id)
+                sources = {}
+                if source_ids:
+                    sources = (await self.internal_client.request(
+                        "POST", f"/api/v1/index/generations/{generation_id}/sources/query",
+                        request=request, json={"source_ids": list(dict.fromkeys(source_ids))},
+                    )).get("sources", {})
+                for item, source_id in zip(page, source_ids):
+                    source = sources.get(source_id)
+                    if source is None:
+                        raise RuntimeError(
+                            f"vector record {item['id']} references source {source_id} missing from generation Index"
+                        )
+                    if source.get("tombstoned"):
+                        skipped_tombstone_count += 1
+                    else:
+                        to_copy.append(item)
+                if to_copy:
+                    await self.internal_client.request(
+                        "POST",
+                        f"/api/v1/vector/generations/{generation_id}/collections/{collection['name']}/records",
+                        request=request,
+                        json={
+                            "model": collection["model"], "dimensions": collection["dimensions"],
+                            "records": to_copy,
+                        },
+                    )
+                    copied_record_count += len(to_copy)
+                page_count = len(page)
+                next_cursor = page[-1]["id"] if page else cursor
+                collection_complete = (
+                    collection["upper_bound"] is None or next_cursor == collection["upper_bound"]
+                    or len(page) < page_size
+                )
+                if collection_complete:
+                    collection_index += 1
+                    cursor = None
+                else:
+                    cursor = next_cursor
+            complete = collection_index >= len(collections)
+            checkpoint = {
+                "collections": collections, "collection_index": collection_index, "cursor": cursor,
+                "copied_record_count": copied_record_count,
+                "skipped_tombstone_count": skipped_tombstone_count,
+            }
+            await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/checkpoints",
+                request=request, json={"capability": "vectors", "checkpoint": checkpoint, "sealed": complete},
+            )
+            return {
+                "generation_id": generation_id, "status": "complete" if complete else "in_progress",
+                "page_count": page_count, "copied_record_count": copied_record_count,
+                "skipped_tombstone_count": skipped_tombstone_count,
+                "collection_index": collection_index, "collection_count": len(collections),
+            }
+
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
 
