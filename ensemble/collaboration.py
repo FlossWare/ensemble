@@ -655,7 +655,8 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         decision = await store.create(
             "decision", {
                 "proposal_id": proposal_id, "status": decision_status,
-                "rationale": rationale, "decision_maker_id": actor,\n                "contribution_ids": decision_contribution_ids,
+                "rationale": rationale, "decision_maker_id": actor,
+                "contribution_ids": decision_contribution_ids,
                 "human_approved": bool(human_approved),
             }, project_id=proposal["project_id"], actor_id=actor, status=decision_status,
         )
