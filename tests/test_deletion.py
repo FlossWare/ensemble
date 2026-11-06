@@ -88,7 +88,16 @@ def test_retention_decorator_persists_future_deadline_for_durable_queue():
             "source-2", retain_until=now - timedelta(seconds=1),
         ))
         assert eligible.state == "queued"
-        assert [job["source_id"] for job in queue.jobs] == ["source-1", "source-2"]
+        erasure = await strategy.execute(DeletionContext(
+            "source-3", retain_until=now + timedelta(days=30),
+            erasure_required=True,
+        ))
+        assert erasure.state == "queued"
+        assert queue.jobs[2]["retain_until"] is None
+        assert queue.jobs[2]["requested_retain_until"] == now + timedelta(days=30)
+        assert queue.jobs[2]["erasure_required"] is True
+        assert queue.jobs[2]["available_at"] <= datetime.now(timezone.utc)
+        assert [job["source_id"] for job in queue.jobs] == ["source-1", "source-2", "source-3"]
 
     asyncio.run(exercise())
 
@@ -355,3 +364,43 @@ def test_api_refuses_restore_after_physical_reclamation_has_been_claimed():
         })
         assert rejected.status_code == 409
         assert client.get("/api/v1/index/sources/restore-running-source").json()["source"]["tombstoned"] is True
+
+
+
+def test_api_legal_erasure_overrides_future_retention_deadline():
+    from datetime import datetime, timedelta, timezone
+    from fastapi.testclient import TestClient
+    from ensemble.api import create_app
+    from ensemble.store import InMemoryDocumentStore
+
+    app = create_app(store=InMemoryDocumentStore(), run_reclamation_worker=False)
+    retain_until = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    with TestClient(app) as client:
+        client.post("/api/v1/index/revisions", json={
+            "source_id": "legal-erasure-source",
+            "revision_sequence": 1,
+            "revision_id": "revision-1",
+            "profiles": {"chunk": "window-v1"},
+        })
+        missing_reason = client.post("/api/v1/index/tombstones", json={
+            "source_id": "legal-erasure-source",
+            "revision_sequence": 2,
+            "erasure_required": True,
+        })
+        assert missing_reason.status_code == 400
+        deleted = client.post("/api/v1/index/tombstones", json={
+            "source_id": "legal-erasure-source",
+            "revision_sequence": 2,
+            "reason": "Verified legal erasure request",
+            "retain_until": retain_until,
+            "erasure_required": True,
+        })
+        assert deleted.status_code == 200
+        job = app.state.reclamation_store._jobs["legal-erasure-source"]
+        assert job["retain_until"] is None
+        assert job["requested_retain_until"].isoformat() == retain_until
+        assert job["erasure_required"] is True
+        assert job["available_at"] <= datetime.now(timezone.utc)
+        audit = client.get("/api/v1/index/sources/legal-erasure-source/deletion-audit").json()["events"]
+        strategy_event = next(item for item in audit if item["event"] == "strategy_result")
+        assert strategy_event["details"]["retention_overridden"] is True
