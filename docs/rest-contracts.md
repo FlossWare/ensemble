@@ -120,6 +120,14 @@ When a key is unset, requests for that capability use the co-located ASGI transp
 | POST | /api/v1/index/tombstones | Permanently tombstone a source at a revision sequence |
 | GET | /api/v1/index/reclamation, POST /api/v1/index/reclamation/run | Inspect or explicitly run durable physical reclamation jobs |
 | GET | /api/v1/index/sources/{source_id}, /manifest | Read source state and bounded source manifest |
+| POST / GET | /api/v1/collaboration/participants, /participants/{id} | Create and read provider-neutral human and agent identities |
+| POST / GET | /api/v1/collaboration/projects, /projects/{id}/members | Create projects and manage membership roles |
+| POST / GET | /api/v1/collaboration/projects/{id}/contributions | Create and query attributable project contributions |
+| GET | /api/v1/collaboration/projects/{id}/activity | Query project-scoped chronological activity |
+| POST / GET | /api/v1/collaboration/projects/{id}/handoffs, /handoffs/{id} | Create and inspect resumable handoffs and history |
+| POST | /api/v1/collaboration/handoffs/{id}/checkpoints, /acknowledge, /complete, /supersede | Persist incremental checkpoints and validate handoff lifecycle transitions |
+| POST / GET | /api/v1/collaboration/projects/{id}/syntheses, /syntheses/{id}/refresh | Generate and refresh provenance-linked project synthesis |
+| POST / GET | /api/v1/collaboration/projects/{id}/proposals, /proposals/{id}/objections, /proposals/{id}/decisions | Preserve competing proposals, objections, and attributable decisions |
 | POST | /api/v1/index/sources/query | Read current source state for a bounded set of source identifiers |
 | POST | /api/v1/documents/chunks/query | Read chunks for a bounded set of source identifiers with document and chunk provenance |
 | GET | /api/v1/vector/health, /collections | Vector storage status and collection inventory |
@@ -169,8 +177,9 @@ The required capability surface is defined by Ensemble's own product scope, arch
 | Knowledge | Sourced record create/read/tombstone with revision and provenance |
 | Memory | Durable memory/event operations, retrieval and operational status |
 | Context | Bounded context assembly across Memory and Ensemble retrieval with explicit source provenance and extractive compression |
+| Collaboration | Provider-neutral participants, memberships, contributions, handoffs, checkpoints, synthesis, proposals, and auditable human-gated decisions |
 
-A Control Center is also a required product surface. It is served by the same application and consumes these REST contracts; it does not create a second backend or duplicate capability logic.
+Collaboration contracts are documented in [Collaboration REST Contracts](collaboration-contracts.md). The initial implementation uses the existing SQLite database and Control Center; integrations own automatic capture and publish incremental checkpoints through REST.\n\nA Control Center is also a required product surface. It is served by the same application and consumes these REST contracts; it does not create a second backend or duplicate capability logic.
 
 ## Memory resource conventions
 
