@@ -1741,6 +1741,18 @@ def create_app(
     async def index_reclamation_status():
         return {"ok": True, "jobs": await active_reclamation_store.status()}
 
+    @app.get("/api/v1/index/sources/{source_id}/deletion-audit", tags=["index"])
+    async def index_source_deletion_audit(source_id: str, limit: int = 100):
+        source = await active_index_store.get_source(source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="unknown source")
+        if not 1 <= limit <= 500:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+        return {
+            "ok": True, "source_id": source_id,
+            "events": await active_reclamation_store.audit_events(source_id, limit),
+        }
+
     @app.post("/api/v1/index/reclamation/run", tags=["index"])
     async def index_reclamation_run():
         processed = await reclaim_due_sources()
