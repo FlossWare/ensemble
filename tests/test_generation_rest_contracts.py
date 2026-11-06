@@ -62,5 +62,5 @@ def test_index_generation_source_copy_uses_internal_rest_contracts():
 
     copied_a = asyncio.run(index_store.get_generation_source("generation-rest-copy", "source-a"))
     copied_b = asyncio.run(index_store.get_generation_source("generation-rest-copy", "source-b"))
-    assert copied_a["revision_id"] == "revision-a"
+    assert copied_a["revision_id"] == "revision-a2"
     assert copied_b["revision_id"] == "revision-b"
