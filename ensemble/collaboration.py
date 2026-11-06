@@ -380,8 +380,8 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         work_item_id = required_string(payload, "work_item_id", 256, optional=True)
         source_ref = required_string(payload, "source_ref", 2048, optional=True)
         review_status = payload.get("review_status", "unreviewed")
-        if review_status not in {"unreviewed", "accepted", "rejected"}:
-            raise HTTPException(status_code=400, detail="review_status must be unreviewed, accepted, or rejected")
+        if review_status != "unreviewed":
+            raise HTTPException(status_code=400, detail="contributions are created unreviewed; use the review endpoint to change status")
         record = await store.create(
             "contribution", {
                 "work_item_id": work_item_id, "kind": kind, "summary": summary,
@@ -389,6 +389,39 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
             }, project_id=project_id, actor_id=actor, status=review_status,
         )
         return {"ok": True, "contribution": record}
+
+    @router.post("/contributions/{contribution_id}/review")
+    async def review_contribution(contribution_id: str, payload: dict[str, Any], request: Request):
+        actor = actor_id(payload, request)
+        contribution = await store.get("contribution", contribution_id)
+        if contribution is None:
+            raise HTTPException(status_code=404, detail="unknown contribution")
+        await require_role(contribution["project_id"], actor, {"review", "approve"})
+        review_status = required_string(payload, "status", 16)
+        if review_status not in {"accepted", "rejected"}:
+            raise HTTPException(status_code=400, detail="review status must be accepted or rejected")
+        rationale = required_string(payload, "rationale", 4000)
+        updated_payload = dict(contribution["payload"])
+        updated_payload.update({
+            "review_status": review_status,
+            "review_rationale": rationale,
+            "reviewer_id": actor,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        updated = await store.update(
+            "contribution", contribution_id,
+            expected_version=contribution["version"],
+            payload=updated_payload, status=review_status,
+        )
+        if updated is None:
+            raise HTTPException(status_code=409, detail="contribution changed concurrently; reload and retry")
+        await store.create(
+            "contribution_review", {
+                "contribution_id": contribution_id,
+                "status": review_status, "rationale": rationale,
+            }, project_id=contribution["project_id"], actor_id=actor, status=review_status,
+        )
+        return {"ok": True, "contribution": updated}
 
     @router.get("/projects/{project_id}/contributions")
     async def list_contributions(project_id: str, viewer_id: str, request: Request, actor_id: str | None = None, status: str | None = None, limit: int = 100):
