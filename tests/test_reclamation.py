@@ -579,3 +579,38 @@ def test_sqlite_generation_materializations_can_be_restored_before_purge(tmp_pat
         await index.close()
 
     asyncio.run(exercise())
+
+
+
+def test_sqlite_legal_erasure_override_metadata_survives_restart(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'legal-erasure.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    async def exercise():
+        requested_at = datetime.now(timezone.utc)
+        requested_retain_until = requested_at + timedelta(days=90)
+        first = SqliteReclamationStore(database_url)
+        await first.initialize()
+        job = await first.enqueue(
+            "legal-erasure-source", actor="human:legal",
+            reason="verified erasure request", requested_at=requested_at,
+            retain_until=None, requested_retain_until=requested_retain_until,
+            erasure_required=True,
+        )
+        assert job["retain_until"] is None
+        assert job["requested_retain_until"] is not None
+        assert job["erasure_required"] is True
+        await first.close()
+
+        second = SqliteReclamationStore(database_url)
+        await second.initialize()
+        claimed = await second.claim_due(10)
+        assert len(claimed) == 1
+        assert claimed[0]["erasure_required"] is True
+        assert claimed[0]["requested_retain_until"] is not None
+        assert claimed[0]["retain_until"] is None
+        await second.close()
+
+    asyncio.run(exercise())
