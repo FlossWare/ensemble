@@ -68,6 +68,17 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
         assert handoff.status_code == 200
         handoff_id = handoff.json()["handoff"]["id"]
 
+        checkpoint = client.post(f"/api/v1/collaboration/handoffs/{handoff_id}/checkpoints", json={
+            "actor_id": "agent:assistant",
+            "current_state": "Implementation is complete; integration tests remain.",
+            "completed_work": "Persisted the first implementation checkpoint.",
+            "blockers": ["Integration test execution"],
+            "next_actions": ["Run the full test suite"],
+            "references": [f"contribution:{contribution_id}"],
+        })
+        assert checkpoint.status_code == 200
+        assert checkpoint.json()["checkpoint"]["payload"]["current_state"].startswith("Implementation")
+
         acknowledged = client.post(f"/api/v1/collaboration/handoffs/{handoff_id}/acknowledge", json={
             "actor_id": "agent:assistant",
         })
@@ -82,7 +93,7 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
         assert invalid.status_code == 409
         history = client.get(f"/api/v1/collaboration/handoffs/{handoff_id}")
         assert [item["payload"]["event"] for item in history.json()["history"]] == [
-            "completed", "acknowledged", "created",
+            "completed", "acknowledged", "checkpoint", "created",
         ]
 
         synthesis = client.post(f"/api/v1/collaboration/projects/{project_id}/syntheses", json={
@@ -96,6 +107,14 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
             "https://github.com/example/repo/commit/abc123",
         ]
 
+        refreshed = client.post(f"/api/v1/collaboration/syntheses/{synthesis.json()['synthesis']['id']}/refresh", json={
+            "actor_id": "human:owner",
+            "contribution_ids": [contribution_id],
+        })
+        assert refreshed.status_code == 200
+        assert refreshed.json()["synthesis"]["id"] != synthesis.json()["synthesis"]["id"]
+        assert refreshed.json()["synthesis"]["payload"]["supersedes_id"] == synthesis.json()["synthesis"]["id"]
+
         proposal = client.post(f"/api/v1/collaboration/projects/{project_id}/proposals", json={
             "actor_id": "agent:assistant",
             "title": "Adopt the new contract",
@@ -105,6 +124,15 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
         })
         assert proposal.status_code == 200
         proposal_id = proposal.json()["proposal"]["id"]
+
+        objection = client.post(f"/api/v1/collaboration/proposals/{proposal_id}/objections", json={
+            "actor_id": "agent:assistant",
+            "text": "The migration needs a rollback plan.",
+            "contribution_ids": [contribution_id],
+        })
+        assert objection.status_code == 200
+        proposal_detail = client.get(f"/api/v1/collaboration/proposals/{proposal_id}")
+        assert len(proposal_detail.json()["objections"]) == 1
 
         agent_decision = client.post(f"/api/v1/collaboration/proposals/{proposal_id}/decisions", json={
             "actor_id": "agent:assistant",
@@ -121,6 +149,13 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
         assert human_decision.status_code == 200
         assert human_decision.json()["decision"]["payload"]["human_approved"] is True
         assert human_decision.json()["decision"]["status"] == "accepted"
+
+        activity = client.get(f"/api/v1/collaboration/projects/{project_id}/activity", params={
+            "actor_id": "agent:assistant",
+            "kind": "contribution",
+        })
+        assert len(activity.json()["activity"]) == 1
+        assert activity.json()["activity"][0]["id"] == contribution_id
 
 
 def test_collaboration_contributions_remain_independent_under_concurrent_writes():
