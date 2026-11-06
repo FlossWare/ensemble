@@ -43,7 +43,7 @@ class DeletionStrategy(Protocol[TContext, TValue]):
 
 
 class ReclamationQueue(Protocol):
-    async def enqueue(self, source_id: str) -> dict[str, Any]: ...
+    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> dict[str, Any]: ...
 
 
 class DeferredReclamationStrategy:
@@ -53,7 +53,7 @@ class DeferredReclamationStrategy:
         self._queue = queue
 
     async def execute(self, context: DeletionContext) -> DeletionResult[dict[str, Any]]:
-        job = await self._queue.enqueue(context.source_id)
+        job = await self._queue.enqueue(context.source_id, actor=context.actor, reason=context.reason, requested_at=context.requested_at, retain_until=context.retain_until)
         return DeletionResult(
             source_id=context.source_id,
             state="queued",
@@ -107,13 +107,8 @@ class RetentionDeletionDecorator(DeletionStrategyDecorator[DeletionContext, TVal
         self._clock = clock
 
     async def execute(self, context: DeletionContext) -> DeletionResult[TValue]:
-        if context.retain_until is not None and context.retain_until > self._clock():
-            return DeletionResult(
-                source_id=context.source_id,
-                state="deferred",
-                retryable=True,
-                detail="retention period has not expired",
-            )
+        # Retention is enforced by the durable queue's available_at timestamp.
+        # Returning early here would lose the scheduled work on process restart.
         return await super().execute(context)
 
 
