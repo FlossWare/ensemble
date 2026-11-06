@@ -204,8 +204,24 @@ class InMemoryCollaborationStore:
             return dict(record)
 
 
-def create_collaboration_router(store: CollaborationStore) -> APIRouter:
-    router = APIRouter(prefix="/api/v1/collaboration", tags=["collaboration"])
+class SynthesisStrategy(Protocol):
+    def generate(self, contributions: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
+
+
+class ContributionSummarySynthesisStrategy:
+    """Deterministic default; callers may inject a reviewed synthesis implementation."""
+
+    def generate(self, contributions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [{
+            "text": item["payload"]["summary"],
+            "contribution_ids": [item["id"]],
+            "source_refs": [item["payload"]["source_ref"]] if item["payload"].get("source_ref") else [],
+            "actor_id": item["actor_id"],
+        } for item in reversed(contributions)]
+
+
+def create_collaboration_router(store: CollaborationStore, synthesis_strategy: SynthesisStrategy | None = None) -> APIRouter:
+    router = APIRouter(prefix="/api/v1/collaboration", tags=["collaboration"])\n    active_synthesis_strategy = synthesis_strategy or ContributionSummarySynthesisStrategy()
     roles = {"read", "contribute", "review", "approve", "owner"}
 
     def required_string(payload: dict[str, Any], name: str, maximum: int, *, optional: bool = False) -> str | None:
@@ -423,6 +439,39 @@ def create_collaboration_router(store: CollaborationStore) -> APIRouter:
         await event(updated, target, actor)
         return {"ok": True, "handoff": updated}
 
+    @router.post("/handoffs/{handoff_id}/checkpoints")
+    async def checkpoint_handoff(handoff_id: str, payload: dict[str, Any], request: Request):
+        actor = actor_id(payload, request)
+        handoff = await store.get("handoff", handoff_id)
+        if handoff is None:
+            raise HTTPException(status_code=404, detail="unknown handoff")
+        await require_role(handoff["project_id"], actor, {"contribute", "review"})
+        if handoff["status"] not in {"open", "acknowledged"}:
+            raise HTTPException(status_code=409, detail="checkpoints require an open or acknowledged handoff")
+        checkpoint = {
+            "current_state": required_string(payload, "current_state", 8000),
+            "completed_work": required_string(payload, "completed_work", 8000, optional=True),
+            "blockers": string_list(payload, "blockers"),
+            "next_actions": string_list(payload, "next_actions"),
+            "references": string_list(payload, "references"),
+        }
+        updated_payload = dict(handoff["payload"])
+        updated_payload.update(checkpoint)
+        updated_payload["last_checkpoint_by"] = actor
+        updated_payload["last_checkpoint_at"] = datetime.now(timezone.utc).isoformat()
+        updated = await store.update(
+            "handoff", handoff_id, expected_version=handoff["version"],
+            payload=updated_payload,
+        )
+        if updated is None:
+            raise HTTPException(status_code=409, detail="handoff changed concurrently; reload and retry")
+        checkpoint_record = await store.create(
+            "handoff_checkpoint", {"handoff_id": handoff_id, **checkpoint},
+            project_id=handoff["project_id"], actor_id=actor,
+        )
+        await event(updated, "checkpoint", actor, {"checkpoint_id": checkpoint_record["id"]})
+        return {"ok": True, "handoff": updated, "checkpoint": checkpoint_record}
+
     @router.post("/handoffs/{handoff_id}/acknowledge")
     async def acknowledge_handoff(handoff_id: str, payload: dict[str, Any], request: Request):
         return await transition_handoff(handoff_id, payload, request, "open", "acknowledged")
@@ -463,12 +512,7 @@ def create_collaboration_router(store: CollaborationStore) -> APIRouter:
             contributions = [item for item in contributions if item["id"] in wanted]
             if wanted != {item["id"] for item in contributions}:
                 raise HTTPException(status_code=400, detail="all contribution_ids must belong to this project")
-        statements = [{
-            "text": item["payload"]["summary"],
-            "contribution_ids": [item["id"]],
-            "source_refs": [item["payload"]["source_ref"]] if item["payload"].get("source_ref") else [],
-            "actor_id": item["actor_id"],
-        } for item in reversed(contributions)]
+        statements = active_synthesis_strategy.generate(contributions)
         return await store.create(
             "synthesis", {
                 "statements": statements,
@@ -537,6 +581,19 @@ def create_collaboration_router(store: CollaborationStore) -> APIRouter:
         await project(project_id)
         return {"ok": True, "proposals": await store.list("proposal", project_id=project_id, status=status, limit=limit)}
 
+    @router.get("/proposals/{proposal_id}")
+    async def get_proposal(proposal_id: str):
+        proposal = await store.get("proposal", proposal_id)
+        if proposal is None:
+            raise HTTPException(status_code=404, detail="unknown proposal")
+        objections = await store.list("proposal_objection", project_id=proposal["project_id"], limit=500)
+        decisions = await store.list("decision", project_id=proposal["project_id"], limit=500)
+        return {"ok": True, "proposal": proposal, "objections": [
+            item for item in objections if item["payload"].get("proposal_id") == proposal_id
+        ], "decisions": [
+            item for item in decisions if item["payload"].get("proposal_id") == proposal_id
+        ]}
+
     @router.post("/proposals/{proposal_id}/objections")
     async def add_objection(proposal_id: str, payload: dict[str, Any], request: Request):
         actor = actor_id(payload, request)
@@ -588,10 +645,12 @@ def create_collaboration_router(store: CollaborationStore) -> APIRouter:
         if decision_status in {"accepted", "rejected", "superseded", "under_review"}:
             updated_payload = dict(proposal["payload"])
             updated_payload["latest_decision_id"] = decision["id"]
-            await store.update(
+            updated = await store.update(
                 "proposal", proposal_id, expected_version=proposal["version"],
                 payload=updated_payload, status=decision_status,
             )
+            if updated is None:
+                raise HTTPException(status_code=409, detail="proposal changed concurrently; decision is retained in history")
         return {"ok": True, "decision": decision}
 
     @router.get("/projects/{project_id}/decisions")
