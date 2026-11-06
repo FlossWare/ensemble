@@ -1601,6 +1601,22 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, **result}
 
+    @app.post("/api/v1/index/generations/{generation_id}/sources/query", tags=["index"])
+    async def index_generation_sources_query(generation_id: str, payload: dict[str, Any]):
+        source_ids = payload.get("source_ids")
+        if (not isinstance(source_ids, list) or not source_ids or len(source_ids) > 200
+                or any(not isinstance(value, str) or not value or len(value) > 2048 for value in source_ids)):
+            raise HTTPException(status_code=400, detail="source_ids must contain 1-200 non-empty identifiers")
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id for item in status["generations"]):
+            raise HTTPException(status_code=404, detail="unknown generation")
+        sources = {}
+        for source_id in dict.fromkeys(source_ids):
+            source = await active_index_store.get_generation_source(generation_id, source_id)
+            if source is not None:
+                sources[source_id] = source
+        return {"sources": sources}
+
     @app.get("/api/v1/index/generations/{generation_id}/changes/high-watermark", tags=["index"])
     async def index_generation_changes_high_watermark(generation_id: str):
         status = await active_index_store.generation_status()
@@ -2097,6 +2113,41 @@ def create_app(
     @app.get("/api/v1/vector/collections", tags=["vector"])
     async def vector_collections():
         return {"ok": True, "collections": await active_vector_store.list_collections()}
+
+    @app.get("/api/v1/vector/generations/collections", tags=["vector"])
+    async def vector_generation_collections():
+        collections = []
+        for collection in await active_vector_store.list_collections():
+            collections.append({
+                "name": collection["name"], "model": collection["model"],
+                "dimensions": collection["dimensions"],
+                "upper_bound": await active_vector_store.record_key_upper_bound(collection["name"]),
+            })
+        return {"collections": collections}
+
+    @app.post("/api/v1/vector/generations/{generation_id}/collections/{name}/records/page", tags=["vector"])
+    async def vector_generation_records_page(generation_id: str, name: str, payload: dict[str, Any]):
+        _validate_vector_collection_name(name)
+        limit = payload.get("limit", 500)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 10000")
+        records = await active_vector_store.list_records_after(
+            name, payload.get("cursor"), payload.get("upper_bound"), limit,
+        )
+        return {"records": records}
+
+    @app.post("/api/v1/vector/generations/{generation_id}/collections/{name}/records", tags=["vector"])
+    async def vector_generation_records_put(generation_id: str, name: str, payload: dict[str, Any]):
+        _validate_vector_collection_name(name)
+        model, dimensions, records = payload.get("model"), payload.get("dimensions"), payload.get("records")
+        if not isinstance(model, str) or not model or isinstance(dimensions, bool) or not isinstance(dimensions, int):
+            raise HTTPException(status_code=400, detail="model and dimensions are required")
+        if not isinstance(records, list) or not records:
+            raise HTTPException(status_code=400, detail="records must be a non-empty list")
+        result = await active_vector_store.upsert_generation(
+            generation_id, name, model, dimensions, records,
+        )
+        return {"ok": True, "upserted": result}
 
     @app.post("/api/v1/vector/collections/{name}/records/lookup", tags=["vector"])
     async def vector_existing(name: str, payload: dict[str, Any]):
