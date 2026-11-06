@@ -714,7 +714,8 @@ def create_app(
     ranking_provider = configured_ranking_provider(active_reranker)
 
     async def active_generation_id() -> str | None:
-        status = await active_index_store.generation_status()
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        status = await internal.request("GET", "/api/v1/index/generations")
         generation_id = status.get("active_generation_id")
         active = next((item for item in status.get("generations", [])
                        if item.get("generation_id") == generation_id), None)
@@ -915,8 +916,14 @@ def create_app(
 
         stage_started = time.perf_counter()
         try:
-            await active_index_store.acknowledge_generation_change(
-                document.source_id, document.revision, False,
+            await internal.request(
+                "POST", "/api/v1/index/generation-changes/acknowledgements",
+                request=request,
+                json={
+                    "source_id": document.source_id,
+                    "revision_sequence": document.revision,
+                    "tombstoned": False,
+                },
             )
             await trace_stage("generation_acknowledgement", "completed", stage_started)
         except Exception as exc:
@@ -1165,21 +1172,26 @@ def create_app(
                     "target": "vector:" + name, "error": type(exc).__name__,
                 })
         if not cleanup["failed"]:
-            active_generation = await active_generation_id()
-            source = await active_index_store.get_source(source_id)
-            if active_generation is not None and source is not None:
-                try:
-                    await document_store.tombstone_generation_source(active_generation, source_id)
-                    await active_knowledge_store.tombstone_generation_source(active_generation, source_id)
-                    await active_vector_store.tombstone_generation_source(active_generation, source_id)
-                    await active_index_store.acknowledge_generation_change(
-                        source_id, source["high_sequence"], True,
+            try:
+                source_response = await internal.request(
+                    "GET", f"/api/v1/index/sources/{source_id}", request=request,
+                )
+                source = source_response.get("source") or {}
+                if await active_generation_id() is not None and source:
+                    await internal.request(
+                        "POST", "/api/v1/index/generation-changes/acknowledgements",
+                        request=request,
+                        json={
+                            "source_id": source_id,
+                            "revision_sequence": source["high_sequence"],
+                            "tombstoned": True,
+                        },
                     )
                     cleanup["completed"].append("active_generation")
-                except Exception as exc:
-                    cleanup["failed"].append({
-                        "target": "active_generation", "error": type(exc).__name__,
-                    })
+            except Exception as exc:
+                cleanup["failed"].append({
+                    "target": "active_generation", "error": type(exc).__name__,
+                })
         if cleanup["failed"]:
             cleanup["status"] = "partial"
             cleanup["retryable"] = True
@@ -1654,6 +1666,31 @@ def create_app(
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "generation": result}
+
+    @app.get("/api/v1/index/generation-writes/ready", tags=["index"])
+    async def index_generation_writes_ready():
+        try:
+            await active_index_store.assert_generation_writes_open()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "ready": True}
+
+    @app.post("/api/v1/index/generation-changes/acknowledgements", tags=["index"])
+    async def index_generation_change_acknowledge(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        sequence = payload.get("revision_sequence")
+        tombstoned = payload.get("tombstoned", False)
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
+        if not isinstance(tombstoned, bool):
+            raise HTTPException(status_code=400, detail="tombstoned must be a boolean")
+        try:
+            await active_index_store.acknowledge_generation_change(source_id, sequence, tombstoned)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "source_id": source_id, "revision_sequence": sequence, "tombstoned": tombstoned}
 
     @app.get("/api/v1/index/health", tags=["index"])
     async def index_health():
