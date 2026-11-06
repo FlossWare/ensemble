@@ -70,7 +70,7 @@ class SqliteReclamationStore:
             names = await connection.run_sync(
                 lambda conn: __import__("sqlalchemy").inspect(conn).get_table_names()
             )
-        if "ensemble_source_reclamation" not in names:
+        if not {"ensemble_source_reclamation", "ensemble_deletion_audit"}.issubset(names):
             raise RuntimeError("reclamation schema is not initialized; run 'alembic upgrade head'")
 
     async def close(self) -> None:
@@ -235,7 +235,7 @@ class InMemoryReclamationStore:
             }
         return dict(self._jobs[source_id])  # type: ignore[return-value]
 
-    async def claim_due(self, limit: int = 100) -> list[dict[str, Any]]:
+    async def claim_due(self, limit: int = 100) -> list[ReclamationJob]:
         now = datetime.now(timezone.utc)
         claimed: list[ReclamationJob] = []
         for job in sorted(self._jobs.values(), key=lambda item: item["created_at"]):
