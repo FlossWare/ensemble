@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import os
-from typing import Any, Protocol
+from typing import Protocol
 
 from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, Text, and_, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -89,7 +89,7 @@ class SqliteReclamationStore:
             )).mappings().one()
         return dict(row)  # type: ignore[return-value]
 
-    async def claim_due(self, limit: int = 100) -> list[dict[str, Any]]:
+    async def claim_due(self, limit: int = 100) -> list[ReclamationJob]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
         now = datetime.now(timezone.utc)
@@ -171,7 +171,7 @@ class SqliteReclamationStore:
 
 class InMemoryReclamationStore:
     def __init__(self):
-        self._jobs: dict[str, dict[str, Any]] = {}
+        self._jobs: dict[str, ReclamationJob] = {}
 
     async def initialize(self) -> None:
         return None
@@ -179,7 +179,7 @@ class InMemoryReclamationStore:
     async def close(self) -> None:
         return None
 
-    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> dict[str, Any]:
+    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> ReclamationJob:
         now = requested_at or datetime.now(timezone.utc)
         if now.tzinfo is None or (retain_until is not None and retain_until.tzinfo is None):
             raise ValueError("deletion timestamps must be timezone-aware")
@@ -197,7 +197,7 @@ class InMemoryReclamationStore:
 
     async def claim_due(self, limit: int = 100) -> list[dict[str, Any]]:
         now = datetime.now(timezone.utc)
-        claimed = []
+        claimed: list[ReclamationJob] = []
         for job in sorted(self._jobs.values(), key=lambda item: item["created_at"]):
             if len(claimed) >= limit:
                 break
