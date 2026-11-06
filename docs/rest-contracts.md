@@ -75,7 +75,18 @@ Each capability group can be assigned an independent REST base URL. The initial 
 
 When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. Context Assembly dispatches to Search, Memory, Intent, and Entity REST endpoints. Hybrid Search dispatches base retrieval to Search, intent classification and entity extraction to their capabilities, Graph query/traversal to Graph, reranking to Reranking, and its search-ledger write to Memory through REST. Knowledge-scoped Hybrid Search dispatches embedding and vector queries through their REST contracts. Document ingestion dispatches revision registration to Index, document/chunk storage to Documents, entity extraction to Entities, and graph association to Graph through REST. Transcript session ingestion dispatches event persistence to Memory, revision lookup to Index, entity extraction to Entities, and session/file relationships to Graph through REST. Source tombstone propagation dispatches to Documents, Knowledge, and every configured Vector collection through REST. Hybrid Search invokes the Search capability through `POST /api/v1/search/retrieve`. Search retains ownership of its retrieval algorithm and persistence rather than exposing its internal store implementation to Hybrid. Setting `ENSEMBLE_SEARCH_REST_URL` moves Search behind a separate REST server without changing the Hybrid contract. Remaining direct store access inside Search is capability-owned implementation, not cross-capability composition. Only call paths explicitly migrated to the internal REST client satisfy the boundary.
 
-## 7. Initial implemented endpoints
+## 7. Index coordination endpoints
+
+Internal callers coordinate generation state through the Index REST contract rather than reaching into the Index store:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | /api/v1/index/generation-writes/ready | Reject writes while generation lifecycle state blocks mutation |
+| POST | /api/v1/index/generation-changes/acknowledgements | Acknowledge a source revision or tombstone after downstream capability work completes |
+
+The acknowledgement body requires `source_id`, positive `revision_sequence`, and boolean `tombstoned`. These routes are also the contract used by the co-located ASGI transport; they are not implementation-only shortcuts.
+
+## 8. Initial implemented endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
