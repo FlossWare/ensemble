@@ -20,7 +20,7 @@ collaboration_metadata = MetaData()
 collaboration_records = Table(
     "ensemble_collaboration_records",
     collaboration_metadata,
-    Column("record_id", String(64), primary_key=True),
+    Column("record_id", String(256), primary_key=True),
     Column("record_type", String(32), nullable=False),
     Column("project_id", String(128), nullable=True),
     Column("actor_id", String(256), nullable=True),
