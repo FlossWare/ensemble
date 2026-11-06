@@ -344,78 +344,123 @@ def create_app(
     generation_lifecycle_lock = asyncio.Lock()
 
     async def reclaim_due_sources() -> int:
-        jobs = await active_reclamation_store.claim_due(100)
+        internal = InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+            "graph": os.getenv("ENSEMBLE_GRAPH_REST_URL"),
+        })
+        jobs = (await internal.request(
+            "POST", "/api/v1/index/reclamation/jobs/claim", json={"limit": 100},
+        )).get("jobs", [])
         for job in jobs:
             source_id = job["source_id"]
+            actor, reason = job.get("actor"), job.get("reason")
             try:
-                await active_reclamation_store.record_audit(
-                    source_id, "claimed", actor=job.get("actor"), reason=job.get("reason"),
-                    details={"attempts": job.get("attempts", 0), "erasure_required": job.get("erasure_required", False), "requested_retain_until": job.get("requested_retain_until").isoformat() if job.get("requested_retain_until") else None},
+                requested_retain_until = job.get("requested_retain_until")
+                if hasattr(requested_retain_until, "isoformat"):
+                    requested_retain_until = requested_retain_until.isoformat()
+                await internal.request(
+                    "POST", "/api/v1/index/reclamation/audit",
+                    json={
+                        "source_id": source_id, "event": "claimed",
+                        "actor": actor, "reason": reason,
+                        "details": {
+                            "attempts": job.get("attempts", 0),
+                            "erasure_required": job.get("erasure_required", False),
+                            "requested_retain_until": requested_retain_until,
+                        },
+                    },
                 )
                 async with generation_lifecycle_lock:
-                    # A builder may have read source payloads before a tombstone
-                    # and still be copying them into its generation. Defer the
-                    # physical purge until no generation is building and no
-                    # cutover write fence is held.
-                    generation_status = await active_index_store.generation_status()
-                    if any(
-                        item.get("state") == "building"
-                        for item in generation_status.get("generations", [])
-                    ):
-                        await active_reclamation_store.retry(
-                            source_id, "generation build in progress; reclamation deferred", delay_seconds=15,
+                    generation_status = await internal.request("GET", "/api/v1/index/generations")
+                    if any(item.get("state") == "building" for item in generation_status.get("generations", [])):
+                        await internal.request(
+                            "POST", "/api/v1/index/reclamation/jobs/retry",
+                            json={
+                                "source_id": source_id,
+                                "reason": "generation build in progress; reclamation deferred",
+                                "delay_seconds": 15,
+                            },
                         )
-                        await active_reclamation_store.record_audit(
-                            source_id, "deferred", actor=job.get("actor"), reason=job.get("reason"),
-                            details={"cause": "generation_build_in_progress"},
+                        await internal.request(
+                            "POST", "/api/v1/index/reclamation/audit",
+                            json={
+                                "source_id": source_id, "event": "deferred",
+                                "actor": actor, "reason": reason,
+                                "details": {"cause": "generation_build_in_progress"},
+                            },
                         )
                         continue
-                    await active_index_store.assert_generation_writes_open()
+                    await internal.request("GET", "/api/v1/index/generation-writes/ready")
 
-                    # The authoritative Index tombstone and generation source
-                    # tombstones are retained; source payloads are physically reclaimed.
-                    # Graph source nodes and mention edges are derived materialized
-                    # data too. Remove them before marking the Index source purged;
-                    # shared entity nodes are retained.
-                    await active_graph_store.reclaim_source(source_id)
-                    # A permanent purge must remove source payloads from every
-                    # retained generation, not merely hide them behind tombstones.
+                    # Graph entities and mentions are derived materialized data.
+                    await internal.request(
+                        "POST", "/api/v1/graph/sources/reclaim",
+                        json={"source_id": source_id},
+                    )
                     generation_reclaimed = []
                     for generation in generation_status.get("generations", []):
                         generation_id = generation.get("generation_id")
                         if not generation_id:
                             continue
-                        # These stores are required participants in permanent purge.
-                        # Never silently skip a missing adapter operation and mark the
-                        # Index source purged while generation payloads still exist.
-                        generation_reclaimed.extend([
-                            await document_store.reclaim_generation_source(generation_id, source_id),
-                            await active_knowledge_store.reclaim_generation_source(generation_id, source_id),
-                            await active_vector_store.delete_generation_source(generation_id, source_id),
-                        ])
-                    reclaimed = [
-                        await document_store.reclaim_source(source_id),
-                        await active_knowledge_store.reclaim_source(source_id),
-                        await active_vector_store.reclaim_source(source_id),
-                    ]
+                        # Each capability owns and physically reclaims its own generation payload.
+                        for capability in ("documents", "knowledge", "vector"):
+                            result = await internal.request(
+                                "POST",
+                                f"/api/v1/{capability}/generations/{generation_id}/sources/reclaim",
+                                json={"source_id": source_id},
+                            )
+                            generation_reclaimed.append(result.get("reclaimed", 0))
+                    reclaimed = []
+                    for capability in ("documents", "knowledge", "vector"):
+                        result = await internal.request(
+                            "POST", f"/api/v1/{capability}/sources/reclaim",
+                            json={"source_id": source_id},
+                        )
+                        reclaimed.append(result.get("reclaimed", 0))
                     if any(count > 500 for count in [*generation_reclaimed, *reclaimed]):
-                        # A full page means there may be more rows. Retry the
-                        # idempotent source cleanup in another bounded pass.
-                        await active_reclamation_store.retry(source_id, "additional reclamation pages remain")
+                        await internal.request(
+                            "POST", "/api/v1/index/reclamation/jobs/retry",
+                            json={"source_id": source_id, "reason": "additional reclamation pages remain"},
+                        )
                     else:
-                        # Permanently mark the Index source only after all
-                        # materialized stores report that no more pages remain.
-                        await active_index_store.mark_purged(source_id)
-                        await active_reclamation_store.complete(source_id)
-                        await active_reclamation_store.record_audit(
-                            source_id, "completed", actor=job.get("actor"), reason=job.get("reason"),
-                            details={"purged": True, "erasure_required": job.get("erasure_required", False)},
+                        # Index marks the source purged only after every capability has finished.
+                        await internal.request(
+                            "POST", "/api/v1/index/sources/purge",
+                            json={"source_id": source_id},
+                        )
+                        await internal.request(
+                            "POST", "/api/v1/index/reclamation/jobs/complete",
+                            json={"source_id": source_id},
+                        )
+                        await internal.request(
+                            "POST", "/api/v1/index/reclamation/audit",
+                            json={
+                                "source_id": source_id, "event": "completed",
+                                "actor": actor, "reason": reason,
+                                "details": {
+                                    "purged": True,
+                                    "erasure_required": job.get("erasure_required", False),
+                                },
+                            },
                         )
             except Exception as exc:
-                await active_reclamation_store.retry(source_id, f"{type(exc).__name__}: {exc}")
-                await active_reclamation_store.record_audit(
-                    source_id, "retry_scheduled", actor=job.get("actor"), reason=job.get("reason"),
-                    details={"error_type": type(exc).__name__, "erasure_required": job.get("erasure_required", False)},
+                await internal.request(
+                    "POST", "/api/v1/index/reclamation/jobs/retry",
+                    json={"source_id": source_id, "reason": f"{type(exc).__name__}: {exc}"},
+                )
+                await internal.request(
+                    "POST", "/api/v1/index/reclamation/audit",
+                    json={
+                        "source_id": source_id, "event": "retry_scheduled",
+                        "actor": actor, "reason": reason,
+                        "details": {
+                            "error_type": type(exc).__name__,
+                            "erasure_required": job.get("erasure_required", False),
+                        },
+                    },
                 )
         return len(jobs)
 
