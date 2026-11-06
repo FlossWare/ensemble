@@ -1517,7 +1517,13 @@ def create_app(
     generation_builder = IndexGenerationBuilder(
         active_index_store, document_store, active_vector_store,
         active_knowledge_store, active_memory_store,
-        internal_client=InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")}),
+        internal_client=InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+            "memory": os.getenv("ENSEMBLE_MEMORY_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+        }),
     )
 
     @app.post("/api/v1/index/generations", tags=["index"])
