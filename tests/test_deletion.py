@@ -63,10 +63,7 @@ def test_retention_decorator_persists_future_deadline_for_durable_queue():
     async def exercise():
         queue = FakeQueue()
         now = datetime(2026, 11, 6, tzinfo=timezone.utc)
-        strategy = RetentionDeletionDecorator(
-            DeferredReclamationStrategy(queue),
-            clock=lambda: now,
-        )
+        strategy = RetentionDeletionDecorator(DeferredReclamationStrategy(queue))
         retained = await strategy.execute(DeletionContext(
             "source-1", retain_until=now + timedelta(days=1),
         ))
