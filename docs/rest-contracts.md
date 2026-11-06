@@ -119,6 +119,7 @@ When a key is unset, requests for that capability use the co-located ASGI transp
 | POST | /api/v1/index/revisions | Record a revision and return accepted/duplicate/conflict/superseded/tombstoned decision |
 | POST | /api/v1/index/tombstones | Permanently tombstone a source at a revision sequence |
 | GET | /api/v1/index/reclamation, POST /api/v1/index/reclamation/run | Inspect or explicitly run durable physical reclamation jobs |
+| GET | /api/v1/index/sources/{source_id}/deletion-audit | Read bounded append-only deletion strategy and reclamation audit history |
 | GET | /api/v1/index/sources/{source_id}, /manifest | Read source state and bounded source manifest |
 | POST / GET | /api/v1/collaboration/participants, /participants/{id} | Create and read provider-neutral human and agent identities |
 | POST / GET | /api/v1/collaboration/projects, /projects/{id}/members | Create projects and manage membership roles |
@@ -228,6 +229,7 @@ Node and edge mutations use resource names and HTTP methods. Query and traversal
 - `retain_until` is an optional timezone-aware ISO-8601 timestamp. The reclamation job is durably scheduled with this deadline as its earliest eligible execution time. The deadline survives process restarts.
 - The reclamation ledger retains actor, reason, request time, retention deadline, retry state, and completion time. Logical tombstoning remains immediate; retention delays only physical reclamation.
 - Physical reclamation remains idempotent and retryable. The authoritative Index tombstone is retained after derived payloads are purged.
+- The append-only deletion audit ledger records strategy outcomes and worker claims, deferrals, retries, and completion. Read it with `GET /api/v1/index/sources/{source_id}/deletion-audit`.\n
 
 ## 9. Search and reranking security
 
