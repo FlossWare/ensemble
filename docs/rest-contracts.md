@@ -125,6 +125,7 @@ When a key is unset, requests for that capability use the co-located ASGI transp
 | POST / GET | /api/v1/collaboration/participants, /participants/{id} | Create and read provider-neutral human and agent identities |
 | POST / GET | /api/v1/collaboration/projects, /projects/{id}/members | Create projects and manage membership roles |
 | POST / GET | /api/v1/collaboration/projects/{id}/contributions | Create and query attributable project contributions |
+| POST | /api/v1/collaboration/contributions/{id}/review | Record reviewer-authorized contribution acceptance or rejection |
 | GET | /api/v1/collaboration/projects/{id}/activity | Query project-scoped chronological activity |
 | POST / GET | /api/v1/collaboration/projects/{id}/handoffs, /handoffs/{id} | Create and inspect resumable handoffs and history |
 | POST | /api/v1/collaboration/handoffs/{id}/checkpoints, /acknowledge, /complete, /supersede | Persist incremental checkpoints and validate handoff lifecycle transitions |
