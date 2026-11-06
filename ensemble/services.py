@@ -9,6 +9,7 @@ import os
 import time
 import json
 from collections.abc import Sequence
+from typing import Any
 from uuid import uuid5, NAMESPACE_URL
 from .chunking import Chunker, chunk as chunk_text
 from .embeddings import EmbeddingProvider, MAX_TEXTS as MAX_EMBEDDING_BATCH
@@ -17,6 +18,7 @@ from .store import DocumentStore
 from .reranking import Reranker, RerankingDecorator, configured_ranking_provider
 from .vector_store import VectorStore
 from .rrf import reciprocal_rank_fusion, thompson_channel_weights
+from .rest_client import InternalRestClient
 
 
 def _retrieval_channel_timeout() -> float:
@@ -33,17 +35,24 @@ class DocumentService:
     def __init__(
         self, store: DocumentStore, chunker: Chunker, embeddings: EmbeddingProvider,
         vector_store: VectorStore | None = None, index_store: object | None = None,
+        internal_client: InternalRestClient | None = None,
     ):
         self.store = store
         self.chunker = chunker
         self.embeddings = embeddings
         self.vector_store = vector_store
         self.index_store = index_store
+        self.internal_client = internal_client
 
-    async def _active_generation(self) -> str | None:
-        if self.index_store is None:
+    async def _active_generation(self, request: Any = None) -> str | None:
+        if self.internal_client is not None:
+            status = await self.internal_client.request(
+                "GET", "/api/v1/index/generations", request=request,
+            )
+        elif self.index_store is not None:
+            status = await self.index_store.generation_status()
+        else:
             return None
-        status = await self.index_store.generation_status()
         active_id = status.get("active_generation_id")
         active = next((item for item in status.get("generations", [])
                        if item.get("generation_id") == active_id), None)
@@ -52,7 +61,11 @@ class DocumentService:
             return active_id
         return None
 
-    async def ingest(self, request: DocumentIn, *, embed: bool = True, vector_collection: str | None = None, trace: object | None = None) -> DocumentOut:
+    async def ingest(
+        self, request: DocumentIn, *, embed: bool = True,
+        vector_collection: str | None = None, trace: object | None = None,
+        request_context: Any = None,
+    ) -> DocumentOut:
         async def record_stage(name: str, status: str, started: float, **details: object) -> None:
             if not callable(trace):
                 return
@@ -107,7 +120,11 @@ class DocumentService:
         ]
         for chunk in chunks:
             chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
-        if self.index_store is not None:
+        if self.internal_client is not None:
+            await self.internal_client.request(
+                "GET", "/api/v1/index/generation-writes/ready", request=request_context,
+            )
+        elif self.index_store is not None:
             await self.index_store.assert_generation_writes_open()
         requested_document_id = document.id
         document = await self.store.save(document, chunks)
@@ -118,7 +135,7 @@ class DocumentService:
             document = await self.store.save(document, chunks)
         await record_stage("document_persistence", "completed", stage_started, chunk_count=len(chunks))
         stage_started = time.perf_counter()
-        active_generation_id = await self._active_generation()
+        active_generation_id = await self._active_generation(request_context)
         if active_generation_id is not None:
             await self.store.upsert_generation(
                 active_generation_id, copy.deepcopy(document), copy.deepcopy(chunks),
@@ -130,7 +147,7 @@ class DocumentService:
         stage_started = time.perf_counter()
         vector_indexed = False
         digest = hashlib.sha256(request.content.encode("utf-8")).hexdigest()
-        if vector_collection and self.vector_store is not None:
+        if vector_collection and (self.vector_store is not None or self.internal_client is not None):
             if embed and self.embeddings.available and chunks and all(chunk.embedding for chunk in chunks):
                 status = self.embeddings.status()
                 model = status.get("model") or "unknown"
@@ -156,31 +173,45 @@ class DocumentService:
                 } for chunk in chunks]
                 try:
                     for offset in range(0, len(items), 256):
-                        await self.vector_store.upsert(
-                            vector_collection, model, dimensions, items[offset:offset + 256]
-                        )
+                        batch = items[offset:offset + 256]
+                        if self.internal_client is not None:
+                            await self.internal_client.request(
+                                "PUT", f"/api/v1/vector/collections/{vector_collection}/records",
+                                request=request_context,
+                                json={
+                                    "ids": [item["id"] for item in batch],
+                                    "embeddings": [item["embedding"] for item in batch],
+                                    "documents": [item["document"] for item in batch],
+                                    "metadatas": [item["metadata"] for item in batch],
+                                    "model": model, "dimensions": dimensions,
+                                },
+                            )
+                        else:
+                            await self.vector_store.upsert(
+                                vector_collection, model, dimensions, batch,
+                            )
                     vector_indexed = True
                 except Exception:
-                    # Base vector indexing is an optional retrieval channel.
-                    # Keep document ingestion usable, but mirror the resulting
-                    # durable base state into the active generation below.
+                    # Vector indexing is optional; durable Documents ingestion remains authoritative.
                     vector_indexed = False
 
-            # The durable document revision is authoritative. Never leave vectors
-            # from an older revision searchable after a newer revision is accepted.
+            # The durable document revision is authoritative. Prune older vectors through Vector REST.
             try:
-                await self.vector_store.delete_superseded(
-                    vector_collection, document.source_id, digest
-                )
+                if self.internal_client is not None:
+                    await self.internal_client.request(
+                        "POST", f"/api/v1/vector/collections/{vector_collection}/records/prune",
+                        request=request_context,
+                        json={"url": document.source_id, "keep_sha256": digest},
+                    )
+                else:
+                    await self.vector_store.delete_superseded(
+                        vector_collection, document.source_id, digest,
+                    )
             except Exception:
                 vector_indexed = False
 
-            if active_generation_id is not None:
-                # Mirror what actually persisted in the base Vector store, not
-                # the requested batch. A failed optional base write or cleanup
-                # must not leave the active generation claiming a different
-                # vector state. Fail the ingestion if this mirror fails so the
-                # Index journal remains unacknowledged and the write is retryable.
+            if active_generation_id is not None and self.internal_client is None:
+                # Direct mirroring remains only for isolated unit adapters without REST.
                 persisted = await self.vector_store.list_records_for_source(
                     vector_collection, document.source_id,
                 )
@@ -203,7 +234,7 @@ class DocumentService:
                     )
         await record_stage(
             "vector_indexing_and_generation_mirror",
-            "completed" if vector_indexed else ("skipped" if not vector_collection or self.vector_store is None else "degraded"),
+            "completed" if vector_indexed else ("skipped" if not vector_collection or (self.vector_store is None and self.internal_client is None) else "degraded"),
             stage_started, vector_indexed=vector_indexed,
             collection_configured=bool(vector_collection),
             generation_mirrored=active_generation_id is not None,
