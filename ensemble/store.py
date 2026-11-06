@@ -119,6 +119,7 @@ class DocumentStore(Protocol):
     async def generation_all_chunks(self, generation_id: str) -> list[IndexedChunk]: ...
     async def generation_lexical_search(self, generation_id: str, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]: ...
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int: ...
+    async def restore_generation_source(self, generation_id: str, source_id: str) -> int: ...
     async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int: ...
     async def delete_generation(self, generation_id: str) -> int: ...
 
@@ -260,6 +261,17 @@ class InMemoryDocumentStore:
                 document.metadata = dict(document.metadata)
                 document.metadata["_generation_tombstoned"] = True
         return 1
+
+    async def restore_generation_source(self, generation_id: str, source_id: str) -> int:
+        tombstones = self._generation_tombstones.get(generation_id, set())
+        removed = int(source_id in tombstones)
+        tombstones.discard(source_id)
+        generation = self._generation_data.get(generation_id, {})
+        for (stored_source, _revision), (document, _chunks) in generation.items():
+            if stored_source == source_id:
+                document.metadata = dict(document.metadata)
+                document.metadata.pop("_generation_tombstoned", None)
+        return removed
 
     async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int:
         """Remove one bounded page of a source's documents from a generation."""
@@ -676,6 +688,36 @@ class SqlDocumentStore:
                 ).values(is_current=False)
             )
         return inserted.rowcount or 0
+
+    async def restore_generation_source(self, generation_id: str, source_id: str) -> int:
+        async with self.engine.begin() as connection:
+            marker = await connection.execute(
+                delete(generation_source_tombstones).where(
+                    generation_source_tombstones.c.generation_id == generation_id,
+                    generation_source_tombstones.c.source_id == source_id,
+                )
+            )
+            latest_revision = (await connection.execute(
+                select(func.max(generation_documents.c.revision)).where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == source_id,
+                )
+            )).scalar_one_or_none()
+            await connection.execute(
+                generation_documents.update().where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == source_id,
+                ).values(is_current=False)
+            )
+            if latest_revision is not None:
+                await connection.execute(
+                    generation_documents.update().where(
+                        generation_documents.c.generation_id == generation_id,
+                        generation_documents.c.source_id == source_id,
+                        generation_documents.c.revision == latest_revision,
+                    ).values(is_current=True)
+                )
+        return int(marker.rowcount or 0)
 
     async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int:
         """Remove one bounded page of a purged source's generation documents and chunks."""
