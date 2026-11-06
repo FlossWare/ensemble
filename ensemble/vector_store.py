@@ -296,7 +296,7 @@ class SqliteVectorStore:
             ):
                 rows = (await connection.execute(
                     select(*key_columns, table.c.metadata).where(
-                        table.c.metadata["source_id"].as_string() == source_id
+                        (table.c.metadata["source_id"].as_string() == source_id)
                         | (table.c.metadata["url"].as_string() == source_id)
                     )
                 )).mappings().all()
