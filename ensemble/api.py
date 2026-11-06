@@ -4018,6 +4018,10 @@ def create_app(
 
     @app.post("/api/v1/ingest/urls/crawl-jobs/{job_id}/ingest", tags=["ingestion"])
     async def ingest_crawl_job(job_id: str, request: Request = None):
+        internal = InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+        })
         job = await active_crawl_store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="crawl job not found")
@@ -4044,7 +4048,11 @@ def create_app(
                 continue
             digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
             if state is None:
-                current = await active_index_store.get_source(source_id)
+                source_response = await internal.request(
+                    "POST", "/api/v1/index/sources/query", request=request,
+                    json={"source_ids": [source_id]},
+                )
+                current = (source_response.get("sources") or {}).get(source_id)
                 revision = (current["high_sequence"] + 1) if current else 1
                 state = {
                     "source_id": source_id, "revision": revision, "content_sha256": digest,
@@ -4077,12 +4085,15 @@ def create_app(
                 result, decision = await ingest_indexed_document(
                     document, origin="web", locator=source_id, request=request,
                 )
-                await active_knowledge_store.put({
-                    "source_id": source_id, "revision_sequence": state["revision"],
-                    "revision_id": digest, "title": preview.get("title") or source_id,
-                    "content": content, "origin": "web", "locator": source_id,
-                    "profiles": profiles,
-                })
+                await internal.request(
+                    "POST", "/api/v1/knowledge/records/materialize", request=request,
+                    json={"record": {
+                        "source_id": source_id, "revision_sequence": state["revision"],
+                        "revision_id": digest, "title": preview.get("title") or source_id,
+                        "content": content, "origin": "web", "locator": source_id,
+                        "profiles": profiles,
+                    }},
+                )
                 state.update(
                     status="completed", decision=decision,
                     document=result.model_dump(mode="json"), last_error=None,
@@ -4106,10 +4117,18 @@ def create_app(
 
     @app.post("/api/v1/ingest/urls", status_code=201, tags=["ingestion"])
     async def scrape_and_ingest(payload: dict[str, Any], request: Request):
+        internal = InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+        })
         try:
             preview = await preview_uri(payload.get("uri"))
             source_id = preview["final_uri"]
-            current = await active_index_store.get_source(source_id)
+            source_response = await internal.request(
+                "POST", "/api/v1/index/sources/query", request=request,
+                json={"source_ids": [source_id]},
+            )
+            current = (source_response.get("sources") or {}).get(source_id)
             revision = payload.get("revision")
             if revision is None:
                 revision = (current["high_sequence"] + 1) if current else 1
@@ -4123,11 +4142,14 @@ def create_app(
             result, decision = await ingest_indexed_document(
                 document, origin="web", locator=source_id, request=request
             )
-            await active_knowledge_store.put({
-                "source_id": source_id, "revision_sequence": revision, "revision_id": digest,
-                "title": preview["title"], "content": preview["text"], "origin": "web",
-                "locator": source_id, "profiles": profiles,
-            })
+            await internal.request(
+                "POST", "/api/v1/knowledge/records/materialize", request=request,
+                json={"record": {
+                    "source_id": source_id, "revision_sequence": revision, "revision_id": digest,
+                    "title": preview["title"], "content": preview["text"], "origin": "web",
+                    "locator": source_id, "profiles": profiles,
+                }},
+            )
             return {"ok": True, "decision": decision, "source": preview, "document": result}
         except ScrapeError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
