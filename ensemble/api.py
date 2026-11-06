@@ -395,6 +395,16 @@ def create_app(
             authorization=f"Bearer {token}",
         )
 
+    async def heartbeat_crawl_job(job_id: str) -> None:
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await active_crawl_store.heartbeat(job_id)
+            except Exception:
+                # A transient heartbeat failure must not crash the worker. The
+                # lease expires only if the job cannot be renewed for five minutes.
+                pass
+
     async def crawl_worker() -> None:
         while True:
             processed = False
@@ -410,11 +420,13 @@ def create_app(
                     partitions = ["default"]
                 for partition_id in partitions:
                     scope_token = set_request_scope(RequestScope(partition_id=partition_id))
+                    heartbeat_task = None
                     try:
                         job = await active_crawl_store.claim_next()
                         if job is None:
                             continue
                         processed = True
+                        heartbeat_task = asyncio.create_task(heartbeat_crawl_job(job["job_id"]))
                         trace_id = uuid4().hex
                         trace_started = time.perf_counter()
                         trace_created = False
@@ -512,6 +524,12 @@ def create_app(
                                 job["job_id"], f"{type(exc).__name__}: {str(exc)}",
                             )
                     finally:
+                        if heartbeat_task is not None:
+                            heartbeat_task.cancel()
+                            try:
+                                await heartbeat_task
+                            except asyncio.CancelledError:
+                                pass
                         reset_request_scope(scope_token)
                 await asyncio.sleep(0.5 if processed else 1)
             except asyncio.CancelledError:
