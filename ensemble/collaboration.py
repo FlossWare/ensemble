@@ -221,7 +221,8 @@ class ContributionSummarySynthesisStrategy:
 
 
 def create_collaboration_router(store: CollaborationStore, synthesis_strategy: SynthesisStrategy | None = None) -> APIRouter:
-    router = APIRouter(prefix="/api/v1/collaboration", tags=["collaboration"])\n    active_synthesis_strategy = synthesis_strategy or ContributionSummarySynthesisStrategy()
+    router = APIRouter(prefix="/api/v1/collaboration", tags=["collaboration"])
+    active_synthesis_strategy = synthesis_strategy or ContributionSummarySynthesisStrategy()
     roles = {"read", "contribute", "review", "approve", "owner"}
 
     def required_string(payload: dict[str, Any], name: str, maximum: int, *, optional: bool = False) -> str | None:
