@@ -18,8 +18,8 @@ class FakeQueue:
     def __init__(self):
         self.jobs = []
 
-    async def enqueue(self, source_id):
-        job = {"source_id": source_id, "state": "pending"}
+    async def enqueue(self, source_id, **metadata):
+        job = {"source_id": source_id, "state": "pending", **metadata}
         self.jobs.append(job)
         return job
 
@@ -59,7 +59,7 @@ def test_deferred_and_immediate_strategies_preserve_durable_queueing():
     asyncio.run(exercise())
 
 
-def test_retention_decorator_defers_until_retention_expires():
+def test_retention_decorator_persists_future_deadline_for_durable_queue():
     async def exercise():
         queue = FakeQueue()
         now = datetime(2026, 11, 6, tzinfo=timezone.utc)
@@ -70,15 +70,15 @@ def test_retention_decorator_defers_until_retention_expires():
         retained = await strategy.execute(DeletionContext(
             "source-1", retain_until=now + timedelta(days=1),
         ))
-        assert retained.state == "deferred"
+        assert retained.state == "queued"
         assert retained.retryable is True
-        assert queue.jobs == []
+        assert queue.jobs[0]["retain_until"] == now + timedelta(days=1)
 
         eligible = await strategy.execute(DeletionContext(
             "source-2", retain_until=now - timedelta(seconds=1),
         ))
         assert eligible.state == "queued"
-        assert [job["source_id"] for job in queue.jobs] == ["source-2"]
+        assert [job["source_id"] for job in queue.jobs] == ["source-1", "source-2"]
 
     asyncio.run(exercise())
 
@@ -185,6 +185,9 @@ def test_api_uses_injected_deletion_strategy_for_tombstones():
         response = client.post("/api/v1/index/tombstones", json={
             "source_id": "strategy-source",
             "revision_sequence": 2,
+            "actor": "human:scot",
+            "reason": "test deletion",
+            "retain_until": "2026-12-01T00:00:00Z",
         })
         assert response.status_code == 200
         assert response.json()["reclamation"] == {
@@ -193,3 +196,6 @@ def test_api_uses_injected_deletion_strategy_for_tombstones():
         }
         assert len(strategy.contexts) == 1
         assert strategy.contexts[0].source_id == "strategy-source"
+        assert strategy.contexts[0].actor == "human:scot"
+        assert strategy.contexts[0].reason == "test deletion"
+        assert strategy.contexts[0].retain_until == datetime(2026, 12, 1, tzinfo=timezone.utc)
