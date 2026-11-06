@@ -1144,7 +1144,10 @@ document.getElementById("collab-participant-form").addEventListener("submit",eve
    provider:collabValue("collab-provider")||undefined,
    model:collabValue("collab-model")||undefined
   });
-  if(participant.participant)document.getElementById("collab-actor-id").value=participant.participant.id;
+  if(participant.participant){
+   document.getElementById("collab-actor-id").value=participant.participant.id;
+   if(participant.participant.payload.participant_type==="human")document.getElementById("collab-owner-id").value=participant.participant.id;
+  }
   return participant;
  });
 });
