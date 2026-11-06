@@ -154,7 +154,25 @@ Knowledge owns record retrieval and generation persistence. The orchestrator val
 
 The Index restoration operation validates lifecycle state, cancels pending physical reclamation, delegates capability restoration through REST, then advances the Index revision and acknowledges the generation change.
 
-## 13. Initial implemented endpoints
+## 13. Permanent reclamation
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | /api/v1/index/reclamation/jobs/claim | Claim due reclamation jobs |
+| POST | /api/v1/index/reclamation/jobs/retry | Reschedule a failed or deferred job |
+| POST | /api/v1/index/reclamation/jobs/complete | Mark a job complete |
+| POST | /api/v1/index/sources/purge | Mark an Index source permanently purged |
+| POST | /api/v1/graph/sources/reclaim | Reclaim derived graph data |
+| POST | /api/v1/documents/sources/reclaim | Reclaim active Documents payload |
+| POST | /api/v1/documents/generations/{generation_id}/sources/reclaim | Reclaim Documents generation payload |
+| POST | /api/v1/knowledge/sources/reclaim | Reclaim active Knowledge payload |
+| POST | /api/v1/knowledge/generations/{generation_id}/sources/reclaim | Reclaim Knowledge generation payload |
+| POST | /api/v1/vector/sources/reclaim | Reclaim active Vector payload |
+| POST | /api/v1/vector/generations/{generation_id}/sources/reclaim | Reclaim Vector generation payload |
+
+The reclamation worker coordinates through REST and marks the Index source purged only after all participating capabilities report that bounded reclamation is complete.
+
+## 14. Initial implemented endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
