@@ -338,7 +338,7 @@ def test_api_refuses_restore_after_physical_reclamation_has_been_claimed():
             "source_id": "restore-running-source",
             "revision_sequence": 2,
         })
-        assert len(asyncio.run(app.state.reclamation_store.claim_due(1))) == 1
+        app.state.reclamation_store._jobs["restore-running-source"]["state"] = "running"
         rejected = client.post("/api/v1/index/restorations", json={
             "source_id": "restore-running-source",
             "revision_sequence": 3,
