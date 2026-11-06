@@ -1,5 +1,6 @@
 import asyncio
 import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
@@ -19,6 +20,10 @@ def test_crawl_job_store_claim_complete_recovery_and_retry():
     assert claimed["attempts"] == 1
     assert asyncio.run(store.claim_next()) is None
 
+    # Recovery only reclaims work whose five-minute lease has expired.
+    store._jobs[job["job_id"]]["updated_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=301)
+    ).isoformat()
     assert asyncio.run(store.recover_interrupted()) == 1
     interrupted = asyncio.run(store.get(job["job_id"]))
     assert interrupted["status"] == "interrupted"
@@ -169,6 +174,9 @@ def test_restart_recovery_marks_in_progress_page_ingestion_interrupted():
         }],
     }))
 
+    store._jobs[job["job_id"]]["updated_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=301)
+    ).isoformat()
     recovered = asyncio.run(store.recover_interrupted())
     state = asyncio.run(store.get(job["job_id"]))["ingestion"]
     assert recovered == 1
