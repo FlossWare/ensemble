@@ -227,3 +227,33 @@ def test_bounded_crawl_emits_real_page_and_policy_trace_stages(monkeypatch):
     assert stages[2]["page"] == 1
     assert stages[2]["characters"] == 4
     assert stages[3]["page_count"] == 1
+
+
+def test_crawl_delay_is_applied_before_initial_page(monkeypatch):
+    from ensemble import scraping
+
+    delays = []
+
+    async def fake_robots(uri, origin):
+        return ["User-agent: *", "Crawl-delay: 7", "Allow: /"]
+
+    async def fake_preview(uri, allowed_origin=None):
+        return {
+            "final_uri": uri, "title": "Home", "text": "home",
+            "characters": 4, "links": [],
+        }
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr(scraping, "_validate_public_uri", lambda uri: uri)
+    monkeypatch.setattr(scraping, "_fetch_robots_txt", fake_robots)
+    monkeypatch.setattr(scraping, "preview_uri", fake_preview)
+    monkeypatch.setattr(scraping.asyncio, "sleep", fake_sleep)
+
+    result = asyncio.run(scraping.crawl_uri(
+        "https://example.com/", max_pages=1, max_depth=0,
+    ))
+
+    assert result["page_count"] == 1
+    assert delays == [7.0]
