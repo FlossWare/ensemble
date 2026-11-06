@@ -1116,3 +1116,142 @@ async function refreshExecutionTraces(){
 }
 document.getElementById("trace-refresh").addEventListener("click",refreshExecutionTraces);
 refreshExecutionTraces();
+
+
+const collabResults=document.getElementById("collab-results");
+const collabValue=id=>document.getElementById(id).value.trim();
+const collabList=id=>collabValue(id).split(",").map(value=>value.trim()).filter(Boolean);
+const collabContext=()=>{
+ const projectId=collabValue("collab-project-id");
+ const actorId=collabValue("collab-actor-id");
+ if(!projectId||!actorId)throw new Error("Set both the project ID and actor participant ID.");
+ return {projectId,actorId};
+};
+async function collabShow(value){
+ collabResults.textContent=JSON.stringify(value,null,2);
+}
+async function collabRun(action){
+ try{await collabShow(await action());}
+ catch(error){collabResults.textContent="Collaboration operation failed: "+error.message;}
+}
+document.getElementById("collab-participant-form").addEventListener("submit",event=>{
+ event.preventDefault();
+ collabRun(async()=>{
+  const participant=await controlJson("/api/v1/collaboration/participants","POST",{
+   participant_id:collabValue("collab-participant-id")||undefined,
+   display_name:collabValue("collab-participant-name"),
+   participant_type:collabValue("collab-participant-type"),
+   provider:collabValue("collab-provider")||undefined,
+   model:collabValue("collab-model")||undefined
+  });
+  if(participant.participant)document.getElementById("collab-actor-id").value=participant.participant.id;
+  return participant;
+ });
+});
+document.getElementById("collab-project-form").addEventListener("submit",event=>{
+ event.preventDefault();
+ collabRun(async()=>{
+  const result=await controlJson("/api/v1/collaboration/projects","POST",{
+   name:collabValue("collab-project-name"),
+   owner_id:collabValue("collab-owner-id"),
+   human_approval_required:document.getElementById("collab-human-gate").checked
+  });
+  document.getElementById("collab-project-id").value=result.project.id;
+  document.getElementById("collab-actor-id").value=collabValue("collab-owner-id");
+  return result;
+ });
+});
+document.getElementById("collab-add-member").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {projectId,actorId}=collabContext();
+  return await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/members","POST",{
+   actor_id:actorId,participant_id:collabValue("collab-member-id"),role:collabValue("collab-member-role")
+  });
+ });
+});
+document.getElementById("collab-contribution-form").addEventListener("submit",event=>{
+ event.preventDefault();
+ collabRun(async()=>{
+  const {projectId,actorId}=collabContext();
+  return await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/contributions","POST",{
+   actor_id:actorId,kind:collabValue("collab-contribution-kind"),
+   work_item_id:collabValue("collab-work-item")||undefined,
+   source_ref:collabValue("collab-source-ref")||undefined,
+   summary:collabValue("collab-contribution-summary")
+  });
+ });
+});
+document.getElementById("collab-handoff-form").addEventListener("submit",event=>{
+ event.preventDefault();
+ collabRun(async()=>{
+  const {projectId,actorId}=collabContext();
+  const result=await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/handoffs","POST",{
+   actor_id:actorId,recipient_id:collabValue("collab-recipient-id")||undefined,
+   work_item_id:collabValue("collab-work-item")||undefined,
+   objective:collabValue("collab-handoff-objective"),
+   current_state:collabValue("collab-handoff-state"),
+   completed_work:collabValue("collab-handoff-completed")||undefined,
+   blockers:collabList("collab-handoff-blockers"),
+   next_actions:collabList("collab-handoff-next"),
+   references:collabList("collab-handoff-refs")
+  });
+  document.getElementById("collab-handoff-id").value=result.handoff.id;
+  return result;
+ });
+});
+document.getElementById("collab-handoff-checkpoint").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {actorId}=collabContext();
+  const id=collabValue("collab-handoff-id");
+  return await controlJson("/api/v1/collaboration/handoffs/"+encodeURIComponent(id)+"/checkpoints","POST",{
+   actor_id:actorId,current_state:collabValue("collab-handoff-state"),
+   completed_work:collabValue("collab-handoff-completed")||undefined,
+   blockers:collabList("collab-handoff-blockers"),
+   next_actions:collabList("collab-handoff-next"),
+   references:collabList("collab-handoff-refs")
+  });
+ });
+});
+for(const [buttonId,action] of [["collab-handoff-ack","acknowledge"],["collab-handoff-complete","complete"]]){
+ document.getElementById(buttonId).addEventListener("click",()=>{
+  collabRun(async()=>{
+   const {actorId}=collabContext();
+   return await controlJson("/api/v1/collaboration/handoffs/"+encodeURIComponent(collabValue("collab-handoff-id"))+"/"+action,"POST",{actor_id:actorId});
+  });
+ });
+}
+document.getElementById("collab-synthesize").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {projectId,actorId}=collabContext();
+  return await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/syntheses","POST",{actor_id:actorId});
+ });
+});
+document.getElementById("collab-proposal-form").addEventListener("submit",event=>{
+ event.preventDefault();
+ collabRun(async()=>{
+  const {projectId,actorId}=collabContext();
+  const result=await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/proposals","POST",{
+   actor_id:actorId,title:collabValue("collab-proposal-title"),
+   summary:collabValue("collab-proposal-summary"),
+   rationale:collabValue("collab-proposal-rationale"),
+   objections:collabList("collab-proposal-objections")
+  });
+  document.getElementById("collab-proposal-id").value=result.proposal.id;
+  return result;
+ });
+});
+document.getElementById("collab-decide").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {actorId}=collabContext();
+  return await controlJson("/api/v1/collaboration/proposals/"+encodeURIComponent(collabValue("collab-proposal-id"))+"/decisions","POST",{
+   actor_id:actorId,status:collabValue("collab-decision-status"),
+   rationale:collabValue("collab-decision-rationale")
+  });
+ });
+});
+document.getElementById("collab-refresh").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {projectId}=collabContext();
+  return await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/activity?limit=100");
+ });
+});
