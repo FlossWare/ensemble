@@ -104,6 +104,39 @@ def test_index_generation_source_copy_uses_internal_rest_contracts():
         assert reconciled.json()["status"] == "caught_up"
         assert reconciled.json()["change_count"] == 1
 
+        documents_reconciled = client.post(
+            "/api/v1/index/generations/generation-rest-copy/reconcile/documents",
+            json={"page_size": 10},
+        )
+        assert documents_reconciled.status_code == 409
+        assert "no active document chunks" in documents_reconciled.json()["detail"]
+
+        vectors_reconciled = client.post(
+            "/api/v1/index/generations/generation-rest-copy/reconcile/vectors",
+            json={"page_size": 10},
+        )
+        assert vectors_reconciled.status_code == 200
+        assert vectors_reconciled.json()["status"] == "caught_up"
+
+        memory_reconciled = client.post(
+            "/api/v1/index/generations/generation-rest-copy/reconcile/memory",
+            json={"page_size": 10},
+        )
+        assert memory_reconciled.status_code == 200
+        assert memory_reconciled.json()["status"] == "caught_up"
+
+        asyncio.run(knowledge_store.put({
+            "source_id": "source-a", "revision_sequence": 2, "revision_id": "revision-a2",
+            "title": "Source A", "content": "updated knowledge generation fixture",
+            "origin": "test", "locator": "source-a", "profiles": {"profile": "v2"},
+        }))
+        knowledge_reconciled = client.post(
+            "/api/v1/index/generations/generation-rest-copy/reconcile/knowledge",
+            json={"page_size": 10},
+        )
+        assert knowledge_reconciled.status_code == 200
+        assert knowledge_reconciled.json()["status"] == "caught_up"
+
         status = client.get("/api/v1/index/generations")
         generation = next(
             item for item in status.json()["generations"]
