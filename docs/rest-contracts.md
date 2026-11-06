@@ -116,7 +116,22 @@ The public generation-copy operation uses these contracts through the internal R
 
 The generation orchestrator pages source metadata through Index REST, then delegates document and vector generation mutations to their owning capability APIs. These operations are bounded by source page and generation ID. Capability base URLs may be configured independently with `ENSEMBLE_INDEX_REST_URL`, `ENSEMBLE_DOCUMENTS_REST_URL`, `ENSEMBLE_VECTOR_REST_URL`, `ENSEMBLE_MEMORY_REST_URL`, and `ENSEMBLE_KNOWLEDGE_REST_URL`; unset values retain the in-process ASGI transport.
 
-## 10. Initial implemented endpoints
+## 10. Memory generation operations
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | /api/v1/memory/generations/source-upper-bound | Capture the bounded memory-name snapshot |
+| POST | /api/v1/memory/generations/sources/page | Read a page of memory names |
+| POST | /api/v1/memory/generations/snapshots/query | Read active memory snapshots |
+| PUT | /api/v1/memory/generations/{generation_id}/snapshots/{name} | Write a snapshot into the target generation |
+| POST | /api/v1/memory/generations/{generation_id}/changes/page | Read Memory journal changes |
+| GET | /api/v1/memory/generations/{generation_id}/changes/high-watermark | Read the Memory journal high-water mark |
+| POST | /api/v1/memory/generations/{generation_id}/changes/acknowledgements | Acknowledge copied Memory journal changes |
+| GET | /api/v1/memory/generations/{generation_id}/changes/pending | Count unacknowledged Memory journal changes |
+
+The Memory capability owns its snapshot and journal persistence. The generation orchestrator only coordinates these operations and records progress in Index checkpoints.
+
+## 11. Initial implemented endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
