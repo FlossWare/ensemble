@@ -147,6 +147,20 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
         })
         assert proposal.status_code == 200
         proposal_id = proposal.json()["proposal"]["id"]
+        competing = client.post(f"/api/v1/collaboration/projects/{project_id}/proposals", json={
+            "actor_id": "human:owner",
+            "title": "Retain the existing contract",
+            "summary": "Preserve the current behavior until the migration is independently verified.",
+            "rationale": "This is a competing alternative, not a replacement of the first proposal.",
+        })
+        assert competing.status_code == 200
+        competing_id = competing.json()["proposal"]["id"]
+        assert competing_id != proposal_id
+        proposals = client.get(f"/api/v1/collaboration/projects/{project_id}/proposals", params={
+            "viewer_id": "human:owner",
+        })
+        proposal_ids = {item["id"] for item in proposals.json()["proposals"]}
+        assert {proposal_id, competing_id}.issubset(proposal_ids)
 
         objection = client.post(f"/api/v1/collaboration/proposals/{proposal_id}/objections", json={
             "actor_id": "agent:assistant",
