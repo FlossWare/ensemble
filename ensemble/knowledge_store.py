@@ -57,6 +57,16 @@ class KnowledgeStore(Protocol):
     async def reclaim_source(self, source_id: str) -> int: ...
     async def upsert_generation(self, generation_id: str, record: dict[str, Any]) -> str: ...
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> None: ...
+    async def restore_generation_source(self, generation_id: str, source_id: str) -> None: ...
+    async def restore_generation_source(self, generation_id: str, source_id: str) -> None:
+        async with self.engine.begin() as connection:
+            from .index_store import assert_generation_writes_open
+            await assert_generation_writes_open(connection)
+            await connection.execute(knowledge_generation_records.update().where(
+                knowledge_generation_records.c.generation_id == generation_id,
+                knowledge_generation_records.c.source_id == source_id,
+            ).values(tombstoned=False, updated_at=datetime.now(timezone.utc)))
+
     async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int: ...
     async def get_generation(self, generation_id: str, source_id: str) -> dict[str, Any] | None: ...
     async def delete_generation(self, generation_id: str) -> int: ...
@@ -279,6 +289,11 @@ class InMemoryKnowledgeStore:
         record = self._generation_records.get(generation_id, {}).get(source_id)
         if record is not None:
             record["tombstoned"] = True
+
+    async def restore_generation_source(self, generation_id: str, source_id: str) -> None:
+        record = self._generation_records.get(generation_id, {}).get(source_id)
+        if record is not None:
+            record["tombstoned"] = False
 
     async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int:
         records = self._generation_records.get(generation_id, {})
