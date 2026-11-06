@@ -1764,9 +1764,9 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/fence", tags=["index"])
-    async def index_generation_fence(generation_id: str):
+    async def index_generation_fence(generation_id: str, request: Request):
         try:
-            return {"ok": True, **await generation_builder.fence_reconciled_generation(generation_id)}
+            return {"ok": True, **await generation_builder.fence_reconciled_generation(generation_id, request=request)}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
