@@ -1737,6 +1737,53 @@ def create_app(
             reclamation = None
         return {"ok": True, **result, "cleanup": cleanup, "reclamation": reclamation}
 
+    @app.post("/api/v1/index/restorations", tags=["index"])
+    async def index_restore(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        sequence = payload.get("revision_sequence")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
+        source = await active_index_store.get_source(source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="unknown source")
+        if source.get("purged"):
+            raise HTTPException(status_code=409, detail="permanently purged sources cannot be restored")
+        if not source.get("tombstoned"):
+            raise HTTPException(status_code=409, detail="source is not soft-deleted")
+        if sequence <= source.get("high_sequence", 0):
+            raise HTTPException(status_code=400, detail="restore sequence must exceed the current source sequence")
+        try:
+            await active_index_store.assert_generation_writes_open()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if not await active_reclamation_store.cancel(source_id):
+            raise HTTPException(status_code=409, detail="physical reclamation has already started or completed")
+        try:
+            await document_store.restore_source(source_id)
+            await active_knowledge_store.restore(source_id)
+            await active_vector_store.restore_source(source_id)
+            generation_status = await active_index_store.generation_status()
+            for generation in generation_status.get("generations", []):
+                generation_id = generation.get("generation_id")
+                if not generation_id:
+                    continue
+                await document_store.restore_generation_source(generation_id, source_id)
+                await active_knowledge_store.restore_generation_source(generation_id, source_id)
+                await active_vector_store.restore_generation_source(generation_id, source_id)
+            restored = await active_index_store.restore_source(source_id, sequence)
+            await active_reclamation_store.record_audit(
+                source_id, "restored", actor=current_request_scope().principal_id,
+                reason="source restored before physical reclamation",
+                details={"revision_sequence": sequence},
+            )
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="source restoration is incomplete; source remains tombstoned") from exc
+        return {"ok": True, "source": restored, "reclamation": "cancelled"}
+
     @app.get("/api/v1/index/reclamation", tags=["index"])
     async def index_reclamation_status():
         return {"ok": True, "jobs": await active_reclamation_store.status()}
