@@ -128,7 +128,7 @@ class IndexGenerationBuilder:
     async def copy_documents_page(
         self, generation_id: str, *, page_size: int = 500, request: Any = None,
     ) -> dict[str, Any]:
-        if self.document_store is None:
+        if self.document_store is None and self.internal_client is None:
             raise RuntimeError("document store is required for the document generation pass")
         if self.internal_client is not None:
             status = await self.internal_client.request(
@@ -310,7 +310,7 @@ class IndexGenerationBuilder:
     async def copy_vectors_page(
         self, generation_id: str, *, page_size: int = 500, request: Any = None,
     ) -> dict[str, Any]:
-        if self.vector_store is None:
+        if self.vector_store is None and self.internal_client is None:
             raise RuntimeError("vector store is required for the vector generation pass")
         if self.internal_client is not None:
             status = await self.internal_client.request(
@@ -629,7 +629,7 @@ class IndexGenerationBuilder:
     async def copy_memory_page(
         self, generation_id: str, *, page_size: int = 500, request: Any = None,
     ) -> dict[str, Any]:
-        if self.memory_store is None:
+        if self.memory_store is None and self.internal_client is None:
             raise RuntimeError("Memory store is required for the Memory generation pass")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
@@ -712,7 +712,7 @@ class IndexGenerationBuilder:
     async def reconcile_memory_changes_page(
         self, generation_id: str, *, page_size: int = 250, request: Any = None,
     ) -> dict[str, Any]:
-        if self.memory_store is None:
+        if self.memory_store is None and self.internal_client is None:
             raise RuntimeError("Memory store is required for Memory reconciliation")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
@@ -925,7 +925,7 @@ class IndexGenerationBuilder:
     async def reconcile_document_changes_page(
         self, generation_id: str, *, page_size: int = 250, request: Any = None,
     ) -> dict[str, Any]:
-        if self.document_store is None:
+        if self.document_store is None and self.internal_client is None:
             raise RuntimeError("document store is required for document reconciliation")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
@@ -1055,7 +1055,7 @@ class IndexGenerationBuilder:
     async def reconcile_vector_changes_page(
         self, generation_id: str, *, page_size: int = 250, request: Any = None,
     ) -> dict[str, Any]:
-        if self.vector_store is None:
+        if self.vector_store is None and self.internal_client is None:
             raise RuntimeError("vector store is required for vector reconciliation")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
@@ -1178,7 +1178,7 @@ class IndexGenerationBuilder:
     async def copy_knowledge_page(
         self, generation_id: str, *, page_size: int = 500, request: Any = None,
     ) -> dict[str, Any]:
-        if self.knowledge_store is None:
+        if self.knowledge_store is None and self.internal_client is None:
             raise RuntimeError("Knowledge store is required for the generation pass")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
@@ -1314,7 +1314,7 @@ class IndexGenerationBuilder:
     async def reconcile_knowledge_changes_page(
         self, generation_id: str, *, page_size: int = 250, request: Any = None,
     ) -> dict[str, Any]:
-        if self.knowledge_store is None:
+        if self.knowledge_store is None and self.internal_client is None:
             raise RuntimeError("Knowledge store is required for reconciliation")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
