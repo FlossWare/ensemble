@@ -47,6 +47,13 @@ def test_index_generation_source_copy_uses_internal_rest_contracts():
         assert documents.json()["status"] == "complete"
         assert documents.json()["source_count"] == 2
 
+        vectors = client.post(
+            "/api/v1/index/generations/generation-rest-copy/copy/vectors",
+            json={"page_size": 10},
+        )
+        assert vectors.status_code == 200
+        assert vectors.json()["status"] == "complete"
+
         changed = client.post("/api/v1/index/revisions", json={
             "source_id": "source-a",
             "revision_sequence": 2,
@@ -76,6 +83,7 @@ def test_index_generation_source_copy_uses_internal_rest_contracts():
         )
         assert generation["checkpoints"]["index"]["sealed"] is True
         assert generation["checkpoints"]["documents"]["sealed"] is True
+        assert generation["checkpoints"]["vectors"]["sealed"] is True
 
     copied_a = asyncio.run(index_store.get_generation_source("generation-rest-copy", "source-a"))
     copied_b = asyncio.run(index_store.get_generation_source("generation-rest-copy", "source-b"))
