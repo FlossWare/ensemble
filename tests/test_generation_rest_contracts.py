@@ -24,6 +24,15 @@ def test_index_generation_source_copy_uses_internal_rest_contracts():
 
     app = create_app(store=InMemoryDocumentStore(), index_store=index_store, knowledge_store=knowledge_store)
     with TestClient(app) as client:
+        initial_document = client.post("/api/v1/documents/records", json={
+            "document": {
+                "source_id": "source-a", "revision": 1, "title": "Source A",
+                "content": "initial document generation fixture",
+            },
+            "embed": False,
+        })
+        assert initial_document.status_code == 200
+
         first = client.post(
             "/api/v1/index/generations/generation-rest-copy/copy/index",
             json={"page_size": 1},
@@ -104,12 +113,20 @@ def test_index_generation_source_copy_uses_internal_rest_contracts():
         assert reconciled.json()["status"] == "caught_up"
         assert reconciled.json()["change_count"] == 1
 
+        updated_document = client.post("/api/v1/documents/records", json={
+            "document": {
+                "source_id": "source-a", "revision": 2, "title": "Source A",
+                "content": "updated document generation fixture",
+            },
+            "embed": False,
+        })
+        assert updated_document.status_code == 200
         documents_reconciled = client.post(
             "/api/v1/index/generations/generation-rest-copy/reconcile/documents",
             json={"page_size": 10},
         )
-        assert documents_reconciled.status_code == 409
-        assert "no active document chunks" in documents_reconciled.json()["detail"]
+        assert documents_reconciled.status_code == 200
+        assert documents_reconciled.json()["status"] == "caught_up"
 
         vectors_reconciled = client.post(
             "/api/v1/index/generations/generation-rest-copy/reconcile/vectors",
@@ -136,6 +153,12 @@ def test_index_generation_source_copy_uses_internal_rest_contracts():
         )
         assert knowledge_reconciled.status_code == 200
         assert knowledge_reconciled.json()["status"] == "caught_up"
+
+        fenced = client.post("/api/v1/index/generations/generation-rest-copy/fence")
+        assert fenced.status_code == 200
+        activated = client.post("/api/v1/index/generations/generation-rest-copy/activate")
+        assert activated.status_code == 200
+        assert activated.json()["active_generation_id"] == "generation-rest-copy"
 
         status = client.get("/api/v1/index/generations")
         generation = next(
