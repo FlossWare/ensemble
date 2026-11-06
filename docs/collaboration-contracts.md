@@ -32,7 +32,7 @@ A project has a stable identifier, name, description, owner, and a `human_approv
 
 ## Contributions and activity
 
-`POST /api/v1/collaboration/projects/{project_id}/contributions` creates an independently addressable contribution with actor, type, concise summary, optional work-item identifier, optional stable source reference, and review status. The server assigns a stable contribution ID and timestamps. Concurrent writes do not overwrite one another.
+`POST /api/v1/collaboration/projects/{project_id}/contributions` creates an independently addressable contribution with actor, type, concise summary, optional work-item identifier, optional stable source reference, and initial unreviewed status. Contributors cannot self-assert review outcomes. `POST /api/v1/collaboration/contributions/{contribution_id}/review` requires a reviewer/approver role and appends a separate attributable review event while updating the current review status. The server assigns a stable contribution ID and timestamps. Concurrent writes do not overwrite one another.
 
 `GET /api/v1/collaboration/projects/{project_id}/contributions` supports actor, status, and bounded-limit filters. `GET /api/v1/collaboration/projects/{project_id}/activity` provides the project-scoped chronological activity ledger and supports actor, record-kind, status, and limit filters. Git/GitHub artifacts are linked by reference; their full canonical content is not copied.
 
