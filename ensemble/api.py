@@ -1999,7 +1999,7 @@ def create_app(
         return {"ok": True, **result, "cleanup": cleanup, "reclamation": reclamation}
 
     @app.post("/api/v1/index/restorations", tags=["index"])
-    async def index_restore(payload: dict[str, Any]):
+    async def index_restore(payload: dict[str, Any], request: Request):
         source_id = payload.get("source_id")
         sequence = payload.get("revision_sequence")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
@@ -2015,33 +2015,63 @@ def create_app(
             raise HTTPException(status_code=409, detail="source is not soft-deleted")
         if sequence <= source.get("high_sequence", 0):
             raise HTTPException(status_code=400, detail="restore sequence must exceed the current source sequence")
-        reclamation_job = await active_reclamation_store.get_job(source_id)
+
+        internal = InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+        })
+        reclamation_job = (await internal.request(
+            "POST", "/api/v1/index/reclamation/jobs/query", request=request,
+            json={"source_id": source_id},
+        )).get("job")
         if reclamation_job and reclamation_job.get("erasure_required"):
             raise HTTPException(status_code=409, detail="legally required erasure cannot be restored")
         try:
             await active_index_store.assert_generation_writes_open()
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if not await active_reclamation_store.cancel(source_id):
+        cancelled = await internal.request(
+            "POST", "/api/v1/index/reclamation/jobs/cancel", request=request,
+            json={"source_id": source_id},
+        )
+        if not cancelled.get("cancelled"):
             raise HTTPException(status_code=409, detail="physical reclamation has already started or completed")
         try:
-            await document_store.restore_source(source_id)
-            await active_knowledge_store.restore(source_id)
-            await active_vector_store.restore_source(source_id)
             generation_status = await active_index_store.generation_status()
             generation_id = generation_status.get("active_generation_id")
-            if generation_id:
-                await document_store.restore_generation_source(generation_id, source_id)
-                await active_knowledge_store.restore_generation_source(generation_id, source_id)
-                await active_vector_store.restore_generation_source(generation_id, source_id)
+            capability_payload = {"source_id": source_id, "generation_id": generation_id}
+            await internal.request(
+                "POST", "/api/v1/documents/sources/restore", request=request,
+                json=capability_payload,
+            )
+            await internal.request(
+                "POST", "/api/v1/knowledge/sources/restore", request=request,
+                json=capability_payload,
+            )
+            await internal.request(
+                "POST", "/api/v1/vector/sources/restore", request=request,
+                json=capability_payload,
+            )
             restored = await active_index_store.restore_source(source_id, sequence)
             if generation_id:
-                await active_index_store.acknowledge_generation_change(source_id, sequence, False)
-            await active_reclamation_store.record_audit(
-                source_id, "restored", actor=current_request_scope().principal_id,
-                reason="source restored before physical reclamation",
-                details={"revision_sequence": sequence},
+                await internal.request(
+                    "POST", "/api/v1/index/generation-changes/acknowledgements",
+                    request=request,
+                    json={"source_id": source_id, "revision_sequence": sequence, "tombstoned": False},
+                )
+            await internal.request(
+                "POST", "/api/v1/index/reclamation/audit", request=request,
+                json={
+                    "source_id": source_id, "event": "restored",
+                    "actor": current_request_scope().principal_id,
+                    "reason": "source restored before physical reclamation",
+                    "details": {"revision_sequence": sequence},
+                },
             )
+        except HTTPException:
+            raise
         except (KeyError, ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
