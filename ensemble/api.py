@@ -1588,6 +1588,28 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, **result}
 
+    @app.get("/api/v1/index/generations/{generation_id}/changes/high-watermark", tags=["index"])
+    async def index_generation_changes_high_watermark(generation_id: str):
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id for item in status["generations"]):
+            raise HTTPException(status_code=404, detail="unknown generation")
+        return {"high_watermark": await active_index_store.generation_change_high_watermark(generation_id)}
+
+    @app.post("/api/v1/index/generations/{generation_id}/changes/page", tags=["index"])
+    async def index_generation_changes_page(generation_id: str, payload: dict[str, Any]):
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id for item in status["generations"]):
+            raise HTTPException(status_code=404, detail="unknown generation")
+        after_change_id = payload.get("after_change_id", 0)
+        limit = payload.get("limit", 500)
+        if isinstance(after_change_id, bool) or not isinstance(after_change_id, int) or after_change_id < 0:
+            raise HTTPException(status_code=400, detail="after_change_id must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 10000")
+        return {"changes": await active_index_store.list_generation_changes_after(
+            generation_id, after_change_id, limit,
+        )}
+
     @app.post("/api/v1/index/generations/{generation_id}/checkpoints", tags=["index"])
     async def index_generation_checkpoint_record(generation_id: str, payload: dict[str, Any]):
         try:
@@ -1645,10 +1667,10 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/reconcile/index", tags=["index"])
-    async def index_generation_reconcile_index(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_reconcile_index(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.reconcile_index_changes_page(
-                generation_id, page_size=payload.get("page_size", 250),
+                generation_id, page_size=payload.get("page_size", 250), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
