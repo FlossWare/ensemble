@@ -115,6 +115,15 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
         assert refreshed.json()["synthesis"]["id"] != synthesis.json()["synthesis"]["id"]
         assert refreshed.json()["synthesis"]["payload"]["supersedes_id"] == synthesis.json()["synthesis"]["id"]
 
+        gate_bypass = client.post(f"/api/v1/collaboration/projects/{project_id}/proposals", json={
+            "actor_id": "agent:assistant",
+            "title": "Attempt to bypass gate",
+            "summary": "This proposal attempts to disable the project gate.",
+            "rationale": "It must be rejected by policy.",
+            "human_approval_required": False,
+        })
+        assert gate_bypass.status_code == 400
+
         proposal = client.post(f"/api/v1/collaboration/projects/{project_id}/proposals", json={
             "actor_id": "agent:assistant",
             "title": "Adopt the new contract",
