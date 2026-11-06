@@ -246,3 +246,9 @@ The following implementation work is now present on the PR branch. It remains su
 - The Control Center now includes participant/project setup, membership, contributions, handoffs/checkpoints, synthesis, proposal, decision, and activity controls. The full collaboration contracts are documented in [collaboration-contracts.md](collaboration-contracts.md).
 
 The new tests cover deletion metadata and retention persistence, audit history across restart, cancellation/restoration boundaries, generation materialization restoration, collaboration persistence across restart, concurrent contribution writes, concurrent handoff transitions, incremental checkpoints, synthesis refresh and strategy injection, proposal objections and provenance, human approval enforcement, and Control Center JavaScript syntax through the existing workflow. CI verification is still required before issue closure.
+
+
+## Generic contract audit
+
+See [generic-contract-audit.md](generic-contract-audit.md) for the implemented Python generic strategy/decorator contracts, the foundational store protocol audit, and the explicit Java-source boundary. No Java implementation is invented because this repository contains no Java source or build module.
+
