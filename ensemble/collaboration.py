@@ -359,7 +359,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         try:
             member = await store.create(
                 "membership", {"participant_id": member_id, "role": role},
-                project_id=project_id, actor_id=member_id,
+                project_id=project_id, actor_id=actor,
                 identity_key=f"{project_id}:{member_id}",
             )
         except ValueError as exc:
