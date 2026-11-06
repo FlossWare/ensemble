@@ -1648,28 +1648,28 @@ def create_app(
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
-            actor = payload.get("actor")
-            scope = current_request_scope()
-            if scope.authorization and actor is not None and actor != scope.principal_id:
-                raise HTTPException(status_code=403, detail="actor must match the authenticated principal")
-            if actor is None:
-                actor = scope.principal_id
-            reason = payload.get("reason")
-            retain_until_value = payload.get("retain_until")
-            if actor is not None and (not isinstance(actor, str) or not actor.strip() or len(actor) > 256):
-                raise HTTPException(status_code=400, detail="actor must be a non-empty string of at most 256 characters")
-            if reason is not None and (not isinstance(reason, str) or len(reason) > 4000):
-                raise HTTPException(status_code=400, detail="reason must be a string of at most 4000 characters")
-            retain_until = None
-            if retain_until_value is not None:
-                if not isinstance(retain_until_value, str):
-                    raise HTTPException(status_code=400, detail="retain_until must be an ISO-8601 timestamp")
-                try:
-                    retain_until = datetime.fromisoformat(retain_until_value.replace("Z", "+00:00"))
-                    if retain_until.tzinfo is None:
-                        raise ValueError("timezone required")
-                except ValueError as exc:
-                    raise HTTPException(status_code=400, detail="retain_until must be a timezone-aware ISO-8601 timestamp") from exc
+        actor = payload.get("actor")
+        scope = current_request_scope()
+        if scope.authorization and actor is not None and actor != scope.principal_id:
+            raise HTTPException(status_code=403, detail="actor must match the authenticated principal")
+        if actor is None:
+            actor = scope.principal_id
+        reason = payload.get("reason")
+        retain_until_value = payload.get("retain_until")
+        if actor is not None and (not isinstance(actor, str) or not actor.strip() or len(actor) > 256):
+            raise HTTPException(status_code=400, detail="actor must be a non-empty string of at most 256 characters")
+        if reason is not None and (not isinstance(reason, str) or len(reason) > 4000):
+            raise HTTPException(status_code=400, detail="reason must be a string of at most 4000 characters")
+        retain_until = None
+        if retain_until_value is not None:
+            if not isinstance(retain_until_value, str):
+                raise HTTPException(status_code=400, detail="retain_until must be an ISO-8601 timestamp")
+            try:
+                retain_until = datetime.fromisoformat(retain_until_value.replace("Z", "+00:00"))
+                if retain_until.tzinfo is None:
+                    raise ValueError("timezone required")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="retain_until must be a timezone-aware ISO-8601 timestamp") from exc
         result = await active_index_store.record_tombstone(source_id, sequence)
         if result["decision"] == "tombstoned":
             try:
