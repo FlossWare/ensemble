@@ -577,13 +577,14 @@ def create_app(
             await active_transcript_store.initialize()
             await active_reclamation_store.initialize()
             await active_crawl_store.initialize()
-            # Each partition has its own SQLite database. Recovering only the
-            # default scope leaves stale transcript checkpoints and crawl jobs
-            # in authenticated partitions stuck after a process restart.
+            # Transcript ingestion is request-owned and does not yet have a
+            # renewable lease. Do not mark its running jobs interrupted during
+            # every replica startup; that would disrupt another live instance.
+            # Crawl workers do have renewable leases, so recover expired jobs
+            # independently in every configured partition.
             for partition_id in _configured_worker_partitions():
                 recovery_scope = set_request_scope(RequestScope(partition_id=partition_id))
                 try:
-                    await active_transcript_store.recover_interrupted()
                     await active_crawl_store.recover_interrupted()
                 finally:
                     reset_request_scope(recovery_scope)
