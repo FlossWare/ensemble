@@ -802,9 +802,9 @@ class IndexGenerationBuilder:
                 "page_count": len(page), "change_count": change_count,
                 "cursor": next_cursor, "high_watermark": high_watermark}
 
-    async def fence_reconciled_generation(self, generation_id: str) -> dict[str, Any]:
+    async def fence_reconciled_generation(self, generation_id: str, request: Any = None) -> dict[str, Any]:
         if self.internal_client is not None:
-            status = await self.internal_client.request("GET", "/api/v1/index/generations")
+            status = await self.internal_client.request("GET", "/api/v1/index/generations", request=request)
             generation = next(
                 (item for item in status["generations"] if item["generation_id"] == generation_id),
                 None,
@@ -821,10 +821,10 @@ class IndexGenerationBuilder:
                 if (checkpoints.get(capability) or {}).get("sealed") is not True:
                     raise RuntimeError(f"{capability} source copy must be sealed before final write fencing")
             high_watermark = (await self.internal_client.request(
-                "GET", f"/api/v1/index/generations/{generation_id}/changes/high-watermark",
+                "GET", f"/api/v1/index/generations/{generation_id}/changes/high-watermark", request=request,
             )).get("high_watermark", 0)
             memory_high_watermark = (await self.internal_client.request(
-                "GET", f"/api/v1/memory/generations/{generation_id}/changes/high-watermark",
+                "GET", f"/api/v1/memory/generations/{generation_id}/changes/high-watermark", request=request,
             )).get("high_watermark", 0)
             reconciliation_values = {}
             for capability in reconciliation_capabilities:
@@ -836,13 +836,13 @@ class IndexGenerationBuilder:
                     raise RuntimeError(f"{capability} is not caught up to its generation change journal")
                 reconciliation_values[capability] = (value, expected)
             pending_memory = (await self.internal_client.request(
-                "GET", f"/api/v1/memory/generations/{generation_id}/changes/pending",
+                "GET", f"/api/v1/memory/generations/{generation_id}/changes/pending", request=request,
             )).get("pending", 0)
             if pending_memory:
                 raise RuntimeError("unacknowledged Memory changes remain; reconcile before fencing")
             fence = await self.internal_client.request(
                 "POST", f"/api/v1/index/generations/{generation_id}/write-fence/acquire",
-                json={"through_change_id": high_watermark},
+                request=request, json={"through_change_id": high_watermark},
             )
             try:
                 memory_after_fence = (await self.internal_client.request(
@@ -857,7 +857,7 @@ class IndexGenerationBuilder:
                 for capability, (value, expected) in reconciliation_values.items():
                     await self.internal_client.request(
                         "POST", f"/api/v1/index/generations/{generation_id}/checkpoints",
-                        json={
+                        request=request, json={
                             "capability": capability,
                             "checkpoint": {**value, "cursor": expected, "observed_high_watermark": expected},
                             "sealed": True,
@@ -865,7 +865,7 @@ class IndexGenerationBuilder:
                     )
             except Exception:
                 await self.internal_client.request(
-                    "POST", f"/api/v1/index/generations/{generation_id}/write-fence/release",
+                    "POST", f"/api/v1/index/generations/{generation_id}/write-fence/release", request=request,
                 )
                 raise
             return fence
