@@ -626,7 +626,9 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
             if contribution is None or contribution["project_id"] != project_id:
                 raise HTTPException(status_code=400, detail="proposal contribution_ids must belong to this project")
         project_policy = (await project(project_id))["payload"].get("human_approval_required", True)
-        gated = payload.get("human_approval_required", project_policy)
+        gated = payload.get("human_approval_required")
+        if gated is None:
+            gated = project_policy
         if not isinstance(gated, bool):
             raise HTTPException(status_code=400, detail="human_approval_required must be a boolean")
         if project_policy and not gated:
