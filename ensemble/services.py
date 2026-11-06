@@ -258,6 +258,7 @@ class SearchService:
         self, store: DocumentStore, embeddings: EmbeddingProvider,
         reranker: Reranker | None = None, vector_store: VectorStore | None = None,
         index_store: object | None = None, thompson_store: object | None = None,
+        internal_client: InternalRestClient | None = None,
     ):
         self.store = store
         self.embeddings = embeddings
@@ -265,6 +266,7 @@ class SearchService:
         self.vector_store = vector_store
         self.index_store = index_store
         self.thompson_store = thompson_store
+        self.internal_client = internal_client
         self.rrf_k = _rrf_constant()
         self.rrf_weights = _rrf_weights()
         self.rrf_weight_strategy = os.getenv("ENSEMBLE_RRF_WEIGHT_STRATEGY", "static").strip().lower()
@@ -273,9 +275,9 @@ class SearchService:
         provider = configured_ranking_provider(reranker)
         self.search_with_status = RerankingDecorator(provider)(self._search_with_status)
 
-    async def lexical_search(self, query: str, limit: int = 10) -> list[SearchHit]:
+    async def lexical_search(self, query: str, limit: int = 10, request: Any = None) -> list[SearchHit]:
         candidates = await self.search_with_status(
-            query, min(2000, limit * 4), include_vector=False, rerank=False
+            query, min(2000, limit * 4), include_vector=False, rerank=False, request=request,
         )
         seen: set[str] = set()
         unique: list[SearchHit] = []
@@ -289,12 +291,13 @@ class SearchService:
                 break
         return unique
 
-    async def search(self, query: str, limit: int = 10) -> list[SearchHit]:
-        return (await self.search_with_status(query, limit))["results"]
+    async def search(self, query: str, limit: int = 10, request: Any = None) -> list[SearchHit]:
+        return (await self.search_with_status(query, limit, request=request))["results"]
 
     async def _search_with_status(
         self, query: str, limit: int = 10, *, include_vector: bool = True,
         rerank: bool | None = None, trace: object | None = None,
+        request: Any = None,
     ) -> dict:
         if not query.strip():
             raise ValueError("query is required")
@@ -313,8 +316,15 @@ class SearchService:
                 pass
 
         active_generation_id = None
-        if self.index_store is not None:
+        if self.internal_client is not None:
+            status_snapshot = await self.internal_client.request(
+                "GET", "/api/v1/index/generations", request=request,
+            )
+        elif self.index_store is not None:
             status_snapshot = await self.index_store.generation_status()
+        else:
+            status_snapshot = None
+        if status_snapshot is not None:
             active_id = status_snapshot.get("active_generation_id")
             active_row = next((item for item in status_snapshot.get("generations", [])
                                if item.get("generation_id") == active_id), None)
@@ -395,18 +405,32 @@ class SearchService:
                         raise RuntimeError("embedding provider returned a non-finite query vector")
 
                     collection_scores: dict = {}
-                    if self.vector_store is not None:
+                    if self.vector_store is not None or self.internal_client is not None:
                         collection_started = time.perf_counter()
                         try:
-                            vector_operation = (
-                                self.vector_store.query_generation(
-                                    active_generation_id, "transcript_text", query_vector, 200,
-                                ) if active_generation_id is not None else
-                                self.vector_store.query("transcript_text", query_vector, 200)
-                            )
-                            vector_hits = await asyncio.wait_for(
-                                vector_operation, timeout=_retrieval_channel_timeout(),
-                            )
+                            if self.internal_client is not None:
+                                vector_operation = self.internal_client.request(
+                                    "POST", "/api/v1/vector/collections/transcript_text/query",
+                                    request=request,
+                                    json={
+                                        "embedding": list(query_vector), "limit": 200,
+                                        "generation_id": active_generation_id,
+                                    },
+                                )
+                                vector_response = await asyncio.wait_for(
+                                    vector_operation, timeout=_retrieval_channel_timeout(),
+                                )
+                                vector_hits = vector_response.get("results", [])
+                            else:
+                                vector_operation = (
+                                    self.vector_store.query_generation(
+                                        active_generation_id, "transcript_text", query_vector, 200,
+                                    ) if active_generation_id is not None else
+                                    self.vector_store.query("transcript_text", query_vector, 200)
+                                )
+                                vector_hits = await asyncio.wait_for(
+                                    vector_operation, timeout=_retrieval_channel_timeout(),
+                                )
                             known_ids = {str(item.chunk.id): item.chunk.id for item in indexed}
                             collection_scores = {
                                 known_ids[hit["id"]]: float(hit["score"])
@@ -506,8 +530,13 @@ class SearchService:
         }
         selected_weights = dict(self.rrf_weights)
         weight_strategy = "static"
-        if self.rrf_weight_strategy == "thompson" and self.thompson_store is not None:
-            state = await self.thompson_store.get_state()
+        if self.rrf_weight_strategy == "thompson" and (self.thompson_store is not None or self.internal_client is not None):
+            if self.internal_client is not None:
+                state = (await self.internal_client.request(
+                    "GET", "/api/v1/thompson/state", request=request,
+                )).get("state", {})
+            else:
+                state = await self.thompson_store.get_state()
             model_stats = state.get("models", {})
             feedback = {
                 channel: model_stats.get(f"retrieval:{channel}", {})
