@@ -462,3 +462,20 @@ def test_sqlite_deletion_audit_is_append_only_and_survives_restart(tmp_path):
         await second.close()
 
     asyncio.run(exercise())
+
+
+
+def test_pending_reclamation_can_be_cancelled_for_soft_deleted_source_restore():
+    queue = InMemoryReclamationStore()
+
+    async def exercise():
+        await queue.enqueue("restore-before-purge")
+        assert await queue.cancel("restore-before-purge") is True
+        assert await queue.claim_due(10) == []
+        assert (await queue.status())["cancelled"] == 1
+
+        await queue.enqueue("already-running")
+        assert len(await queue.claim_due(10)) == 1
+        assert await queue.cancel("already-running") is False
+
+    asyncio.run(exercise())
