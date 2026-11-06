@@ -40,7 +40,7 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 <div class="app-shell">
 <aside class="sidebar" aria-label="Control Center navigation">
 <div class="nav-label">Workspace</div><nav>
-<a href="#platform-status">Overview</a><a href="#retrieval-explorer">Retrieval</a><a href="#memory-inspector">Intelligence</a><a href="#graph-workbench">Knowledge Graph</a><a href="#pipeline-inspector">Pipelines</a><a href="#ga-panel">Experiments</a>
+<a href="#platform-status">Overview</a><a href="#retrieval-explorer">Retrieval</a><a href="#memory-inspector">Intelligence</a><a href="#graph-workbench">Knowledge Graph</a><a href="#pipeline-inspector">Pipelines</a><a href="#collaboration-panel">Collaboration</a><a href="#ga-panel">Experiments</a>
 </nav><div class="nav-label">Administration</div><nav>
 <a href="#index-inspector">Index &amp; Vectors</a><a href="#runtime-config">Runtime</a><a href="#partition-session">Partition session</a>
 </nav></aside><main class="main-content">
@@ -254,6 +254,72 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 <div id="learning-outcomes"></div>
 <h3>Portable artifacts</h3>
 <div id="learning-artifacts"></div>
+</section>
+<section id="collaboration-panel">
+<h2>Project Collaboration</h2>
+<p class="muted">Provider-neutral participants, attributable contributions, resumable handoffs, project synthesis, proposals, and auditable decisions. This is continuity data, not an agent scheduler.</p>
+<h3>Participants and projects</h3>
+<form id="collab-participant-form">
+<input id="collab-participant-id" type="text" maxlength="256" placeholder="Participant ID (optional)">
+<input id="collab-participant-name" type="text" maxlength="256" required placeholder="Display name">
+<select id="collab-participant-type"><option value="human">Human</option><option value="agent">Agent</option></select>
+<input id="collab-provider" type="text" maxlength="128" placeholder="Provider (optional)">
+<input id="collab-model" type="text" maxlength="256" placeholder="Model (optional)">
+<button type="submit">Create participant</button>
+</form>
+<form id="collab-project-form">
+<input id="collab-project-name" type="text" maxlength="256" required placeholder="Project name">
+<input id="collab-owner-id" type="text" maxlength="256" required placeholder="Owner participant ID">
+<label><input id="collab-human-gate" type="checkbox" checked> Require human approval for final decisions</label>
+<button type="submit">Create project</button>
+</form>
+<h3>Active project context</h3>
+<div class="toolbar">
+<input id="collab-project-id" type="text" maxlength="128" placeholder="Project ID">
+<input id="collab-actor-id" type="text" maxlength="256" placeholder="Actor participant ID">
+<input id="collab-recipient-id" type="text" maxlength="256" placeholder="Handoff recipient ID (optional)">
+<button id="collab-refresh" type="button">Refresh activity</button>
+<button id="collab-synthesize" type="button">Generate synthesis</button>
+</div>
+<h3>Contributions</h3>
+<form id="collab-contribution-form">
+<input id="collab-contribution-kind" type="text" maxlength="64" value="implementation" required placeholder="Contribution type">
+<input id="collab-work-item" type="text" maxlength="256" placeholder="Work item / issue">
+<input id="collab-source-ref" type="text" maxlength="2048" placeholder="Commit, PR, document, or artifact reference">
+<input id="collab-contribution-summary" type="text" maxlength="4000" required placeholder="What changed and why">
+<button type="submit">Record contribution</button>
+</form>
+<h3>Work handoffs and checkpoints</h3>
+<form id="collab-handoff-form">
+<input id="collab-handoff-objective" type="text" maxlength="4000" required placeholder="Objective">
+<input id="collab-handoff-state" type="text" maxlength="8000" required placeholder="Current state">
+<input id="collab-handoff-completed" type="text" maxlength="8000" placeholder="Completed work">
+<input id="collab-handoff-blockers" type="text" placeholder="Blockers, comma-separated">
+<input id="collab-handoff-next" type="text" placeholder="Next actions, comma-separated">
+<input id="collab-handoff-refs" type="text" placeholder="References, comma-separated">
+<button type="submit">Create handoff</button>
+</form>
+<div class="toolbar">
+<input id="collab-handoff-id" type="text" maxlength="64" placeholder="Handoff ID for checkpoint / transition">
+<button id="collab-handoff-checkpoint" type="button">Save incremental checkpoint</button>
+<button id="collab-handoff-ack" type="button">Acknowledge</button>
+<button id="collab-handoff-complete" type="button">Complete</button>
+</div>
+<h3>Proposals and decisions</h3>
+<form id="collab-proposal-form">
+<input id="collab-proposal-title" type="text" maxlength="256" required placeholder="Proposal title">
+<input id="collab-proposal-summary" type="text" maxlength="4000" required placeholder="Proposal summary">
+<input id="collab-proposal-rationale" type="text" maxlength="8000" required placeholder="Rationale">
+<input id="collab-proposal-objections" type="text" placeholder="Known objections, comma-separated">
+<button type="submit">Create proposal</button>
+</form>
+<div class="toolbar">
+<input id="collab-proposal-id" type="text" maxlength="64" placeholder="Proposal ID">
+<select id="collab-decision-status"><option value="under_review">Under review</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option><option value="superseded">Superseded</option></select>
+<input id="collab-decision-rationale" type="text" maxlength="8000" placeholder="Decision rationale">
+<button id="collab-decide" type="button">Record decision</button>
+</div>
+<pre id="collab-results">No collaboration activity loaded.</pre>
 </section>
 </main></div>
 <script src="/control.js"></script>
