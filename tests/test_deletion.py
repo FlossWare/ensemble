@@ -51,7 +51,10 @@ def test_deferred_and_immediate_strategies_preserve_durable_queueing():
         context = DeletionContext("source-1")
         deferred = await DeferredReclamationStrategy(queue).execute(context)
         assert deferred.state == "queued"
-        assert deferred.value == {"source_id": "source-1", "state": "pending"}
+        assert deferred.value["source_id"] == "source-1"
+        assert deferred.value["state"] == "pending"
+        assert deferred.value["reason"] is None
+        assert deferred.value["actor"] is None
 
         drained = []
         async def drain():
