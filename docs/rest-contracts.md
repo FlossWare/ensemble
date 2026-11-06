@@ -118,6 +118,7 @@ When a key is unset, requests for that capability use the co-located ASGI transp
 | GET | /api/v1/index/health, /ready | Index capability status |
 | POST | /api/v1/index/revisions | Record a revision and return accepted/duplicate/conflict/superseded/tombstoned decision |
 | POST | /api/v1/index/tombstones | Permanently tombstone a source at a revision sequence |
+| GET | /api/v1/index/reclamation, POST /api/v1/index/reclamation/run | Inspect or explicitly run durable physical reclamation jobs |
 | GET | /api/v1/index/sources/{source_id}, /manifest | Read source state and bounded source manifest |
 | POST | /api/v1/index/sources/query | Read current source state for a bounded set of source identifiers |
 | POST | /api/v1/documents/chunks/query | Read chunks for a bounded set of source identifiers with document and chunk provenance |
@@ -204,6 +205,18 @@ This contract exposes existing session history and supports controlled appends. 
 - `POST /api/v1/graph/traverse` performs bounded directional traversal.
 
 Node and edge mutations use resource names and HTTP methods. Query and traversal remain explicit domain operations because they describe graph computations rather than CRUD resources.
+
+
+
+### Source deletion lifecycle metadata
+
+`POST /api/v1/index/tombstones` accepts optional `actor`, `reason`, and `retain_until` fields in addition to `source_id` and `revision_sequence`.
+
+- `actor` is a bounded contributor identifier. When bearer authentication is enabled, the server derives attribution from the authenticated principal and rejects a conflicting caller-supplied actor. In local mode, callers may supply an explicit actor; otherwise the actor is `local`.
+- `reason` is an optional bounded explanation for the deletion.
+- `retain_until` is an optional timezone-aware ISO-8601 timestamp. The reclamation job is durably scheduled with this deadline as its earliest eligible execution time. The deadline survives process restarts.
+- The reclamation ledger retains actor, reason, request time, retention deadline, retry state, and completion time. Logical tombstoning remains immediate; retention delays only physical reclamation.
+- Physical reclamation remains idempotent and retryable. The authoritative Index tombstone is retained after derived payloads are purged.
 
 ## 9. Search and reranking security
 
