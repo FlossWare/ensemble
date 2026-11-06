@@ -374,3 +374,43 @@ def test_handoff_superseding_preserves_original_and_records_replacement_link():
         assert result.json()["replacement"]["payload"]["supersedes_id"] == first["id"]
         original = client.get(f"/api/v1/collaboration/handoffs/{first['id']}")
         assert len(original.json()["history"]) == 2
+
+
+
+def test_sqlite_collaboration_concurrent_contributions_and_handoff_compare_and_swap(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'collaboration-concurrency.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    store = SqliteCollaborationStore(database_url)
+
+    async def exercise():
+        await store.initialize()
+        project = await store.create("project", {"name": "Concurrent SQLite"})
+        async def add(index):
+            return await store.create(
+                "contribution", {"summary": f"durable-{index}"},
+                project_id=project["id"], actor_id=f"agent:{index}",
+            )
+        contributions = await asyncio.gather(*(add(index) for index in range(24)))
+        listed = await store.list("contribution", project_id=project["id"], limit=100)
+        assert len(contributions) == len(listed) == 24
+
+        handoff = await store.create(
+            "handoff", {"objective": "race-safe"}, project_id=project["id"],
+            actor_id="human:owner", status="open",
+        )
+        async def transition(status):
+            return await store.update(
+                "handoff", handoff["id"], expected_version=1,
+                payload={"objective": "race-safe", "transition": status},
+                status=status,
+            )
+        results = await asyncio.gather(
+            transition("acknowledged"),
+            transition("superseded"),
+        )
+        assert (results[0] is None) != (results[1] is None)
+        await store.close()
+
+    asyncio.run(exercise())
