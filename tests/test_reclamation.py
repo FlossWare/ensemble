@@ -333,3 +333,36 @@ def test_inmemory_generation_document_reclamation_is_bounded():
         ) == 0
 
     asyncio.run(exercise())
+
+
+def test_sqlite_reclamation_claims_are_exclusive_across_workers(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'reclamation-workers.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    first_worker = SqliteReclamationStore(database_url)
+    second_worker = SqliteReclamationStore(database_url)
+
+    async def exercise():
+        await first_worker.initialize()
+        await second_worker.initialize()
+        for index in range(40):
+            await first_worker.enqueue(f"source-{index:02d}")
+
+        first_batch, second_batch = await asyncio.gather(
+            first_worker.claim_due(40),
+            second_worker.claim_due(40),
+        )
+        first_ids = {job["source_id"] for job in first_batch}
+        second_ids = {job["source_id"] for job in second_batch}
+
+        assert first_ids.isdisjoint(second_ids)
+        assert first_ids | second_ids == {
+            f"source-{index:02d}" for index in range(40)
+        }
+        assert len(first_ids) + len(second_ids) == 40
+
+        await first_worker.close()
+        await second_worker.close()
+
+    asyncio.run(exercise())
