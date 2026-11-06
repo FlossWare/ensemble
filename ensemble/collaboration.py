@@ -252,7 +252,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
             raise HTTPException(status_code=403, detail="actor_id must match the authenticated principal")
         return actor
 
-    def viewer_id(value: str, request: Request) -> str:
+    def validated_viewer_id(value: str, request: Request) -> str:
         if not isinstance(value, str) or not value.strip() or len(value) > 256:
             raise HTTPException(status_code=400, detail="viewer_id must be a non-empty participant identifier")
         scope = current_request_scope()
@@ -364,7 +364,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
 
     @router.get("/projects/{project_id}/members")
     async def list_members(project_id: str, viewer_id: str, request: Request, limit: int = 100):
-        await require_role(project_id, viewer_id(viewer_id, request), roles)
+        await require_role(project_id, validated_viewer_id(viewer_id, request), roles)
         return {"ok": True, "members": await store.list("membership", project_id=project_id, limit=limit)}
 
     @router.post("/projects/{project_id}/contributions")
