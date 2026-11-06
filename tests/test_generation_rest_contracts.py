@@ -31,6 +31,28 @@ def test_index_generation_source_copy_uses_internal_rest_contracts():
         assert second.json()["status"] == "complete"
         assert second.json()["source_count"] == 2
 
+        changed = client.post("/api/v1/index/revisions", json={
+            "source_id": "source-a",
+            "revision_sequence": 2,
+            "revision_id": "revision-a2",
+            "profiles": {"profile": "v2"},
+        })
+        assert changed.status_code == 200
+        acknowledged = client.post("/api/v1/index/generation-changes/acknowledgements", json={
+            "source_id": "source-a",
+            "revision_sequence": 2,
+            "tombstoned": False,
+        })
+        assert acknowledged.status_code == 200
+
+        reconciled = client.post(
+            "/api/v1/index/generations/generation-rest-copy/reconcile/index",
+            json={"page_size": 10},
+        )
+        assert reconciled.status_code == 200
+        assert reconciled.json()["status"] == "caught_up"
+        assert reconciled.json()["change_count"] == 1
+
         status = client.get("/api/v1/index/generations")
         generation = next(
             item for item in status.json()["generations"]
