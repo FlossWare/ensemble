@@ -735,6 +735,11 @@ class SqliteIndexStore:
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise ValueError("sequence must be a positive integer")
         async with self.engine.begin() as connection:
+            fence = (await connection.execute(select(generation_write_fence).where(
+                generation_write_fence.c.singleton_id == 1
+            ))).mappings().first()
+            if fence is not None:
+                raise RuntimeError("writes are fenced during generation cutover")
             row = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
             if row is None:
                 raise KeyError("unknown source")
