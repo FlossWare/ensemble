@@ -1645,6 +1645,23 @@ def create_app(
             generation_id, after_change_id, limit,
         )}
 
+    @app.post("/api/v1/index/generations/{generation_id}/write-fence/acquire", tags=["index"])
+    async def index_generation_write_fence_acquire(generation_id: str, payload: dict[str, Any]):
+        through = payload.get("through_change_id")
+        if isinstance(through, bool) or not isinstance(through, int) or through < 0:
+            raise HTTPException(status_code=400, detail="through_change_id must be a non-negative integer")
+        try:
+            return {"ok": True, **await active_index_store.acquire_generation_write_fence(
+                generation_id, through_change_id=through,
+            )}
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/v1/index/generations/{generation_id}/write-fence/release", tags=["index"])
+    async def index_generation_write_fence_release(generation_id: str):
+        await active_index_store.release_generation_write_fence(generation_id)
+        return {"ok": True}
+
     @app.post("/api/v1/index/generations/{generation_id}/checkpoints", tags=["index"])
     async def index_generation_checkpoint_record(generation_id: str, payload: dict[str, Any]):
         try:
