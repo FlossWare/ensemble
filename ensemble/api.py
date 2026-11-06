@@ -252,6 +252,7 @@ def create_app(
     crawl_store: CrawlJobStore | None = None,
     source_schedule_store: SourceScheduleStore | None = None,
     deletion_strategy: DeletionStrategy[DeletionContext, dict[str, Any]] | None = None,
+    collaboration_store: CollaborationStore | None = None,
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
     context_token_counter = configured_context_token_counter()
