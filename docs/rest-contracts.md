@@ -97,6 +97,8 @@ The Index generation builder is an orchestrator. Its source-copy pass reads and 
 | POST | /api/v1/index/generations/{generation_id}/sources/page | Read one ordered source page |
 | PUT | /api/v1/index/generations/{generation_id}/sources | Copy one source into the building generation |
 | POST | /api/v1/index/generations/{generation_id}/checkpoints | Persist progress and seal the Index checkpoint |
+| GET | /api/v1/index/generations/{generation_id}/changes/high-watermark | Read the Index generation journal high-water mark |
+| POST | /api/v1/index/generations/{generation_id}/changes/page | Read an ordered page of Index generation journal entries |
 
 The public generation-copy operation uses these contracts through the internal REST client. This preserves the single-process ASGI deployment while allowing the Index capability to move behind its configured REST base URL.
 
