@@ -251,7 +251,7 @@ def test_api_records_deletion_strategy_audit():
     from ensemble.api import create_app
     from ensemble.store import InMemoryDocumentStore
 
-    with TestClient(create_app(store=InMemoryDocumentStore())) as client:
+    with TestClient(create_app(store=InMemoryDocumentStore(), run_reclamation_worker=False)) as client:
         client.post("/api/v1/index/revisions", json={
             "source_id": "audited-api-source",
             "revision_sequence": 1,
@@ -287,6 +287,7 @@ def test_api_restores_soft_deleted_source_and_cancels_pending_reclamation():
         index_store=InMemoryIndexStore(),
         knowledge_store=InMemoryKnowledgeStore(),
         vector_store=InMemoryVectorStore(),
+        run_reclamation_worker=False,
     )
     with TestClient(app) as client:
         created = client.post("/api/v1/index/revisions", json={
@@ -331,6 +332,7 @@ def test_api_refuses_restore_after_physical_reclamation_has_been_claimed():
         index_store=InMemoryIndexStore(),
         knowledge_store=InMemoryKnowledgeStore(),
         vector_store=InMemoryVectorStore(),
+        run_reclamation_worker=False,
     )
     with TestClient(app) as client:
         client.post("/api/v1/index/revisions", json={
