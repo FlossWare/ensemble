@@ -479,3 +479,48 @@ def test_pending_reclamation_can_be_cancelled_for_soft_deleted_source_restore():
         assert await queue.cancel("already-running") is False
 
     asyncio.run(exercise())
+
+
+
+def test_generation_materializations_remain_restorable_until_physical_purge():
+    from ensemble.knowledge_store import InMemoryKnowledgeStore
+
+    documents = InMemoryDocumentStore()
+    knowledge = InMemoryKnowledgeStore()
+    vectors = InMemoryVectorStore()
+
+    async def exercise():
+        document = Document("restore-generation-source", 1, "Title", "generation payload")
+        await documents.upsert_generation("generation-1", document, [
+            Chunk(document.id, 0, "generation payload", [1.0, 0.0]),
+        ])
+        await knowledge.upsert_generation("generation-1", {
+            "source_id": "restore-generation-source",
+            "title": "Title",
+            "content": "generation payload",
+            "origin": "test",
+            "locator": "test://restore-generation-source",
+            "profiles": {},
+        })
+        await vectors.upsert_generation("generation-1", "restore-vectors", "test-model", 2, [{
+            "id": "restore-vector-1",
+            "embedding": [1.0, 0.0],
+            "document": "generation payload",
+            "metadata": {"source_id": "restore-generation-source"},
+        }])
+
+        await documents.tombstone_generation_source("generation-1", "restore-generation-source")
+        await knowledge.tombstone_generation_source("generation-1", "restore-generation-source")
+        await vectors.tombstone_generation_source("generation-1", "restore-generation-source")
+        assert await documents.generation_all_chunks("generation-1") == []
+        assert (await knowledge.get_generation("generation-1", "restore-generation-source"))["tombstoned"] is True
+        assert await vectors.query_generation("generation-1", "restore-vectors", [1.0, 0.0], 10) == []
+
+        await documents.restore_generation_source("generation-1", "restore-generation-source")
+        await knowledge.restore_generation_source("generation-1", "restore-generation-source")
+        await vectors.restore_generation_source("generation-1", "restore-generation-source")
+        assert len(await documents.generation_all_chunks("generation-1")) == 1
+        assert (await knowledge.get_generation("generation-1", "restore-generation-source"))["tombstoned"] is False
+        assert len(await vectors.query_generation("generation-1", "restore-vectors", [1.0, 0.0], 10)) == 1
+
+    asyncio.run(exercise())
