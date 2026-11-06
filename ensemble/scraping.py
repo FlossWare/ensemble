@@ -329,6 +329,8 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1, *, trace:
             0.0, float(rules.crawl_delay(CRAWLER_AGENT) or rules.crawl_delay("*") or 0)
         ),
     )
+    crawl_delay = rules.crawl_delay(CRAWLER_AGENT) or rules.crawl_delay("*") or 0
+    crawl_delay = max(0.0, float(crawl_delay))
     initial_policy_started = time.perf_counter()
     if not rules.can_fetch(CRAWLER_AGENT, start_uri):
         await record_stage(
@@ -341,6 +343,13 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1, *, trace:
         allowed=True,
     )
 
+    if crawl_delay:
+        delay_started = time.perf_counter()
+        await asyncio.sleep(crawl_delay)
+        await record_stage(
+            "crawl_delay", "completed", delay_started,
+            depth=0, delay_seconds=crawl_delay,
+        )
     first_started = time.perf_counter()
     try:
         first = await preview_uri(start_uri, allowed_origin=origin)
@@ -368,8 +377,6 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1, *, trace:
     skipped = []
     skipped_count = 0
     failures = []
-    crawl_delay = rules.crawl_delay(CRAWLER_AGENT) or rules.crawl_delay("*") or 0
-    crawl_delay = max(0.0, float(crawl_delay))
 
     while queue and attempts < max_pages:
         target, depth = queue.popleft()
