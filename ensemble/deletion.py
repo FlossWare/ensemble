@@ -45,6 +45,8 @@ class DeletionContext:
             raise ValueError("reason must be a string of at most 4000 characters")
         if not isinstance(self.erasure_required, bool):
             raise ValueError("erasure_required must be a boolean")
+        if self.erasure_required and (self.reason is None or not self.reason.strip()):
+            raise ValueError("reason is required when erasure_required is true")
         if self.requested_at is not None and self.requested_at.tzinfo is None:
             raise ValueError("requested_at must be timezone-aware")
         if self.retain_until is not None and self.retain_until.tzinfo is None:
