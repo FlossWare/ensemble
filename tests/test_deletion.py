@@ -266,3 +266,47 @@ def test_api_records_deletion_strategy_audit():
         assert audit.json()["events"][0]["event"] == "strategy_result"
         assert audit.json()["events"][0]["actor"] == "human:operator"
         assert audit.json()["events"][0]["reason"] == "test audit trail"
+
+
+
+def test_api_restores_soft_deleted_source_and_cancels_pending_reclamation():
+    from fastapi.testclient import TestClient
+    from ensemble.api import create_app
+    from ensemble.index_memory import InMemoryIndexStore
+    from ensemble.knowledge_store import InMemoryKnowledgeStore
+    from ensemble.store import InMemoryDocumentStore
+    from ensemble.vector_memory import InMemoryVectorStore
+
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        index_store=InMemoryIndexStore(),
+        knowledge_store=InMemoryKnowledgeStore(),
+        vector_store=InMemoryVectorStore(),
+    )
+    with TestClient(app) as client:
+        created = client.post("/api/v1/index/revisions", json={
+            "source_id": "restore-api-source",
+            "revision_sequence": 1,
+            "revision_id": "revision-1",
+            "profiles": {"chunk": "window-v1"},
+        })
+        assert created.status_code == 200
+        deleted = client.post("/api/v1/index/tombstones", json={
+            "source_id": "restore-api-source",
+            "revision_sequence": 2,
+            "actor": "human:operator",
+            "reason": "reversible deletion test",
+        })
+        assert deleted.status_code == 200
+        assert app.state.reclamation_store._jobs["restore-api-source"]["state"] == "pending"
+
+        restored = client.post("/api/v1/index/restorations", json={
+            "source_id": "restore-api-source",
+            "revision_sequence": 3,
+        })
+        assert restored.status_code == 200
+        assert restored.json()["source"]["tombstoned"] is False
+        assert restored.json()["reclamation"] == "cancelled"
+        assert app.state.reclamation_store._jobs["restore-api-source"]["state"] == "cancelled"
+        audit = client.get("/api/v1/index/sources/restore-api-source/deletion-audit")
+        assert any(item["event"] == "restored" for item in audit.json()["events"])
