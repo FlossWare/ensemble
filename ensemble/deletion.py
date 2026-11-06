@@ -32,6 +32,7 @@ class DeletionContext:
     reason: str | None = None
     requested_at: datetime | None = None
     retain_until: datetime | None = None
+    erasure_required: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_id, str) or not self.source_id or len(self.source_id) > 1024:
@@ -40,6 +41,8 @@ class DeletionContext:
             raise ValueError("actor must be a non-empty string of at most 256 characters")
         if self.reason is not None and (not isinstance(self.reason, str) or len(self.reason) > 4000):
             raise ValueError("reason must be a string of at most 4000 characters")
+        if not isinstance(self.erasure_required, bool):
+            raise ValueError("erasure_required must be a boolean")
         if self.requested_at is not None and self.requested_at.tzinfo is None:
             raise ValueError("requested_at must be timezone-aware")
         if self.retain_until is not None and self.retain_until.tzinfo is None:
@@ -61,7 +64,7 @@ class DeletionStrategy(Protocol[TContext, TValue]):
 
 
 class ReclamationQueue(Protocol):
-    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> ReclamationJob: ...
+    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None, requested_retain_until: datetime | None = None, erasure_required: bool = False) -> ReclamationJob: ...
 
 
 class DeferredReclamationStrategy:
@@ -71,7 +74,7 @@ class DeferredReclamationStrategy:
         self._queue = queue
 
     async def execute(self, context: DeletionContext) -> DeletionResult[ReclamationJob]:
-        job = await self._queue.enqueue(context.source_id, actor=context.actor, reason=context.reason, requested_at=context.requested_at, retain_until=context.retain_until)
+        job = await self._queue.enqueue(context.source_id, actor=context.actor, reason=context.reason, requested_at=context.requested_at, retain_until=None if context.erasure_required else context.retain_until, requested_retain_until=context.retain_until, erasure_required=context.erasure_required)
         return DeletionResult(
             source_id=context.source_id,
             state="queued",
