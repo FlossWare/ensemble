@@ -960,30 +960,28 @@ def create_app(
             trace_status = "degraded"
 
         if acknowledge_generation:
-                stage_started = time.perf_counter()
-                    try:
-                    await internal.request(
+            stage_started = time.perf_counter()
+            try:
+                await internal.request(
                     "POST", "/api/v1/index/generation-changes/acknowledgements",
-                        request=request,
-                        json={
-                            "source_id": document.source_id,
-                            "revision_sequence": document.revision,
-                            "tombstoned": False,
-                        },
-                        )
-                        await trace_stage("generation_acknowledgement", "completed", stage_started)
-                except Exception as exc:
-                        await trace_stage("generation_acknowledgement", "failed", stage_started, error_category=type(exc).__name__)
-                    try:
-                        if trace_created:
-                            await active_execution_trace_store.finish(
+                    request=request,
+                    json={
+                        "source_id": document.source_id,
+                        "revision_sequence": document.revision,
+                        "tombstoned": False,
+                    },
+                )
+                await trace_stage("generation_acknowledgement", "completed", stage_started)
+            except Exception as exc:
+                await trace_stage("generation_acknowledgement", "failed", stage_started, error_category=type(exc).__name__)
+                try:
+                    if trace_created:
+                        await active_execution_trace_store.finish(
                             trace_id, "failed", (time.perf_counter() - trace_started) * 1000, type(exc).__name__,
-                                )
-                    except Exception:
-                        pass
-                    raise
-
-
+                        )
+                except Exception:
+                    pass
+                raise
 
         try:
             if trace_created:
