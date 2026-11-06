@@ -102,7 +102,17 @@ The Index generation builder is an orchestrator. Its source-copy pass reads and 
 
 The public generation-copy operation uses these contracts through the internal REST client. This preserves the single-process ASGI deployment while allowing the Index capability to move behind its configured REST base URL.
 
-## 9. Initial implemented endpoints
+## 9. Documents and Vector generation-copy operations
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | /api/v1/index/generations/{generation_id}/sources/page | Read a page of source snapshots from the target generation |
+| POST | /api/v1/documents/generations/{generation_id}/sources | Copy or tombstone one source in the Documents generation |
+| POST | /api/v1/vector/generations/{generation_id}/sources/tombstone | Tombstone one source in the Vector generation |
+
+The generation orchestrator pages source metadata through Index REST, then delegates document and vector generation mutations to their owning capability APIs. These operations are bounded by source page and generation ID.
+
+## 10. Initial implemented endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
