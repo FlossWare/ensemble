@@ -343,8 +343,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
 
     @router.get("/projects/{project_id}")
     async def get_project(project_id: str, viewer_id: str, request: Request):
-        viewer = viewer_id_value = viewer_id
-        viewer = viewer_id(viewer_id_value, request)
+        viewer = validated_viewer_id(viewer_id, request)
         await require_role(project_id, viewer, roles)
         return {"ok": True, "project": await project(project_id)}
 
@@ -369,7 +368,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
 
     @router.get("/projects/{project_id}/members")
     async def list_members(project_id: str, viewer_id: str, request: Request, limit: int = 100):
-        await require_role(project_id, validated_validated_viewer_id(viewer_id, request), roles)
+        await require_role(project_id, validated_viewer_id(viewer_id, request), roles)
         return {"ok": True, "members": await store.list("membership", project_id=project_id, limit=bounded_limit(limit))}
 
     @router.post("/projects/{project_id}/contributions")
