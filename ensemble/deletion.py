@@ -98,13 +98,8 @@ class DeletionStrategyDecorator(Generic[TContext, TValue]):
 class RetentionDeletionDecorator(DeletionStrategyDecorator[DeletionContext, TValue], Generic[TValue]):
     """Prevent physical deletion before the context's retention deadline."""
 
-    def __init__(
-        self,
-        inner: DeletionStrategy[DeletionContext, TValue],
-        clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-    ):
+    def __init__(self, inner: DeletionStrategy[DeletionContext, TValue]):
         super().__init__(inner)
-        self._clock = clock
 
     async def execute(self, context: DeletionContext) -> DeletionResult[TValue]:
         # Retention is enforced by the durable queue's available_at timestamp.
