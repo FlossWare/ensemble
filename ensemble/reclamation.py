@@ -104,25 +104,37 @@ class SqliteReclamationStore:
     async def close(self) -> None:
         await self.engine.dispose()
 
-    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None, requested_retain_until: datetime | None = None, erasure_required: bool = False) -> ReclamationJob:
+    async def enqueue(
+        self, source_id: str, *, actor: str | None = None, reason: str | None = None,
+        requested_at: datetime | None = None, retain_until: datetime | None = None,
+        requested_retain_until: datetime | None = None, erasure_required: bool = False,
+    ) -> ReclamationJob:
         if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
             raise ValueError("source_id must contain 1-1024 characters")
         now = requested_at or datetime.now(timezone.utc)
-        if now.tzinfo is None or (retain_until is not None and retain_until.tzinfo is None) or (requested_retain_until is not None and requested_retain_until.tzinfo is None):
+        if now.tzinfo is None or (retain_until is not None and retain_until.tzinfo is None) or (
+            requested_retain_until is not None and requested_retain_until.tzinfo is None
+        ):
             raise ValueError("deletion timestamps must be timezone-aware")
-        if not isinstance(erasure_required, bool):\n            raise ValueError("erasure_required must be a boolean")\n        requested_retain_until = requested_retain_until if requested_retain_until is not None else retain_until\n        available_at = retain_until or now
+        if not isinstance(erasure_required, bool):
+            raise ValueError("erasure_required must be a boolean")
+        requested_retain_until = requested_retain_until if requested_retain_until is not None else retain_until
+        available_at = retain_until or now
         async with self.engine.begin() as connection:
             statement = sqlite_insert(reclamation_jobs).values(
                 source_id=source_id, state="pending", attempts=0,
                 available_at=available_at, last_error=None, created_at=now,
                 updated_at=now, completed_at=None, actor=actor, reason=reason,
-                retain_until=retain_until,
+                retain_until=retain_until, requested_retain_until=requested_retain_until,
+                erasure_required=erasure_required,
             ).on_conflict_do_update(
                 index_elements=[reclamation_jobs.c.source_id],
                 set_={
                     "state": "pending", "available_at": available_at, "last_error": None,
                     "updated_at": now, "completed_at": None, "actor": actor,
                     "reason": reason, "retain_until": retain_until,
+                    "requested_retain_until": requested_retain_until,
+                    "erasure_required": erasure_required,
                 },
                 where=reclamation_jobs.c.state != "complete",
             )
@@ -247,10 +259,19 @@ class InMemoryReclamationStore:
     async def close(self) -> None:
         return None
 
-    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None, requested_retain_until: datetime | None = None, erasure_required: bool = False) -> ReclamationJob:
+    async def enqueue(
+        self, source_id: str, *, actor: str | None = None, reason: str | None = None,
+        requested_at: datetime | None = None, retain_until: datetime | None = None,
+        requested_retain_until: datetime | None = None, erasure_required: bool = False,
+    ) -> ReclamationJob:
         now = requested_at or datetime.now(timezone.utc)
-        if now.tzinfo is None or (retain_until is not None and retain_until.tzinfo is None):
+        if now.tzinfo is None or (retain_until is not None and retain_until.tzinfo is None) or (
+            requested_retain_until is not None and requested_retain_until.tzinfo is None
+        ):
             raise ValueError("deletion timestamps must be timezone-aware")
+        if not isinstance(erasure_required, bool):
+            raise ValueError("erasure_required must be a boolean")
+        requested_retain_until = requested_retain_until if requested_retain_until is not None else retain_until
         job = self._jobs.get(source_id)
         if job is None or job["state"] != "complete":
             self._jobs[source_id] = {
@@ -260,6 +281,8 @@ class InMemoryReclamationStore:
                 "created_at": job["created_at"] if job else now,
                 "updated_at": now, "completed_at": None,
                 "actor": actor, "reason": reason, "retain_until": retain_until,
+                "requested_retain_until": requested_retain_until,
+                "erasure_required": erasure_required,
             }
         return dict(self._jobs[source_id])  # type: ignore[return-value]
 
