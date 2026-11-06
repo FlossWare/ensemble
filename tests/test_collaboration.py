@@ -91,7 +91,7 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
             "actor_id": "agent:assistant",
         })
         assert invalid.status_code == 409
-        history = client.get(f"/api/v1/collaboration/handoffs/{handoff_id}")
+        history = client.get(f"/api/v1/collaboration/handoffs/{handoff_id}", params={"viewer_id": "human:owner"})
         assert [item["payload"]["event"] for item in history.json()["history"]] == [
             "completed", "acknowledged", "checkpoint", "created",
         ]
@@ -132,7 +132,7 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
             "contribution_ids": [contribution_id],
         })
         assert objection.status_code == 200
-        proposal_detail = client.get(f"/api/v1/collaboration/proposals/{proposal_id}")
+        proposal_detail = client.get(f"/api/v1/collaboration/proposals/{proposal_id}", params={"viewer_id": "human:owner"})
         assert len(proposal_detail.json()["objections"]) == 1
 
         agent_decision = client.post(f"/api/v1/collaboration/proposals/{proposal_id}/decisions", json={
@@ -153,6 +153,7 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
         assert human_decision.json()["decision"]["status"] == "accepted"
 
         activity = client.get(f"/api/v1/collaboration/projects/{project_id}/activity", params={
+            "viewer_id": "human:owner",
             "actor_id": "agent:assistant",
             "kind": "contribution",
         })
