@@ -699,7 +699,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
     @router.get("/projects/{project_id}/activity")
     async def project_activity(project_id: str, viewer_id: str, request: Request, actor_id: str | None = None, kind: str | None = None, status: str | None = None, limit: int = 100):
         await require_role(project_id, validated_viewer_id(viewer_id, request), roles)
-        records = await store.list(kind, project_id=project_id, actor_id=actor_id, status=status, limit=limit)
+        records = await store.list(kind, project_id=project_id, actor_id=actor_id, status=status, limit=bounded_limit(limit))
         return {"ok": True, "activity": records}
 
     return router
