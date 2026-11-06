@@ -744,12 +744,43 @@ class SqliteIndexStore:
                 raise RuntimeError("source is not soft-deleted")
             if sequence <= row["high_sequence"]:
                 raise ValueError("restore sequence must exceed the current source sequence")
+            now = datetime.now(timezone.utc)
             await connection.execute(update(sources).where(
                 sources.c.source_id == source_id
-            ).values(high_sequence=sequence, tombstoned=False, updated_at=datetime.now(timezone.utc)))
+            ).values(high_sequence=sequence, tombstoned=False, updated_at=now))
             updated = (await connection.execute(select(sources).where(
                 sources.c.source_id == source_id
             ))).mappings().one()
+            generation_rows = (await connection.execute(select(
+                generations.c.generation_id, generations.c.state,
+            ).where(generations.c.state.in_(("active", "building"))))).all()
+            for target_generation_id, state in generation_rows:
+                values = {
+                    "high_sequence": sequence,
+                    "revision_id": updated["revision_id"],
+                    "profiles": updated["profiles"],
+                    "tombstoned": False,
+                    "updated_at": now,
+                }
+                existing_generation_source = (await connection.execute(select(generation_sources).where(
+                    generation_sources.c.generation_id == target_generation_id,
+                    generation_sources.c.source_id == source_id,
+                ))).mappings().first()
+                if existing_generation_source is None:
+                    await connection.execute(generation_sources.insert().values(
+                        generation_id=target_generation_id, source_id=source_id, **values,
+                    ))
+                else:
+                    await connection.execute(generation_sources.update().where(
+                        generation_sources.c.generation_id == target_generation_id,
+                        generation_sources.c.source_id == source_id,
+                    ).values(**values))
+                await connection.execute(generation_changes.insert().values(
+                    generation_id=target_generation_id, source_id=source_id,
+                    high_sequence=sequence, revision_id=updated["revision_id"],
+                    profiles=updated["profiles"], tombstoned=False,
+                    acknowledged=False, created_at=now,
+                ))
         return _as_source(updated)
 
     async def mark_purged(self, source_id: str) -> None:
