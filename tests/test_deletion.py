@@ -36,6 +36,10 @@ def test_deletion_context_validates_identity_and_timezone():
     with pytest.raises(ValueError):
         DeletionContext("source-1", retain_until=datetime.now())
 
+    with pytest.raises(ValueError):
+        DeletionContext("source-1", actor=" " * 257)
+    with pytest.raises(ValueError):
+        DeletionContext("source-1", reason="x" * 4001)
     context = DeletionContext("source-1", actor="agent:test", reason="requested")
     assert context.source_id == "source-1"
     assert context.actor == "agent:test"
