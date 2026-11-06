@@ -187,6 +187,17 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
         assert human_decision.json()["decision"]["payload"]["human_approved"] is True
         assert human_decision.json()["decision"]["payload"]["contribution_ids"] == [contribution_id]
         assert human_decision.json()["decision"]["status"] == "accepted"
+        after_decision = client.get(f"/api/v1/collaboration/projects/{project_id}/proposals", params={
+            "viewer_id": "human:owner",
+        }).json()["proposals"]
+        by_id = {item["id"]: item for item in after_decision}
+        assert by_id[proposal_id]["status"] == "accepted"
+        assert by_id[competing_id]["status"] == "proposed"
+        preserved = client.get(f"/api/v1/collaboration/proposals/{proposal_id}", params={
+            "viewer_id": "human:owner",
+        }).json()
+        assert len(preserved["objections"]) == 1
+        assert len(preserved["decisions"]) == 1
 
         activity = client.get(f"/api/v1/collaboration/projects/{project_id}/activity", params={
             "viewer_id": "human:owner",
