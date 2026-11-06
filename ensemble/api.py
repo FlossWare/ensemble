@@ -1422,6 +1422,33 @@ def create_app(
             raise HTTPException(status_code=404, detail="unknown record")
         return {"ok": True, "record": record}
 
+    @app.post("/api/v1/knowledge/records/query", tags=["knowledge"])
+    async def knowledge_records_query(payload: dict[str, Any]):
+        source_ids = payload.get("source_ids")
+        if (not isinstance(source_ids, list) or not source_ids or len(source_ids) > 200
+                or any(not isinstance(value, str) or not value or len(value) > 2048 for value in source_ids)):
+            raise HTTPException(status_code=400, detail="source_ids must contain 1-200 non-empty identifiers")
+        records = {}
+        for source_id in dict.fromkeys(source_ids):
+            record = await active_knowledge_store.get(source_id)
+            if record is not None:
+                records[source_id] = record
+        return {"records": records}
+
+    @app.post("/api/v1/knowledge/generations/{generation_id}/records", tags=["knowledge"])
+    async def knowledge_generation_record_put(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        if payload.get("tombstoned") is True:
+            await active_knowledge_store.tombstone_generation_source(generation_id, source_id)
+            return {"ok": True, "tombstoned": True}
+        record = payload.get("record")
+        if not isinstance(record, dict) or record.get("source_id") != source_id:
+            raise HTTPException(status_code=400, detail="record must match source_id")
+        result = await active_knowledge_store.upsert_generation(generation_id, record)
+        return {"ok": True, "tombstoned": False, "record_id": result}
+
     @app.post("/api/v1/knowledge/sources/tombstone", tags=["knowledge"])
     async def knowledge_source_tombstone(payload: dict[str, Any], request: Request):
         source_id = payload.get("source_id")
