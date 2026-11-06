@@ -252,6 +252,14 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
             raise HTTPException(status_code=403, detail="actor_id must match the authenticated principal")
         return actor
 
+    def viewer_id(value: str, request: Request) -> str:
+        if not isinstance(value, str) or not value.strip() or len(value) > 256:
+            raise HTTPException(status_code=400, detail="viewer_id must be a non-empty participant identifier")
+        scope = current_request_scope()
+        if scope.authorization and value != scope.principal_id:
+            raise HTTPException(status_code=403, detail="viewer_id must match the authenticated principal")
+        return value
+
     async def participant(participant_id: str) -> dict[str, Any]:
         result = await store.get("participant", participant_id)
         if result is None:
@@ -306,9 +314,12 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         return {"ok": True, "participant": await participant(participant_id)}
 
     @router.post("/projects")
-    async def create_project(payload: dict[str, Any]):
+    async def create_project(payload: dict[str, Any], request: Request):
         name = required_string(payload, "name", 256)
         owner_id = required_string(payload, "owner_id", 256)
+        scope = current_request_scope()
+        if scope.authorization and owner_id != scope.principal_id:
+            raise HTTPException(status_code=403, detail="owner_id must match the authenticated principal")
         await participant(owner_id)
         description = required_string(payload, "description", 4000, optional=True)
         human_approval_required = payload.get("human_approval_required", True)
@@ -326,7 +337,10 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         return {"ok": True, "project": record}
 
     @router.get("/projects/{project_id}")
-    async def get_project(project_id: str):
+    async def get_project(project_id: str, viewer_id: str, request: Request):
+        viewer = viewer_id_value = viewer_id
+        viewer = viewer_id(viewer_id_value, request)
+        await require_role(project_id, viewer, roles)
         return {"ok": True, "project": await project(project_id)}
 
     @router.post("/projects/{project_id}/members")
@@ -349,8 +363,8 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         return {"ok": True, "membership": member}
 
     @router.get("/projects/{project_id}/members")
-    async def list_members(project_id: str, limit: int = 100):
-        await project(project_id)
+    async def list_members(project_id: str, viewer_id: str, request: Request, limit: int = 100):
+        await require_role(project_id, viewer_id(viewer_id, request), roles)
         return {"ok": True, "members": await store.list("membership", project_id=project_id, limit=limit)}
 
     @router.post("/projects/{project_id}/contributions")
@@ -373,8 +387,8 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         return {"ok": True, "contribution": record}
 
     @router.get("/projects/{project_id}/contributions")
-    async def list_contributions(project_id: str, actor_id: str | None = None, status: str | None = None, limit: int = 100):
-        await project(project_id)
+    async def list_contributions(project_id: str, viewer_id: str, request: Request, actor_id: str | None = None, status: str | None = None, limit: int = 100):
+        await require_role(project_id, viewer_id(viewer_id, request), roles)
         return {"ok": True, "contributions": await store.list(
             "contribution", project_id=project_id, actor_id=actor_id, status=status, limit=limit,
         )}
@@ -407,15 +421,16 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         return {"ok": True, "handoff": record}
 
     @router.get("/projects/{project_id}/handoffs")
-    async def list_handoffs(project_id: str, status: str | None = None, limit: int = 100):
-        await project(project_id)
+    async def list_handoffs(project_id: str, viewer_id: str, request: Request, status: str | None = None, limit: int = 100):
+        await require_role(project_id, viewer_id(viewer_id, request), roles)
         return {"ok": True, "handoffs": await store.list("handoff", project_id=project_id, status=status, limit=limit)}
 
     @router.get("/handoffs/{handoff_id}")
-    async def get_handoff(handoff_id: str):
+    async def get_handoff(handoff_id: str, viewer_id: str, request: Request):
         handoff = await store.get("handoff", handoff_id)
         if handoff is None:
             raise HTTPException(status_code=404, detail="unknown handoff")
+        await require_role(handoff["project_id"], viewer_id(viewer_id, request), roles)
         history = await store.list("handoff_event", project_id=handoff["project_id"], limit=500)
         return {"ok": True, "handoff": handoff, "history": [
             item for item in history if item["payload"].get("handoff_id") == handoff_id
@@ -556,8 +571,8 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         return {"ok": True, "synthesis": updated or refreshed}
 
     @router.get("/projects/{project_id}/syntheses")
-    async def list_syntheses(project_id: str, limit: int = 100):
-        await project(project_id)
+    async def list_syntheses(project_id: str, viewer_id: str, request: Request, limit: int = 100):
+        await require_role(project_id, viewer_id(viewer_id, request), roles)
         return {"ok": True, "syntheses": await store.list("synthesis", project_id=project_id, limit=limit)}
 
     @router.post("/projects/{project_id}/proposals")
@@ -587,15 +602,16 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         return {"ok": True, "proposal": proposal}
 
     @router.get("/projects/{project_id}/proposals")
-    async def list_proposals(project_id: str, status: str | None = None, limit: int = 100):
-        await project(project_id)
+    async def list_proposals(project_id: str, viewer_id: str, request: Request, status: str | None = None, limit: int = 100):
+        await require_role(project_id, viewer_id(viewer_id, request), roles)
         return {"ok": True, "proposals": await store.list("proposal", project_id=project_id, status=status, limit=limit)}
 
     @router.get("/proposals/{proposal_id}")
-    async def get_proposal(proposal_id: str):
+    async def get_proposal(proposal_id: str, viewer_id: str, request: Request):
         proposal = await store.get("proposal", proposal_id)
         if proposal is None:
             raise HTTPException(status_code=404, detail="unknown proposal")
+        await require_role(proposal["project_id"], viewer_id(viewer_id, request), roles)
         objections = await store.list("proposal_objection", project_id=proposal["project_id"], limit=500)
         decisions = await store.list("decision", project_id=proposal["project_id"], limit=500)
         return {"ok": True, "proposal": proposal, "objections": [
@@ -672,13 +688,13 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         return {"ok": True, "decision": decision}
 
     @router.get("/projects/{project_id}/decisions")
-    async def list_decisions(project_id: str, limit: int = 100):
-        await project(project_id)
+    async def list_decisions(project_id: str, viewer_id: str, request: Request, limit: int = 100):
+        await require_role(project_id, viewer_id(viewer_id, request), roles)
         return {"ok": True, "decisions": await store.list("decision", project_id=project_id, limit=limit)}
 
     @router.get("/projects/{project_id}/activity")
-    async def project_activity(project_id: str, actor_id: str | None = None, kind: str | None = None, status: str | None = None, limit: int = 100):
-        await project(project_id)
+    async def project_activity(project_id: str, viewer_id: str, request: Request, actor_id: str | None = None, kind: str | None = None, status: str | None = None, limit: int = 100):
+        await require_role(project_id, viewer_id(viewer_id, request), roles)
         records = await store.list(kind, project_id=project_id, actor_id=actor_id, status=status, limit=limit)
         return {"ok": True, "activity": records}
 
