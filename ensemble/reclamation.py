@@ -50,6 +50,7 @@ class ReclamationStore(Protocol):
     async def initialize(self) -> None: ...
     async def close(self) -> None: ...
     async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None, requested_retain_until: datetime | None = None, erasure_required: bool = False) -> ReclamationJob: ...
+    async def get_job(self, source_id: str) -> ReclamationJob | None: ...
     async def claim_due(self, limit: int = 100) -> list[ReclamationJob]: ...
     async def complete(self, source_id: str) -> None: ...
     async def cancel(self, source_id: str) -> bool: ...
@@ -111,13 +112,20 @@ class SqliteReclamationStore:
                     "requested_retain_until": requested_retain_until,
                     "erasure_required": erasure_required,
                 },
-                where=reclamation_jobs.c.state != "complete",
+                where=reclamation_jobs.c.state.notin_(["complete", "running"]),
             )
             await connection.execute(statement)
             row = (await connection.execute(
                 select(reclamation_jobs).where(reclamation_jobs.c.source_id == source_id)
             )).mappings().one()
         return dict(row)  # type: ignore[return-value]
+
+    async def get_job(self, source_id: str) -> ReclamationJob | None:
+        async with self.engine.connect() as connection:
+            row = (await connection.execute(
+                select(reclamation_jobs).where(reclamation_jobs.c.source_id == source_id)
+            )).mappings().first()
+        return dict(row) if row else None  # type: ignore[return-value]
 
     async def claim_due(self, limit: int = 100) -> list[ReclamationJob]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
@@ -273,7 +281,7 @@ class InMemoryReclamationStore:
             raise ValueError("erasure_required must be a boolean")
         requested_retain_until = requested_retain_until if requested_retain_until is not None else retain_until
         job = self._jobs.get(source_id)
-        if job is None or job["state"] != "complete":
+        if job is None or job["state"] not in {"complete", "running"}:
             self._jobs[source_id] = {
                 "source_id": source_id, "state": "pending",
                 "attempts": job["attempts"] if job else 0,
@@ -285,6 +293,10 @@ class InMemoryReclamationStore:
                 "erasure_required": erasure_required,
             }
         return dict(self._jobs[source_id])  # type: ignore[return-value]
+
+    async def get_job(self, source_id: str) -> ReclamationJob | None:
+        job = self._jobs.get(source_id)
+        return dict(job) if job is not None else None  # type: ignore[return-value]
 
     async def claim_due(self, limit: int = 100) -> list[ReclamationJob]:
         now = datetime.now(timezone.utc)
