@@ -1,6 +1,9 @@
 import asyncio
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import update
 
 
 from fastapi import FastAPI
@@ -8,6 +11,7 @@ from fastapi.testclient import TestClient
 import httpx
 
 from ensemble.api import create_app
+from ensemble.crawl_store import SqliteCrawlJobStore, crawl_jobs
 from ensemble.graph_store import SqliteGraphStore
 from ensemble.index_store import SqliteIndexStore
 from ensemble.knowledge_store import SqliteKnowledgeStore
@@ -299,3 +303,64 @@ def test_tombstones_and_replayed_revisions_are_partition_local(tmp_path):
             await store.close()
 
     asyncio.run(exercise())
+
+
+def test_startup_recovers_crawl_jobs_in_every_configured_partition(tmp_path, monkeypatch):
+    credentials = {"alpha": "alpha-recovery-token", "beta": "beta-recovery-token"}
+    token_map = {
+        hashlib.sha256(token.encode()).hexdigest(): {
+            "subject": f"{partition}-worker", "partitions": [partition],
+        }
+        for partition, token in credentials.items()
+    }
+    monkeypatch.setenv("ENSEMBLE_PARTITION_TOKENS", json.dumps(token_map))
+    monkeypatch.setenv("ENSEMBLE_AUTH_REQUIRED", "1")
+    base = f"sqlite+aiosqlite:///{tmp_path / 'partitioned-crawl-recovery.db'}"
+    asyncio.run(asyncio.to_thread(_ensure_partition_schema, base, "default"))
+
+    async def seed_stale_jobs():
+        store = SqliteCrawlJobStore(base)
+        job_ids = {}
+        try:
+            for partition in credentials:
+                scope = set_request_scope(RequestScope(partition_id=partition))
+                try:
+                    job = await store.enqueue(
+                        f"https://{partition}.example.com/", 2, 0,
+                    )
+                    await store.claim_next()
+                    async with store.engine.begin() as connection:
+                        await connection.execute(update(crawl_jobs).where(
+                            crawl_jobs.c.job_id == job["job_id"],
+                        ).values(
+                            updated_at=datetime.now(timezone.utc) - timedelta(seconds=301),
+                        ))
+                    job_ids[partition] = job["job_id"]
+                finally:
+                    reset_request_scope(scope)
+        finally:
+            await store.close()
+        return job_ids
+
+    job_ids = asyncio.run(seed_stale_jobs())
+    app = create_app(database_url=base)
+    with TestClient(app):
+        async def verify_recovery():
+            store = SqliteCrawlJobStore(base)
+            try:
+                states = {}
+                for partition, job_id in job_ids.items():
+                    scope = set_request_scope(RequestScope(partition_id=partition))
+                    try:
+                        states[partition] = await store.get(job_id)
+                    finally:
+                        reset_request_scope(scope)
+                return states
+            finally:
+                await store.close()
+
+        recovered = asyncio.run(verify_recovery())
+
+    assert {partition: job["status"] for partition, job in recovered.items()} == {
+        "alpha": "interrupted", "beta": "interrupted",
+    }
