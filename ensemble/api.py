@@ -1449,6 +1449,17 @@ def create_app(
         result = await active_knowledge_store.upsert_generation(generation_id, record)
         return {"ok": True, "tombstoned": False, "record_id": result}
 
+    @app.post("/api/v1/knowledge/sources/restore", tags=["knowledge"])
+    async def knowledge_source_restore(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        generation_id = payload.get("generation_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        await active_knowledge_store.restore(source_id)
+        if isinstance(generation_id, str) and generation_id:
+            await active_knowledge_store.restore_generation_source(generation_id, source_id)
+        return {"ok": True, "source_id": source_id}
+
     @app.post("/api/v1/knowledge/sources/tombstone", tags=["knowledge"])
     async def knowledge_source_tombstone(payload: dict[str, Any], request: Request):
         source_id = payload.get("source_id")
@@ -1481,6 +1492,17 @@ def create_app(
             "POST", "/api/v1/index/tombstones", request=request,
             json={"source_id": source_id, "revision_sequence": sequence},
         )
+
+    @app.post("/api/v1/documents/sources/restore", tags=["documents"])
+    async def documents_source_restore(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        generation_id = payload.get("generation_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        await document_store.restore_source(source_id)
+        if isinstance(generation_id, str) and generation_id:
+            await document_store.restore_generation_source(generation_id, source_id)
+        return {"ok": True, "source_id": source_id}
 
     @app.post("/api/v1/documents/sources/tombstone", tags=["documents"])
     async def documents_source_tombstone(payload: dict[str, Any], request: Request):
@@ -2026,6 +2048,39 @@ def create_app(
             raise HTTPException(status_code=503, detail="source restoration is incomplete; source remains tombstoned") from exc
         return {"ok": True, "source": restored, "reclamation": "cancelled"}
 
+    @app.post("/api/v1/index/reclamation/jobs/query", tags=["index"])
+    async def index_reclamation_job_query(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"job": await active_reclamation_store.get_job(source_id)}
+
+    @app.post("/api/v1/index/reclamation/jobs/cancel", tags=["index"])
+    async def index_reclamation_job_cancel(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"cancelled": await active_reclamation_store.cancel(source_id)}
+
+    @app.post("/api/v1/index/reclamation/audit", tags=["index"])
+    async def index_reclamation_audit(payload: dict[str, Any]):
+        source_id, event = payload.get("source_id"), payload.get("event")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        if not isinstance(event, str) or not event or len(event) > 64:
+            raise HTTPException(status_code=400, detail="event must be a non-empty string")
+        actor, reason, details = payload.get("actor"), payload.get("reason"), payload.get("details", {})
+        if actor is not None and (not isinstance(actor, str) or len(actor) > 256):
+            raise HTTPException(status_code=400, detail="actor must be a string of at most 256 characters")
+        if reason is not None and not isinstance(reason, str):
+            raise HTTPException(status_code=400, detail="reason must be a string")
+        if not isinstance(details, dict):
+            raise HTTPException(status_code=400, detail="details must be an object")
+        await active_reclamation_store.record_audit(
+            source_id, event, actor=actor, reason=reason, details=details,
+        )
+        return {"ok": True}
+
     @app.get("/api/v1/index/reclamation", tags=["index"])
     async def index_reclamation_status():
         return {"ok": True, "jobs": await active_reclamation_store.status()}
@@ -2142,6 +2197,17 @@ def create_app(
             document_count += 1
             chunk_count += len(chunks)
         return {"ok": True, "document_count": document_count, "chunk_count": chunk_count, "tombstoned": False}
+
+    @app.post("/api/v1/vector/sources/restore", tags=["vector"])
+    async def vector_source_restore(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        generation_id = payload.get("generation_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        await active_vector_store.restore_source(source_id)
+        if isinstance(generation_id, str) and generation_id:
+            await active_vector_store.restore_generation_source(generation_id, source_id)
+        return {"ok": True, "source_id": source_id}
 
     @app.post("/api/v1/vector/generations/{generation_id}/sources/reconcile", tags=["vector"])
     async def vector_generation_source_reconcile(generation_id: str, payload: dict[str, Any]):
