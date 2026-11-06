@@ -17,6 +17,8 @@ class ReclamationJob(TypedDict):
     actor: str | None
     reason: str | None
     retain_until: datetime | None
+    requested_retain_until: datetime | None
+    erasure_required: bool
 
 
 TContext = TypeVar("TContext")
