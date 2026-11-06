@@ -9,6 +9,7 @@ from alembic.config import Config
 from ensemble.index_store import SqliteIndexStore
 from ensemble.api import create_app
 from ensemble.graph_memory import InMemoryGraphStore
+from ensemble.graph_store import SqliteGraphStore
 from ensemble.index_memory import InMemoryIndexStore
 from ensemble.store import InMemoryDocumentStore
 from ensemble.knowledge_store import SqliteKnowledgeStore
@@ -364,5 +365,33 @@ def test_sqlite_reclamation_claims_are_exclusive_across_workers(tmp_path):
 
         await first_worker.close()
         await second_worker.close()
+
+    asyncio.run(exercise())
+
+
+def test_sqlite_reclamation_removes_source_graph_materialization_but_retains_shared_entities(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'reclamation-graph.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    graph = SqliteGraphStore(database_url)
+
+    async def exercise():
+        await graph.initialize()
+        source = await graph.add_node("source", {"source_id": "source-graph-1"})
+        entity = await graph.add_node("entity", {"canonical": "Ada Lovelace"})
+        edge = await graph.add_edge(
+            source["id"], entity["id"], "mentions",
+            {"source_id": "source-graph-1"},
+        )
+        assert await graph.get_node(source["id"]) is not None
+        assert await graph.get_node(entity["id"]) is not None
+
+        removed = await graph.reclaim_source("source-graph-1")
+        assert removed == 2
+        assert await graph.get_node(source["id"]) is None
+        assert await graph.get_node(entity["id"]) is not None
+        assert await graph.query_edges() == []
+        await graph.close()
 
     asyncio.run(exercise())
