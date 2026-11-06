@@ -548,7 +548,8 @@ def test_sqlite_generation_materializations_can_be_restored_before_purge(tmp_pat
             Chunk(document.id, 0, "restorable generation payload", [1.0, 0.0]),
         ])
         await knowledge.upsert_generation("restore-generation", {
-            "source_id": "restore-sql-source", "title": "Title",
+            "source_id": "restore-sql-source", "revision_sequence": 1,
+            "revision_id": "restore-sql-revision", "title": "Title",
             "content": "restorable generation payload", "origin": "test",
             "locator": "test://restore-sql-source", "profiles": {},
         })
@@ -590,7 +591,7 @@ def test_sqlite_legal_erasure_override_metadata_survives_restart(tmp_path):
 
     async def exercise():
         requested_at = datetime.now(timezone.utc)
-        requested_retain_until = requested_at + timedelta(days=90)
+        requested_retain_until = requested_at + __import__("datetime").timedelta(days=90)
         first = SqliteReclamationStore(database_url)
         await first.initialize()
         job = await first.enqueue(
