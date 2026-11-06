@@ -622,3 +622,45 @@ def test_memory_entry_endpoint_exposes_bounded_offset_pagination():
         assert [item["value"] for item in second_page.json()["entries"]] == ["first"]
         assert second_page.json()["next_offset"] is None
         assert invalid_offset.status_code == 400
+
+def test_session_events_ledger_supports_idempotent_append_and_readback():
+    with client() as http:
+        event = {
+            "session_id": "session-ledger-test",
+            "project": "ensemble",
+            "uuid": "message-1",
+            "role": "user",
+            "kind": "text",
+            "text": "Retrieve existing session history through Memory.",
+            "timestamp": "2026-11-05T12:00:00Z",
+        }
+        event_id = "session-message-1"
+
+        first = http.put(
+            f"/api/v1/memory/memories/session-events/entries/{event_id}",
+            json={"entry": event},
+        )
+        retry = http.put(
+            f"/api/v1/memory/memories/session-events/entries/{event_id}",
+            json={"entry": event},
+        )
+        conflict = http.put(
+            f"/api/v1/memory/memories/session-events/entries/{event_id}",
+            json={"entry": {**event, "text": "Different content."}},
+        )
+        history = http.get(
+            "/api/v1/memory/memories/session-events/entries",
+            params={"limit": 100},
+        )
+
+        assert first.status_code == 200
+        assert first.json()["status"] == "stored"
+        assert retry.status_code == 200
+        assert retry.json()["status"] == "duplicate"
+        assert conflict.status_code == 409
+        assert history.status_code == 200
+        entries = history.json()["entries"]
+        assert len(entries) == 1
+        assert entries[0]["event_id"] == event_id
+        assert entries[0]["text"] == event["text"]
+
