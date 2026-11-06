@@ -1517,6 +1517,7 @@ def create_app(
     generation_builder = IndexGenerationBuilder(
         active_index_store, document_store, active_vector_store,
         active_knowledge_store, active_memory_store,
+        internal_client=InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")}),
     )
 
     @app.post("/api/v1/index/generations", tags=["index"])
@@ -1556,11 +1557,53 @@ def create_app(
             },
         }
 
+    @app.get("/api/v1/index/generations/{generation_id}/source-upper-bound", tags=["index"])
+    async def index_generation_source_upper_bound(generation_id: str):
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id and item["state"] == "building" for item in status["generations"]):
+            raise HTTPException(status_code=409, detail="generation is not in building state")
+        return {"upper_bound": await active_index_store.source_key_upper_bound()}
+
+    @app.post("/api/v1/index/generations/{generation_id}/sources/page", tags=["index"])
+    async def index_generation_sources_page(generation_id: str, payload: dict[str, Any]):
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id and item["state"] == "building" for item in status["generations"]):
+            raise HTTPException(status_code=409, detail="generation is not in building state")
+        limit = payload.get("limit", 500)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 10000")
+        try:
+            sources = await active_index_store.list_sources_after(
+                payload.get("cursor"), payload.get("upper_bound"), limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"sources": sources}
+
+    @app.put("/api/v1/index/generations/{generation_id}/sources", tags=["index"])
+    async def index_generation_source_put(generation_id: str, payload: dict[str, Any]):
+        try:
+            result = await active_index_store.put_generation_source(generation_id, payload.get("source"))
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, **result}
+
+    @app.post("/api/v1/index/generations/{generation_id}/checkpoints", tags=["index"])
+    async def index_generation_checkpoint_record(generation_id: str, payload: dict[str, Any]):
+        try:
+            result = await active_index_store.record_generation_checkpoint(
+                generation_id, payload.get("capability"), payload.get("checkpoint"),
+                sealed=payload.get("sealed", False),
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "generation": result}
+
     @app.post("/api/v1/index/generations/{generation_id}/copy/index", tags=["index"])
-    async def index_generation_copy_index(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_copy_index(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.copy_index_sources(
-                generation_id, page_size=payload.get("page_size", 500),
+                generation_id, page_size=payload.get("page_size", 500), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
