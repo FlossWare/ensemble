@@ -121,6 +121,7 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
             "summary": "Use the shared contribution contract.",
             "rationale": "It preserves attribution and provenance.",
             "objections": ["Requires a migration"],
+            "contribution_ids": [contribution_id],
         })
         assert proposal.status_code == 200
         proposal_id = proposal.json()["proposal"]["id"]
@@ -148,6 +149,7 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
         })
         assert human_decision.status_code == 200
         assert human_decision.json()["decision"]["payload"]["human_approved"] is True
+        assert human_decision.json()["decision"]["payload"]["contribution_ids"] == [contribution_id]
         assert human_decision.json()["decision"]["status"] == "accepted"
 
         activity = client.get(f"/api/v1/collaboration/projects/{project_id}/activity", params={
