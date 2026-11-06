@@ -177,7 +177,7 @@ Branch: `integration/source-lifecycle-mainline-2026-11-04` (not yet merged).
 - Control endpoints expose reclamation queue status and an operator-triggered bounded pass.
 - Direct document writes require a matching current Index revision; direct document/Knowledge/vector source tombstones require the Index tombstone lifecycle.
 - Standalone vector upsert, metadata, and prune operations are paused during generation rebuilds. Normal indexed ingestion remains available and is reconciled through the Index change journal.
-- Latest verified integration CI: **271 passed, 1 skipped, 1 warning**.
+- Latest source-lifecycle integration snapshot passed 271 tests with 1 skipped and 1 warning. The current PR's latest Python workflow also passed after the additional partition-recovery and robots-delay regression tests.
 
 ## Current main state
 
@@ -191,7 +191,7 @@ The following work is implemented in the current review branch, with CI verifica
 - System configuration reports listener and durable-persistence status without exposing filesystem paths or database URLs.
 - Generation rebuild/cutover is merged: bounded copy and reconciliation across Index, Documents, Vectors, Memory, and Knowledge; persistent write fencing; restart recovery; active-generation retrieval and writes; and authoritative Index freshness/tombstone filtering. PR #42 merged as `4c607ffd33f27f96b07d4fac58db20cd8b3afe95` with 204 passed and 1 skipped.
 
-These are implemented slices, not a declaration that the platform is production-ready. Transcript parsing still relies on caller-supplied byte slices, while durable transcript jobs, byte checkpoints, retry state, and restart recovery are implemented. Server-side filesystem scanning remains intentionally out of scope without an explicit scoped-source contract.
+These are implemented slices, not a declaration that the platform is production-ready. Transcript parsing still relies on caller-supplied byte slices, while durable transcript jobs, byte checkpoints, and retry state are implemented. Automatic transcript-job startup recovery is intentionally deferred until those request-owned jobs have renewable leases; bulk recovery on every replica startup could interrupt work owned by another live instance. Server-side filesystem scanning remains intentionally out of scope without an explicit scoped-source contract.
 
 ## Remaining implementation sequence
 
