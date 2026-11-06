@@ -237,6 +237,11 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
             raise HTTPException(status_code=400, detail=f"{name} must be a non-empty string of at most {maximum} characters")
         return value.strip()
 
+    def bounded_limit(value: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 500:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+        return value
+
     def string_list(payload: dict[str, Any], name: str, maximum_items: int = 100) -> list[str]:
         value = payload.get(name, [])
         if not isinstance(value, list) or len(value) > maximum_items or any(
@@ -365,7 +370,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
     @router.get("/projects/{project_id}/members")
     async def list_members(project_id: str, viewer_id: str, request: Request, limit: int = 100):
         await require_role(project_id, validated_viewer_id(viewer_id, request), roles)
-        return {"ok": True, "members": await store.list("membership", project_id=project_id, limit=limit)}
+        return {"ok": True, "members": await store.list("membership", project_id=project_id, limit=bounded_limit(limit))}
 
     @router.post("/projects/{project_id}/contributions")
     async def create_contribution(project_id: str, payload: dict[str, Any], request: Request):
@@ -390,7 +395,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
     async def list_contributions(project_id: str, viewer_id: str, request: Request, actor_id: str | None = None, status: str | None = None, limit: int = 100):
         await require_role(project_id, viewer_id(viewer_id, request), roles)
         return {"ok": True, "contributions": await store.list(
-            "contribution", project_id=project_id, actor_id=actor_id, status=status, limit=limit,
+            "contribution", project_id=project_id, actor_id=actor_id, status=status, limit=bounded_limit(limit),
         )}
 
     @router.post("/projects/{project_id}/handoffs")
@@ -423,7 +428,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
     @router.get("/projects/{project_id}/handoffs")
     async def list_handoffs(project_id: str, viewer_id: str, request: Request, status: str | None = None, limit: int = 100):
         await require_role(project_id, viewer_id(viewer_id, request), roles)
-        return {"ok": True, "handoffs": await store.list("handoff", project_id=project_id, status=status, limit=limit)}
+        return {"ok": True, "handoffs": await store.list("handoff", project_id=project_id, status=status, limit=bounded_limit(limit))}
 
     @router.get("/handoffs/{handoff_id}")
     async def get_handoff(handoff_id: str, viewer_id: str, request: Request):
@@ -573,7 +578,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
     @router.get("/projects/{project_id}/syntheses")
     async def list_syntheses(project_id: str, viewer_id: str, request: Request, limit: int = 100):
         await require_role(project_id, viewer_id(viewer_id, request), roles)
-        return {"ok": True, "syntheses": await store.list("synthesis", project_id=project_id, limit=limit)}
+        return {"ok": True, "syntheses": await store.list("synthesis", project_id=project_id, limit=bounded_limit(limit))}
 
     @router.post("/projects/{project_id}/proposals")
     async def create_proposal(project_id: str, payload: dict[str, Any], request: Request):
