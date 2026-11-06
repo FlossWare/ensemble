@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
 
 from .partitioning import PartitionedAsyncEngine
+from .deletion import ReclamationJob
 
 
 reclamation_metadata = MetaData()
@@ -33,8 +34,8 @@ reclamation_jobs = Table(
 class ReclamationStore(Protocol):
     async def initialize(self) -> None: ...
     async def close(self) -> None: ...
-    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> dict[str, Any]: ...
-    async def claim_due(self, limit: int = 100) -> list[dict[str, Any]]: ...
+    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> ReclamationJob: ...
+    async def claim_due(self, limit: int = 100) -> list[ReclamationJob]: ...
     async def complete(self, source_id: str) -> None: ...
     async def retry(self, source_id: str, error: str, delay_seconds: int | None = None) -> None: ...
     async def status(self) -> dict[str, int]: ...
@@ -60,7 +61,7 @@ class SqliteReclamationStore:
     async def close(self) -> None:
         await self.engine.dispose()
 
-    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> dict[str, Any]:
+    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> ReclamationJob:
         if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
             raise ValueError("source_id must contain 1-1024 characters")
         now = requested_at or datetime.now(timezone.utc)
@@ -86,7 +87,7 @@ class SqliteReclamationStore:
             row = (await connection.execute(
                 select(reclamation_jobs).where(reclamation_jobs.c.source_id == source_id)
             )).mappings().one()
-        return dict(row)
+        return dict(row)  # type: ignore[return-value]
 
     async def claim_due(self, limit: int = 100) -> list[dict[str, Any]]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
@@ -123,7 +124,7 @@ class SqliteReclamationStore:
                 )
                 .returning(reclamation_jobs)
             )).mappings().all()
-        return [dict(row) for row in claimed]
+        return [dict(row) for row in claimed]  # type: ignore[return-value]
 
     async def complete(self, source_id: str) -> None:
         now = datetime.now(timezone.utc)
@@ -192,7 +193,7 @@ class InMemoryReclamationStore:
                 "updated_at": now, "completed_at": None,
                 "actor": actor, "reason": reason, "retain_until": retain_until,
             }
-        return dict(self._jobs[source_id])
+        return dict(self._jobs[source_id])  # type: ignore[return-value]
 
     async def claim_due(self, limit: int = 100) -> list[dict[str, Any]]:
         now = datetime.now(timezone.utc)
