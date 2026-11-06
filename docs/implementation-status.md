@@ -120,3 +120,13 @@ Implemented in the current partition-isolation branch:
 Verification on the latest successful partition CI run: **166 passed, 1 skipped**. This includes end-to-end ingestion/retrieval isolation, Memory/Knowledge/Graph/Vector separation, token allow-list checks, physical database separation for duplicate source IDs, remote-request rejection in local mode, and non-loopback listener authentication configuration.
 
 Still required before partition isolation is review-ready: broader adversarial coverage across all capability types and destructive operations; backup/restore verification for the complete partition directory; key rotation/revocation and credential administration; rate limiting and audit/diagnostic coverage; and a security review of the Control Center and remote capability trust boundary. In-memory adapters remain test-only and are rejected when partition credentials are configured.
+
+
+## PR #47 current branch additions (verification pending)
+
+- Deletion lifecycle now persists actor, reason, request time, and retention deadline; the durable queue schedules future reclamation across restarts.
+- The deletion audit ledger records strategy results and worker lifecycle events. Soft-deleted sources can be restored only while reclamation remains pending/retryable; running or completed reclamation blocks restoration. Documents, Knowledge, and Vector generation materializations are retained and restored until physical purge.
+- Python deletion contracts use generic strategy/result/decorator protocols and a typed reclamation job record. The repository remains Python-only; Java implementation parity is not claimed.
+- Collaboration REST resources cover human/agent identity, project membership, attributable contributions, activity history, incremental handoffs/checkpoints, provenance-linked synthesis, proposals, objections, and human-gated decisions. SQLite is reused; no service or database was added.
+- The Control Center includes a collaboration workbench. Integrations remain responsible for environment-specific hook capture and publish structured checkpoints through REST.
+- New migration and regression/integration tests are present. The current PR head must pass the full workflow and SonarCloud gate before these additions can be called verified or their issues closed.
