@@ -751,6 +751,10 @@ def create_app(
     app.openapi = openapi_with_partition_auth
     documents = DocumentService(
         document_store, Chunker(), embeddings, active_vector_store, active_index_store,
+        internal_client=InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+        }),
     )
     search = SearchService(
         document_store, embeddings, active_reranker, active_vector_store, active_index_store,
@@ -1665,6 +1669,7 @@ def create_app(
                 embed=payload.get("embed", True),
                 vector_collection=payload.get("vector_collection"),
                 trace=trace_callback,
+                request_context=request,
             )
             return result
         except ChunkingError as exc:
