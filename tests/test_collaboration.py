@@ -312,6 +312,12 @@ def test_collaboration_rejects_invalid_participant_types_and_membership_roles():
             "name": "Role validation",
             "owner_id": "human:role-owner",
         }).json()["project"]
+        reader = client.post("/api/v1/collaboration/participants", json={
+            "participant_id": "agent:role-reader",
+            "display_name": "Reader",
+            "participant_type": "agent",
+        })
+        assert reader.status_code == 200
 
         invalid_role = client.post(f"/api/v1/collaboration/projects/{project['id']}/members", json={
             "actor_id": "human:role-owner",
@@ -340,6 +346,18 @@ def test_collaboration_rejects_invalid_participant_types_and_membership_roles():
         })
         assert allowed_read.status_code == 200
         assert denied_read.status_code == 403
+        reader_member = client.post(f"/api/v1/collaboration/projects/{project['id']}/members", json={
+            "actor_id": "human:role-owner",
+            "participant_id": "agent:role-reader",
+            "role": "read",
+        })
+        assert reader_member.status_code == 200
+        reader_write = client.post(f"/api/v1/collaboration/projects/{project['id']}/contributions", json={
+            "actor_id": "agent:role-reader",
+            "kind": "note",
+            "summary": "A read-only participant cannot write.",
+        })
+        assert reader_write.status_code == 403
 
 def test_handoff_superseding_preserves_original_and_records_replacement_link():
     with TestClient(create_app(
