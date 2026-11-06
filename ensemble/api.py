@@ -1765,14 +1765,14 @@ def create_app(
             await active_knowledge_store.restore(source_id)
             await active_vector_store.restore_source(source_id)
             generation_status = await active_index_store.generation_status()
-            for generation in generation_status.get("generations", []):
-                generation_id = generation.get("generation_id")
-                if not generation_id:
-                    continue
+            generation_id = generation_status.get("active_generation_id")
+            if generation_id:
                 await document_store.restore_generation_source(generation_id, source_id)
                 await active_knowledge_store.restore_generation_source(generation_id, source_id)
                 await active_vector_store.restore_generation_source(generation_id, source_id)
             restored = await active_index_store.restore_source(source_id, sequence)
+            if generation_id:
+                await active_index_store.acknowledge_generation_change(source_id, sequence, False)
             await active_reclamation_store.record_audit(
                 source_id, "restored", actor=current_request_scope().principal_id,
                 reason="source restored before physical reclamation",
