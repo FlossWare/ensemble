@@ -138,7 +138,7 @@ The Memory capability owns its snapshot and journal persistence. The generation 
 | POST | /api/v1/knowledge/records/query | Read active Knowledge records by source identity |
 | POST | /api/v1/knowledge/generations/{generation_id}/records | Copy or tombstone a record in the target Knowledge generation |
 
-Knowledge owns record retrieval and generation persistence. The orchestrator validates each record against the target Index snapshot before delegating the write.
+Knowledge owns record retrieval and generation persistence. The orchestrator validates each record against the target Index snapshot before delegating the write. Journal reconciliation remains coordinated through the Index generation journal; each capability applies its own generation mutation through its REST API. The public operations are `POST /api/v1/index/generations/{generation_id}/reconcile/{index|documents|vectors|memory|knowledge}` followed by the final write-fence operation.
 
 ## 12. Initial implemented endpoints
 
