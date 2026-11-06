@@ -310,3 +310,38 @@ def test_api_restores_soft_deleted_source_and_cancels_pending_reclamation():
         assert app.state.reclamation_store._jobs["restore-api-source"]["state"] == "cancelled"
         audit = client.get("/api/v1/index/sources/restore-api-source/deletion-audit")
         assert any(item["event"] == "restored" for item in audit.json()["events"])
+
+
+
+def test_api_refuses_restore_after_physical_reclamation_has_been_claimed():
+    from fastapi.testclient import TestClient
+    from ensemble.api import create_app
+    from ensemble.index_memory import InMemoryIndexStore
+    from ensemble.knowledge_store import InMemoryKnowledgeStore
+    from ensemble.store import InMemoryDocumentStore
+    from ensemble.vector_memory import InMemoryVectorStore
+
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        index_store=InMemoryIndexStore(),
+        knowledge_store=InMemoryKnowledgeStore(),
+        vector_store=InMemoryVectorStore(),
+    )
+    with TestClient(app) as client:
+        client.post("/api/v1/index/revisions", json={
+            "source_id": "restore-running-source",
+            "revision_sequence": 1,
+            "revision_id": "revision-1",
+            "profiles": {"chunk": "window-v1"},
+        })
+        client.post("/api/v1/index/tombstones", json={
+            "source_id": "restore-running-source",
+            "revision_sequence": 2,
+        })
+        assert len(asyncio.run(app.state.reclamation_store.claim_due(1))) == 1
+        rejected = client.post("/api/v1/index/restorations", json={
+            "source_id": "restore-running-source",
+            "revision_sequence": 3,
+        })
+        assert rejected.status_code == 409
+        assert client.get("/api/v1/index/sources/restore-running-source").json()["source"]["tombstoned"] is True
