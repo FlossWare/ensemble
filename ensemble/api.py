@@ -1301,10 +1301,11 @@ def create_app(
         return {"ok": True, "service": "knowledge"}
 
     @app.get("/api/v1/knowledge/ready", tags=["knowledge"])
-    async def knowledge_ready():
+    async def knowledge_ready(request: Request):
         try:
             await active_knowledge_store.get("__readiness_probe__")
-            await active_index_store.list_sources(1)
+            internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+            await internal.request("GET", "/api/v1/index/ready", request=request)
         except Exception as exc:
             raise HTTPException(status_code=503, detail="knowledge or index persistence unavailable") from exc
         return {"ok": True, "ready": True, "index": "available"}
@@ -1335,7 +1336,17 @@ def create_app(
             raise HTTPException(status_code=400, detail="provenance must include string origin and locator")
         if not isinstance(profiles, dict) or not profiles:
             raise HTTPException(status_code=400, detail="profiles must be a non-empty object")
-        decision = await active_index_store.record_revision(source_id, sequence, revision_id, profiles)
+        internal = InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
+        })
+        decision = await internal.request(
+            "POST", "/api/v1/index/revisions", request=request,
+            json={
+                "source_id": source_id, "revision_sequence": sequence,
+                "revision_id": revision_id, "profiles": profiles,
+            },
+        )
         if decision["decision"] not in {"accepted", "duplicate"}:
             return {"ok": True, "decision": decision["decision"], "source_id": source_id, "stored": False}
         chunk_profile = profiles.get("chunking", "window-v1")
@@ -1351,9 +1362,15 @@ def create_app(
             },
         )
         try:
-            indexed = await documents.ingest(
-                document, vector_collection="knowledge_chunks"
+            indexed_payload = await internal.request(
+                "POST", "/api/v1/documents/records", request=request,
+                json={
+                    "document": document.model_dump(mode="json"),
+                    "embed": True,
+                    "vector_collection": "knowledge_chunks",
+                },
             )
+            indexed = DocumentOut.model_validate(indexed_payload)
             digest = await active_knowledge_store.put({
                 "source_id": source_id,
                 "revision_sequence": sequence,
@@ -1370,7 +1387,15 @@ def create_app(
                 if knowledge_record is None:
                     raise RuntimeError("Knowledge record was not readable after publication")
                 await active_knowledge_store.upsert_generation(active_generation, knowledge_record)
-            await active_index_store.acknowledge_generation_change(source_id, sequence, False)
+            await internal.request(
+                "POST", "/api/v1/index/generation-changes/acknowledgements",
+                request=request,
+                json={
+                    "source_id": source_id,
+                    "revision_sequence": sequence,
+                    "tombstoned": False,
+                },
+            )
         except ChunkingError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
@@ -2079,18 +2104,20 @@ def create_app(
         return {"ok": True, "deleted": deleted}
 
     @app.post("/api/v1/vector/collections/{name}/sources/tombstone", tags=["vector"])
-    async def vector_source_tombstone(name: str, payload: dict[str, Any]):
+    async def vector_source_tombstone(name: str, payload: dict[str, Any], request: Request):
         _validate_vector_collection_name(name)
         source_id = payload.get("source_id")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
-        source = await active_index_store.get_source(source_id)
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        source_response = await internal.request(
+            "POST", "/api/v1/index/sources/query", request=request,
+            json={"source_ids": [source_id]},
+        )
+        source = (source_response.get("sources") or {}).get(source_id)
         if source is None or source.get("tombstoned") is not True:
             raise HTTPException(status_code=409, detail="source must be tombstoned through the Index lifecycle first")
-        try:
-            await active_index_store.assert_generation_writes_open()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        await internal.request("GET", "/api/v1/index/generation-writes/ready", request=request)
         deleted = await active_vector_store.delete_superseded(name, source_id, "")
         active_generation = await active_generation_id()
         if active_generation is not None:
