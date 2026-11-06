@@ -36,6 +36,10 @@ class DeletionContext:
     def __post_init__(self) -> None:
         if not isinstance(self.source_id, str) or not self.source_id or len(self.source_id) > 1024:
             raise ValueError("source_id must contain 1-1024 characters")
+        if self.actor is not None and (not isinstance(self.actor, str) or not self.actor.strip() or len(self.actor) > 256):
+            raise ValueError("actor must be a non-empty string of at most 256 characters")
+        if self.reason is not None and (not isinstance(self.reason, str) or len(self.reason) > 4000):
+            raise ValueError("reason must be a string of at most 4000 characters")
         if self.requested_at is not None and self.requested_at.tzinfo is None:
             raise ValueError("requested_at must be timezone-aware")
         if self.retain_until is not None and self.retain_until.tzinfo is None:
