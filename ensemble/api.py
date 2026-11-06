@@ -1768,6 +1768,9 @@ def create_app(
             raise HTTPException(status_code=409, detail="source is not soft-deleted")
         if sequence <= source.get("high_sequence", 0):
             raise HTTPException(status_code=400, detail="restore sequence must exceed the current source sequence")
+        reclamation_job = await active_reclamation_store.get_job(source_id)
+        if reclamation_job and reclamation_job.get("erasure_required"):
+            raise HTTPException(status_code=409, detail="legally required erasure cannot be restored")
         try:
             await active_index_store.assert_generation_writes_open()
         except RuntimeError as exc:
