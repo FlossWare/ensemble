@@ -229,7 +229,7 @@ Node and edge mutations use resource names and HTTP methods. Query and traversal
 - `retain_until` is an optional timezone-aware ISO-8601 timestamp. The reclamation job is durably scheduled with this deadline as its earliest eligible execution time. The deadline survives process restarts.
 - The reclamation ledger retains actor, reason, request time, retention deadline, retry state, and completion time. Logical tombstoning remains immediate; retention delays only physical reclamation.
 - Physical reclamation remains idempotent and retryable. The authoritative Index tombstone is retained after derived payloads are purged.
-- The append-only deletion audit ledger records strategy outcomes and worker claims, deferrals, retries, and completion. Read it with `GET /api/v1/index/sources/{source_id}/deletion-audit`.\n
+- The append-only deletion audit ledger records strategy outcomes and worker claims, deferrals, retries, and completion. Read it with `GET /api/v1/index/sources/{source_id}/deletion-audit`.
 
 ## 9. Search and reranking security
 
