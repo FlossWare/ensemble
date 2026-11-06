@@ -940,6 +940,8 @@ class InMemoryMemoryStore:
         self._entry_metadata: dict[str, list[dict[str, Any]]] = {}
         self._events: dict[tuple[str, str], str] = {}
         self.sources: dict[str, dict[str, Any]] = {}
+        self._generation_snapshots: dict[str, dict[str, dict[str, Any]]] = {}
+        self._generation_changes: dict[str, list[dict[str, Any]]] = {}
 
     async def initialize(self) -> None:
         return None
@@ -1154,3 +1156,78 @@ class InMemoryMemoryStore:
         if isinstance(size, bool) or not isinstance(size, int) or not 1 <= size <= 10000:
             raise ValueError("size must be an integer between 1 and 10000")
         return _chunk_markdown(content, size)
+
+    async def memory_generation_upper_bound(self) -> str | None:
+        return max(self._memories, default=None)
+
+    async def list_memory_names_after(
+        self, cursor: str | None, upper_bound: str | None, limit: int,
+    ) -> list[str]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        if upper_bound is None:
+            return []
+        names = sorted(name for name in self._memories if name <= upper_bound and (cursor is None or name > cursor))
+        return names[:limit]
+
+    async def get_memory_snapshot(self, name: str) -> dict[str, Any] | None:
+        name = validate_memory_name(name)
+        content = self._memories.get(name)
+        if content is None:
+            return None
+        return {
+            "name": name, "content": content,
+            "entries": copy.deepcopy(self._entries.get(name, [])),
+            "source": next(
+                (copy.deepcopy(value) for value in self.sources.values() if value.get("document_name") == name),
+                None,
+            ),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def put_memory_generation_snapshot(
+        self, generation_id: str, name: str, snapshot: dict[str, Any] | None,
+    ) -> None:
+        name = validate_memory_name(name)
+        target = self._generation_snapshots.setdefault(generation_id, {})
+        if snapshot is None:
+            target.pop(name, None)
+        else:
+            target[name] = copy.deepcopy(snapshot)
+
+    async def get_memory_generation_snapshot(
+        self, generation_id: str, name: str,
+    ) -> dict[str, Any] | None:
+        return copy.deepcopy(self._generation_snapshots.get(generation_id, {}).get(validate_memory_name(name)))
+
+    async def list_memory_generation_changes_after(
+        self, generation_id: str, after_change_id: int, limit: int,
+    ) -> list[dict[str, Any]]:
+        if isinstance(after_change_id, bool) or not isinstance(after_change_id, int) or after_change_id < 0:
+            raise ValueError("after_change_id must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        return [
+            copy.deepcopy(change) for change in self._generation_changes.get(generation_id, [])
+            if change["change_id"] > after_change_id
+        ][:limit]
+
+    async def memory_generation_change_high_watermark(self, generation_id: str) -> int:
+        changes = self._generation_changes.get(generation_id, [])
+        return max((change["change_id"] for change in changes), default=0)
+
+    async def acknowledge_memory_generation_changes(self, generation_id: str, through_change_id: int) -> int:
+        if isinstance(through_change_id, bool) or not isinstance(through_change_id, int) or through_change_id < 0:
+            raise ValueError("through_change_id must be a non-negative integer")
+        count = 0
+        for change in self._generation_changes.get(generation_id, []):
+            if change["change_id"] <= through_change_id and not change.get("acknowledged", False):
+                change["acknowledged"] = True
+                count += 1
+        return count
+
+    async def pending_memory_generation_changes(self, generation_id: str) -> int:
+        return sum(
+            1 for change in self._generation_changes.get(generation_id, [])
+            if not change.get("acknowledged", False)
+        )
