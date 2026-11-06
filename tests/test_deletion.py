@@ -148,3 +148,48 @@ def test_audit_decorator_records_successful_deletion_result():
         assert audited == [("source-1", "queued")]
 
     asyncio.run(exercise())
+
+
+def test_api_uses_injected_deletion_strategy_for_tombstones():
+    from fastapi.testclient import TestClient
+
+    from ensemble.api import create_app
+    from ensemble.store import InMemoryDocumentStore
+
+    class RecordingStrategy:
+        def __init__(self):
+            self.contexts = []
+
+        async def execute(self, context):
+            self.contexts.append(context)
+            return DeletionResult(
+                source_id=context.source_id,
+                state="queued",
+                value={"source_id": context.source_id, "state": "pending"},
+                retryable=True,
+            )
+
+    strategy = RecordingStrategy()
+    with TestClient(create_app(
+        store=InMemoryDocumentStore(),
+        deletion_strategy=strategy,
+    )) as client:
+        revision = client.post("/api/v1/index/revisions", json={
+            "source_id": "strategy-source",
+            "revision_sequence": 1,
+            "revision_id": "revision-1",
+            "profiles": {"chunk": "window-v1"},
+        })
+        assert revision.status_code == 200
+
+        response = client.post("/api/v1/index/tombstones", json={
+            "source_id": "strategy-source",
+            "revision_sequence": 2,
+        })
+        assert response.status_code == 200
+        assert response.json()["reclamation"] == {
+            "source_id": "strategy-source",
+            "state": "pending",
+        }
+        assert len(strategy.contexts) == 1
+        assert strategy.contexts[0].source_id == "strategy-source"
