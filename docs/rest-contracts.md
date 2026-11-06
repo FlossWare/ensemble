@@ -131,7 +131,16 @@ The generation orchestrator pages source metadata through Index REST, then deleg
 
 The Memory capability owns its snapshot and journal persistence. The generation orchestrator only coordinates these operations and records progress in Index checkpoints.
 
-## 11. Initial implemented endpoints
+## 11. Knowledge generation operations
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | /api/v1/knowledge/records/query | Read active Knowledge records by source identity |
+| POST | /api/v1/knowledge/generations/{generation_id}/records | Copy or tombstone a record in the target Knowledge generation |
+
+Knowledge owns record retrieval and generation persistence. The orchestrator validates each record against the target Index snapshot before delegating the write.
+
+## 12. Initial implemented endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
