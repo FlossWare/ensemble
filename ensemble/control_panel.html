@@ -294,6 +294,12 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 <input id="collab-contribution-summary" type="text" maxlength="4000" required placeholder="What changed and why">
 <button type="submit">Record contribution</button>
 </form>
+<div class="toolbar">
+<input id="collab-contribution-id" type="text" maxlength="64" placeholder="Contribution ID to review">
+<select id="collab-review-status"><option value="accepted">Accept</option><option value="rejected">Reject</option></select>
+<input id="collab-review-rationale" type="text" maxlength="4000" placeholder="Review rationale">
+<button id="collab-review-contribution" type="button">Record review</button>
+</div>
 <h3>Work handoffs and checkpoints</h3>
 <form id="collab-handoff-form">
 <input id="collab-handoff-objective" type="text" maxlength="4000" required placeholder="Objective">
