@@ -1265,7 +1265,7 @@ document.getElementById("collab-decide").addEventListener("click",()=>{
 });
 document.getElementById("collab-refresh").addEventListener("click",()=>{
  collabRun(async()=>{
-  const {projectId}=collabContext();
+  const {projectId,actorId}=collabContext();
   return await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/activity?viewer_id="+encodeURIComponent(actorId)+"&limit=100");
  });
 });
