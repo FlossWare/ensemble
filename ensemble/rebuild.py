@@ -923,12 +923,70 @@ class IndexGenerationBuilder:
         return fence
 
     async def reconcile_document_changes_page(
-        self, generation_id: str, *, page_size: int = 250,
+        self, generation_id: str, *, page_size: int = 250, request: Any = None,
     ) -> dict[str, Any]:
         if self.document_store is None:
             raise RuntimeError("document store is required for document reconciliation")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
+
+        if self.internal_client is not None:
+            status = await self.internal_client.request("GET", "/api/v1/index/generations", request=request)
+            generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
+            if generation is None or generation["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            checkpoints = generation.get("checkpoints") or {}
+            if (checkpoints.get("documents") or {}).get("sealed") is not True:
+                raise RuntimeError("document source copy must be sealed before document reconciliation")
+            index_cursor = int(((checkpoints.get("index_reconciliation") or {}).get("value") or {}).get("cursor", 0))
+            previous = checkpoints.get("documents_reconciliation") or {}
+            if previous.get("sealed") is True:
+                value = previous.get("value") or {}
+                return {"generation_id": generation_id, "status": "complete", "page_count": 0,
+                        "change_count": value.get("change_count", 0), "cursor": value.get("cursor", 0)}
+            value = previous.get("value") or {}
+            cursor = int(value.get("cursor", 0))
+            change_count = int(value.get("change_count", 0))
+            page = (await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/changes/page",
+                request=request, json={"after_change_id": cursor, "limit": page_size},
+            )).get("changes", [])
+            pending = next((i for i, change in enumerate(page) if not change.get("acknowledged", False)), None)
+            ready_page = page if pending is None else page[:pending]
+            for change in ready_page:
+                if change["change_id"] > index_cursor:
+                    raise RuntimeError("Index journal reconciliation must advance before Documents")
+                source_id = change["source_id"]
+                source = (await self.internal_client.request(
+                    "POST", f"/api/v1/index/generations/{generation_id}/sources/query",
+                    request=request, json={"source_ids": [source_id]},
+                )).get("sources", {}).get(source_id)
+                if source is None:
+                    raise RuntimeError("reconciled Index source is missing from the target generation")
+                await self.internal_client.request(
+                    "POST", f"/api/v1/documents/generations/{generation_id}/sources",
+                    request=request, json={"source": source},
+                )
+            next_cursor = ready_page[-1]["change_id"] if ready_page else cursor
+            change_count += len(ready_page)
+            high_watermark = (await self.internal_client.request(
+                "GET", f"/api/v1/index/generations/{generation_id}/changes/high-watermark", request=request,
+            )).get("high_watermark", 0)
+            waiting = pending is not None
+            caught_up = not waiting and next_cursor == high_watermark and len(page) < page_size
+            checkpoint = {"cursor": next_cursor, "change_count": change_count,
+                          "observed_high_watermark": high_watermark}
+            await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/checkpoints", request=request,
+                json={"capability": "documents_reconciliation", "checkpoint": checkpoint, "sealed": False},
+            )
+            return {"generation_id": generation_id,
+                    "status": "waiting_for_ack" if waiting else ("caught_up" if caught_up else "in_progress"),
+                    "page_count": len(ready_page),
+                    "pending_change_id": page[pending]["change_id"] if waiting else None,
+                    "change_count": change_count, "cursor": next_cursor,
+                    "high_watermark": high_watermark}
+
         status = await self.index_store.generation_status()
         generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
         if generation is None or generation["state"] != "building":
