@@ -2136,6 +2136,25 @@ def create_app(
             chunk_count += len(chunks)
         return {"ok": True, "document_count": document_count, "chunk_count": chunk_count, "tombstoned": False}
 
+    @app.post("/api/v1/vector/generations/{generation_id}/sources/reconcile", tags=["vector"])
+    async def vector_generation_source_reconcile(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        tombstoned = payload.get("tombstoned", False)
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        if not isinstance(tombstoned, bool):
+            raise HTTPException(status_code=400, detail="tombstoned must be a boolean")
+        copied = 0
+        for collection in await active_vector_store.list_collections():
+            name = collection["name"]
+            records = [] if tombstoned else await active_vector_store.list_records_for_source(name, source_id)
+            await active_vector_store.delete_generation_source(generation_id, source_id, name=name)
+            if records:
+                copied += await active_vector_store.upsert_generation(
+                    generation_id, name, collection["model"], collection["dimensions"], records,
+                )
+        return {"ok": True, "copied": copied, "tombstoned": tombstoned}
+
     @app.post("/api/v1/vector/generations/{generation_id}/sources/tombstone", tags=["vector"])
     async def vector_generation_source_tombstone(generation_id: str, payload: dict[str, Any]):
         source_id = payload.get("source_id")
