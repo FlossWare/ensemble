@@ -568,6 +568,11 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         summary = required_string(payload, "summary", 4000)
         rationale = required_string(payload, "rationale", 8000)
         objections = string_list(payload, "objections")
+        contribution_ids = string_list(payload, "contribution_ids")
+        for contribution_id in contribution_ids:
+            contribution = await store.get("contribution", contribution_id)
+            if contribution is None or contribution["project_id"] != project_id:
+                raise HTTPException(status_code=400, detail="proposal contribution_ids must belong to this project")
         gated = payload.get("human_approval_required")
         if gated is None:
             gated = (await project(project_id))["payload"].get("human_approval_required", True)
@@ -576,7 +581,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         proposal = await store.create(
             "proposal", {
                 "title": title, "summary": summary, "rationale": rationale,
-                "objections": objections, "human_approval_required": gated,
+                "objections": objections, "contribution_ids": contribution_ids, "human_approval_required": gated,
             }, project_id=project_id, actor_id=actor, status="proposed",
         )
         return {"ok": True, "proposal": proposal}
@@ -629,6 +634,13 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         if decision_status not in {"accepted", "rejected", "under_review", "superseded"}:
             raise HTTPException(status_code=400, detail="status must be accepted, rejected, under_review, or superseded")
         rationale = required_string(payload, "rationale", 8000)
+        decision_contribution_ids = payload.get("contribution_ids", proposal["payload"].get("contribution_ids", []))
+        if not isinstance(decision_contribution_ids, list) or any(not isinstance(item, str) for item in decision_contribution_ids):
+            raise HTTPException(status_code=400, detail="contribution_ids must be an array of identifiers")
+        for contribution_id in decision_contribution_ids:
+            contribution = await store.get("contribution", contribution_id)
+            if contribution is None or contribution["project_id"] != proposal["project_id"]:
+                raise HTTPException(status_code=400, detail="decision contribution_ids must belong to this project")
         decision_maker = await participant(actor)
         gated = proposal["payload"].get("human_approval_required", True)
         human_approved = decision_maker["payload"]["participant_type"] == "human" and (
@@ -643,7 +655,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         decision = await store.create(
             "decision", {
                 "proposal_id": proposal_id, "status": decision_status,
-                "rationale": rationale, "decision_maker_id": actor,
+                "rationale": rationale, "decision_maker_id": actor,\n                "contribution_ids": decision_contribution_ids,
                 "human_approved": bool(human_approved),
             }, project_id=proposal["project_id"], actor_id=actor, status=decision_status,
         )
