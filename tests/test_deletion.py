@@ -25,7 +25,7 @@ class FakeQueue:
         self.jobs = []
 
     async def enqueue(self, source_id, **metadata):
-        job = {"source_id": source_id, "state": "pending", **metadata}
+        job = {"source_id": source_id, "state": "pending", "available_at": metadata.get("retain_until") or datetime.now(timezone.utc), **metadata}
         self.jobs.append(job)
         return job
 
