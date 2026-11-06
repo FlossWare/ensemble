@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import Column, DateTime, Integer, JSON, MetaData, String, Table, and_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.engine import make_url
@@ -76,13 +77,16 @@ class SqliteCollaborationStore:
             "identity_key": identity_key, "payload": payload, "version": 1,
             "created_at": now, "updated_at": now,
         }
-        async with self.engine.begin() as connection:
-            await connection.execute(collaboration_records.insert().values(**values))
-            row = (await connection.execute(
-                select(collaboration_records).where(
-                    collaboration_records.c.record_id == values["record_id"]
-                )
-            )).mappings().one()
+        try:
+            async with self.engine.begin() as connection:
+                await connection.execute(collaboration_records.insert().values(**values))
+                row = (await connection.execute(
+                    select(collaboration_records).where(
+                        collaboration_records.c.record_id == values["record_id"]
+                    )
+                )).mappings().one()
+        except IntegrityError as exc:
+            raise ValueError("record or identity already exists") from exc
         return self._record(row)
 
     async def get(self, record_type: str, record_id: str) -> dict[str, Any] | None:
