@@ -1649,6 +1649,11 @@ def create_app(
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
             actor = payload.get("actor")
+            scope = current_request_scope()
+            if scope.authorization and actor is not None and actor != scope.principal_id:
+                raise HTTPException(status_code=403, detail="actor must match the authenticated principal")
+            if actor is None:
+                actor = scope.principal_id
             reason = payload.get("reason")
             retain_until_value = payload.get("retain_until")
             if actor is not None and (not isinstance(actor, str) or not actor.strip() or len(actor) > 256):
