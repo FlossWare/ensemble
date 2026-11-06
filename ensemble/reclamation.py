@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import os
 from uuid import uuid4
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlalchemy import Column, DateTime, Integer, JSON, MetaData, String, Table, Text, and_, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
