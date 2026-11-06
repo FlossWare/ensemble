@@ -1234,6 +1234,22 @@ for(const [buttonId,action] of [["collab-handoff-ack","acknowledge"],["collab-ha
   });
  });
 }
+document.getElementById("collab-handoff-supersede").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {actorId}=collabContext();
+  const result=await controlJson("/api/v1/collaboration/handoffs/"+encodeURIComponent(collabValue("collab-handoff-id"))+"/supersede","POST",{
+   actor_id:actorId,work_item_id:collabValue("collab-work-item")||undefined,
+   objective:collabValue("collab-handoff-objective"),
+   current_state:collabValue("collab-handoff-state"),
+   completed_work:collabValue("collab-handoff-completed")||undefined,
+   blockers:collabList("collab-handoff-blockers"),
+   next_actions:collabList("collab-handoff-next"),
+   references:collabList("collab-handoff-refs")
+  });
+  document.getElementById("collab-handoff-id").value=result.replacement.id;
+  return result;
+ });
+});
 document.getElementById("collab-synthesize").addEventListener("click",()=>{
  collabRun(async()=>{
   const {projectId,actorId}=collabContext();
