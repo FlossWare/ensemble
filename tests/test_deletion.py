@@ -267,9 +267,10 @@ def test_api_records_deletion_strategy_audit():
         assert tombstone.status_code == 200
         audit = client.get("/api/v1/index/sources/audited-api-source/deletion-audit")
         assert audit.status_code == 200
-        assert audit.json()["events"][0]["event"] == "strategy_result"
-        assert audit.json()["events"][0]["actor"] == "human:operator"
-        assert audit.json()["events"][0]["reason"] == "test audit trail"
+        strategy_events = [item for item in audit.json()["events"] if item["event"] == "strategy_result"]
+        assert strategy_events
+        assert strategy_events[0]["actor"] == "human:operator"
+        assert strategy_events[0]["reason"] == "test audit trail"
 
 
 
