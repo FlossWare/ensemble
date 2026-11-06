@@ -184,6 +184,17 @@ A Control Center is also a required product surface. It is served by the same ap
 - `POST /api/v1/memory/sources/import` and `/sources/reconcile`, with `GET /api/v1/memory/sources/status`, manage imported Knowledge sources.
 - `POST /api/v1/memory/events` captures prompt events.
 
+### Session history ledger
+
+Transcript history is stored in the existing `session-events` Memory collection. Consumers use the Memory entry contract directly; there is no separate Ledger service or parallel history route family.
+
+- `GET /api/v1/memory/memories/session-events/entries?limit=1000` reads the bounded session history in chronological order.
+- `PUT /api/v1/memory/memories/session-events/entries/{event_id}` appends an entry using a caller-supplied stable event ID.
+- Repeating the same event ID and payload returns `duplicate`; reusing that ID with different content returns HTTP `409`.
+- Use the idempotent `PUT` form when writing ledger entries so retries cannot create duplicate records.
+
+This contract exposes existing session history and supports controlled appends. It does not introduce event producers, pipeline instrumentation, or additional capture behavior.
+
 ## Graph resource conventions
 
 - `POST /api/v1/graph/nodes` creates or resolves a node.
