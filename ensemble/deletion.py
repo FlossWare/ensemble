@@ -3,7 +3,21 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Generic, Protocol, TypeVar
+from typing import Any, Awaitable, Callable, Generic, Protocol, TypeVar, TypedDict
+
+class ReclamationJob(TypedDict):
+    source_id: str
+    state: str
+    attempts: int
+    available_at: datetime
+    last_error: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+    actor: str | None
+    reason: str | None
+    retain_until: datetime | None
+
 
 TContext = TypeVar("TContext")
 TValue = TypeVar("TValue")
@@ -43,7 +57,7 @@ class DeletionStrategy(Protocol[TContext, TValue]):
 
 
 class ReclamationQueue(Protocol):
-    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> dict[str, Any]: ...
+    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> ReclamationJob: ...
 
 
 class DeferredReclamationStrategy:
@@ -52,7 +66,7 @@ class DeferredReclamationStrategy:
     def __init__(self, queue: ReclamationQueue):
         self._queue = queue
 
-    async def execute(self, context: DeletionContext) -> DeletionResult[dict[str, Any]]:
+    async def execute(self, context: DeletionContext) -> DeletionResult[ReclamationJob]:
         job = await self._queue.enqueue(context.source_id, actor=context.actor, reason=context.reason, requested_at=context.requested_at, retain_until=context.retain_until)
         return DeletionResult(
             source_id=context.source_id,
