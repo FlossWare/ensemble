@@ -254,6 +254,7 @@ def create_app(
     deletion_strategy: DeletionStrategy[DeletionContext, ReclamationJob] | None = None,
     collaboration_store: CollaborationStore | None = None,
     synthesis_strategy: SynthesisStrategy | None = None,
+    run_reclamation_worker: bool = True,
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
     context_token_counter = configured_context_token_counter()
@@ -627,16 +628,19 @@ def create_app(
             await active_source_schedule_store.initialize()
             await active_execution_trace_store.initialize()
             await active_collaboration_store.initialize()
-            worker_task = asyncio.create_task(reclamation_worker())
+            worker_task = asyncio.create_task(reclamation_worker()) if run_reclamation_worker else None
             crawl_worker_task = asyncio.create_task(crawl_worker())
             schedule_worker_task = asyncio.create_task(source_schedule_worker())
             try:
                 yield
             finally:
-                worker_task.cancel()
+                if worker_task is not None:
+                    worker_task.cancel()
                 crawl_worker_task.cancel()
                 schedule_worker_task.cancel()
                 for task in (worker_task, crawl_worker_task, schedule_worker_task):
+                    if task is None:
+                        continue
                     try:
                         await task
                     except asyncio.CancelledError:
