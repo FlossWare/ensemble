@@ -58,7 +58,7 @@ from .crawl_store import CrawlJobStore, SqliteCrawlJobStore, InMemoryCrawlJobSto
 from .context_tokens import ContextTokenCounter, ApproximateContextTokenCounter, configured_context_token_counter
 from .source_schedule_store import SourceScheduleStore, SqliteSourceScheduleStore, InMemorySourceScheduleStore
 from .execution_trace_store import ExecutionTraceStore, SqliteExecutionTraceStore, InMemoryExecutionTraceStore, traces as execution_traces
-from .collaboration import CollaborationStore, SqliteCollaborationStore, InMemoryCollaborationStore, create_collaboration_router
+from .collaboration import CollaborationStore, SynthesisStrategy, SqliteCollaborationStore, InMemoryCollaborationStore, create_collaboration_router
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -253,6 +253,7 @@ def create_app(
     source_schedule_store: SourceScheduleStore | None = None,
     deletion_strategy: DeletionStrategy[DeletionContext, dict[str, Any]] | None = None,
     collaboration_store: CollaborationStore | None = None,
+    synthesis_strategy: SynthesisStrategy | None = None,
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
     context_token_counter = configured_context_token_counter()
@@ -640,7 +641,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.middleware("http")(partition_scope_middleware)
-    app.include_router(create_collaboration_router(active_collaboration_store))
+    app.include_router(create_collaboration_router(active_collaboration_store, synthesis_strategy))
     app.state.execution_trace_store = active_execution_trace_store
     # Keep the durable maintenance runner addressable for in-process operations and tests.
     app.state.reclamation_runner = reclaim_due_sources
