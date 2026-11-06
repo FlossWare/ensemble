@@ -1495,8 +1495,22 @@ def create_app(
             raise HTTPException(status_code=400, detail="record origin and locator are required")
         if not isinstance(record.get("profiles"), dict) or not record["profiles"]:
             raise HTTPException(status_code=400, detail="record.profiles must be a non-empty object")
-        digest = await active_knowledge_store.put(record)
+        expected_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if revision_id != expected_digest:
+            raise HTTPException(status_code=400, detail="record.revision_id must match the content SHA-256")
         internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        source_response = await internal.request(
+            "POST", "/api/v1/index/sources/query", request=request,
+            json={"source_ids": [source_id]},
+        )
+        source = (source_response.get("sources") or {}).get(source_id)
+        if (
+            source is None or source.get("tombstoned") or source.get("purged")
+            or source.get("high_sequence") != revision_sequence
+            or source.get("revision_id") != revision_id
+        ):
+            raise HTTPException(status_code=409, detail="Knowledge materialization requires a matching current Index revision")
+        digest = await active_knowledge_store.put(record)
         status = await internal.request("GET", "/api/v1/index/generations", request=request)
         generation_id = status.get("active_generation_id")
         if generation_id:
