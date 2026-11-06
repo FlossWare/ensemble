@@ -342,6 +342,10 @@ def create_app(
         for job in jobs:
             source_id = job["source_id"]
             try:
+                await active_reclamation_store.record_audit(
+                    source_id, "claimed", actor=job.get("actor"), reason=job.get("reason"),
+                    details={"attempts": job.get("attempts", 0)},
+                )
                 async with generation_lifecycle_lock:
                     # A builder may have read source payloads before a tombstone
                     # and still be copying them into its generation. Defer the
@@ -354,6 +358,10 @@ def create_app(
                     ):
                         await active_reclamation_store.retry(
                             source_id, "generation build in progress; reclamation deferred", delay_seconds=15,
+                        )
+                        await active_reclamation_store.record_audit(
+                            source_id, "deferred", actor=job.get("actor"), reason=job.get("reason"),
+                            details={"cause": "generation_build_in_progress"},
                         )
                         continue
                     await active_index_store.assert_generation_writes_open()
@@ -393,8 +401,16 @@ def create_app(
                         # materialized stores report that no more pages remain.
                         await active_index_store.mark_purged(source_id)
                         await active_reclamation_store.complete(source_id)
+                        await active_reclamation_store.record_audit(
+                            source_id, "completed", actor=job.get("actor"), reason=job.get("reason"),
+                            details={"purged": True},
+                        )
             except Exception as exc:
                 await active_reclamation_store.retry(source_id, f"{type(exc).__name__}: {exc}")
+                await active_reclamation_store.record_audit(
+                    source_id, "retry_scheduled", actor=job.get("actor"), reason=job.get("reason"),
+                    details={"error_type": type(exc).__name__},
+                )
         return len(jobs)
 
     async def reclamation_worker() -> None:
