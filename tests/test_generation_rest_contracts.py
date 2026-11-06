@@ -4,18 +4,25 @@ from fastapi.testclient import TestClient
 
 from ensemble.api import create_app
 from ensemble.index_memory import InMemoryIndexStore
+from ensemble.knowledge_store import InMemoryKnowledgeStore
 from ensemble.store import InMemoryDocumentStore
 
 
 def test_index_generation_source_copy_uses_internal_rest_contracts():
     index_store = InMemoryIndexStore()
+    knowledge_store = InMemoryKnowledgeStore()
+    asyncio.run(knowledge_store.put({
+        "source_id": "source-a", "revision_sequence": 1, "revision_id": "revision-a",
+        "title": "Source A", "content": "knowledge generation fixture",
+        "origin": "test", "locator": "source-a", "profiles": {"profile": "v1"},
+    }))
     asyncio.run(index_store.record_revision("source-a", 1, "revision-a", {"profile": "v1"}))
     asyncio.run(index_store.record_revision("source-b", 1, "revision-b", {"profile": "v1"}))
     asyncio.run(index_store.acknowledge_generation_change("source-a", 1, False))
     asyncio.run(index_store.acknowledge_generation_change("source-b", 1, False))
     asyncio.run(index_store.create_generation("generation-rest-copy"))
 
-    app = create_app(store=InMemoryDocumentStore(), index_store=index_store)
+    app = create_app(store=InMemoryDocumentStore(), index_store=index_store, knowledge_store=knowledge_store)
     with TestClient(app) as client:
         first = client.post(
             "/api/v1/index/generations/generation-rest-copy/copy/index",
@@ -67,6 +74,14 @@ def test_index_generation_source_copy_uses_internal_rest_contracts():
         assert copied_memory.json()["status"] == "complete"
         assert copied_memory.json()["record_count"] == 1
 
+        knowledge = client.post(
+            "/api/v1/index/generations/generation-rest-copy/copy/knowledge",
+            json={"page_size": 10},
+        )
+        assert knowledge.status_code == 200
+        assert knowledge.json()["status"] == "complete"
+        assert knowledge.json()["record_count"] == 1
+
         changed = client.post("/api/v1/index/revisions", json={
             "source_id": "source-a",
             "revision_sequence": 2,
@@ -98,6 +113,7 @@ def test_index_generation_source_copy_uses_internal_rest_contracts():
         assert generation["checkpoints"]["documents"]["sealed"] is True
         assert generation["checkpoints"]["vectors"]["sealed"] is True
         assert generation["checkpoints"]["memory"]["sealed"] is True
+        assert generation["checkpoints"]["knowledge"]["sealed"] is True
 
     copied_a = asyncio.run(index_store.get_generation_source("generation-rest-copy", "source-a"))
     copied_b = asyncio.run(index_store.get_generation_source("generation-rest-copy", "source-b"))
