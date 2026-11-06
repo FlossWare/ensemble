@@ -248,6 +248,18 @@ The following implementation work is now present on the PR branch. It remains su
 The new tests cover deletion metadata and retention persistence, audit history across restart, cancellation/restoration boundaries, generation materialization restoration, collaboration persistence across restart, concurrent contribution writes, concurrent handoff transitions, incremental checkpoints, synthesis refresh and strategy injection, proposal objections and provenance, human approval enforcement, and Control Center JavaScript syntax through the existing workflow. CI verification is still required before issue closure.
 
 
+## PR #47 completion status
+
+The implementation scope covered by PR #47 is now complete and all repository issues have been resolved:
+- #26 closed as not planned: Python generic contracts are implemented and audited; no Java source/build target exists in this repository.
+- #27 closed as completed: reversible deletion, pluggable reclamation, retention/legal-erasure policy, durable audit, retry/idempotency, restore boundaries, and derived-data cleanup.
+- #43 closed as completed: provider-neutral identity, project, and membership contracts.
+- #44 closed as completed: durable attributable contributions and activity history.
+- #45 closed as completed: human/agent handoffs, checkpoints, lifecycle transitions, and Control Center workflows.
+- #46 closed as completed: provenance-linked synthesis, competing proposals, objections, and human-gated decisions.
+
+Latest verified code/test head before this documentation update: `849175c4fcaca535659b42404af6ce54424be6d4`, with 345 passed and 1 skipped. SonarCloud remains a separate blocking gate (new-code Security and Reliability ratings are C, required A). Do not request outside review or merge until the Sonar findings are resolved and the latest head passes all checks.
+
 ## Generic contract audit
 
 See [generic-contract-audit.md](generic-contract-audit.md) for the implemented Python generic strategy/decorator contracts, the foundational store protocol audit, and the explicit Java-source boundary. No Java implementation is invented because this repository contains no Java source or build module.
