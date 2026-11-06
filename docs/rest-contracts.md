@@ -136,6 +136,7 @@ The Memory capability owns its snapshot and journal persistence. The generation 
 
 | Method | Path | Purpose |
 |---|---|---|
+| POST | /api/v1/knowledge/records/materialize | Persist a Knowledge-owned record and mirror it into the active generation |
 | POST | /api/v1/knowledge/records/query | Read active Knowledge records by source identity |
 | POST | /api/v1/knowledge/generations/{generation_id}/records | Copy or tombstone a record in the target Knowledge generation |
 
