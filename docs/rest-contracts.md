@@ -141,7 +141,20 @@ The Memory capability owns its snapshot and journal persistence. The generation 
 
 Knowledge owns record retrieval and generation persistence. The orchestrator validates each record against the target Index snapshot before delegating the write. Journal reconciliation remains coordinated through the Index generation journal; each capability applies its own generation mutation through its REST API. The public operations are `POST /api/v1/index/generations/{generation_id}/reconcile/{index|documents|vectors|memory|knowledge}` followed by the final write-fence operation.
 
-## 12. Initial implemented endpoints
+## 12. Source restoration
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | /api/v1/documents/sources/restore | Restore source documents and optional generation payload |
+| POST | /api/v1/knowledge/sources/restore | Restore the Knowledge record and optional generation payload |
+| POST | /api/v1/vector/sources/restore | Restore source vectors and optional generation payload |
+| POST | /api/v1/index/reclamation/jobs/query | Read reclamation state for a source |
+| POST | /api/v1/index/reclamation/jobs/cancel | Cancel queued reclamation before restoring |
+| POST | /api/v1/index/reclamation/audit | Record the restoration audit event |
+
+The Index restoration operation validates lifecycle state, cancels pending physical reclamation, delegates capability restoration through REST, then advances the Index revision and acknowledges the generation change.
+
+## 13. Initial implemented endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
