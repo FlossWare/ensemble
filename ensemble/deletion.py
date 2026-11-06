@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Generic, Protocol, TypeVar, TypedDict
+from typing import Awaitable, Callable, Generic, Protocol, TypeVar, TypedDict
 
 class ReclamationJob(TypedDict):
     source_id: str
@@ -87,7 +87,7 @@ class ImmediateReclamationStrategy:
         self._queue = queue
         self._drain = drain
 
-    async def execute(self, context: DeletionContext) -> DeletionResult[dict[str, Any]]:
+    async def execute(self, context: DeletionContext) -> DeletionResult[ReclamationJob]:
         job = await self._queue.enqueue(context.source_id, actor=context.actor, reason=context.reason, requested_at=context.requested_at, retain_until=context.retain_until)
         processed = await self._drain()
         return DeletionResult(
