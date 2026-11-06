@@ -15,21 +15,25 @@ class IndexGenerationBuilder:
     def __init__(
         self, index_store: Any, document_store: Any | None = None,
         vector_store: Any | None = None, knowledge_store: Any | None = None,
-        memory_store: Any | None = None,
+        memory_store: Any | None = None, internal_client: Any | None = None,
     ):
         self.index_store = index_store
+        self.internal_client = internal_client
         self.document_store = document_store
         self.vector_store = vector_store
         self.knowledge_store = knowledge_store
         self.memory_store = memory_store
 
     async def copy_index_sources(
-        self, generation_id: str, *, page_size: int = 500,
+        self, generation_id: str, *, page_size: int = 500, request: Any = None,
     ) -> dict[str, Any]:
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
 
-        status = await self.index_store.generation_status()
+        status = (
+            await self.internal_client.request("GET", "/api/v1/index/generations", request=request)
+            if self.internal_client is not None else await self.index_store.generation_status()
+        )
         generation = next(
             (item for item in status["generations"] if item["generation_id"] == generation_id),
             None,
@@ -58,16 +62,33 @@ class IndexGenerationBuilder:
             source_count = int(prior_value.get("source_count", 0))
             tombstone_count = int(prior_value.get("tombstone_count", 0))
         else:
-            upper_bound = await self.index_store.source_key_upper_bound()
+            upper_bound = (
+                await self.internal_client.request(
+                    "GET", f"/api/v1/index/generations/{generation_id}/source-upper-bound",
+                    request=request,
+                )
+            ).get("upper_bound") if self.internal_client is not None else await self.index_store.source_key_upper_bound()
             cursor = None
             source_count = 0
             tombstone_count = 0
 
-        page = await self.index_store.list_sources_after(
+        page = (
+            await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/sources/page",
+                request=request,
+                json={"cursor": cursor, "upper_bound": upper_bound, "limit": page_size},
+            )
+        ).get("sources", []) if self.internal_client is not None else await self.index_store.list_sources_after(
             cursor, upper_bound, page_size,
         )
         for source in page:
-            await self.index_store.put_generation_source(generation_id, source)
+            if self.internal_client is not None:
+                await self.internal_client.request(
+                    "PUT", f"/api/v1/index/generations/{generation_id}/sources",
+                    request=request, json={"source": source},
+                )
+            else:
+                await self.index_store.put_generation_source(generation_id, source)
 
         next_cursor = page[-1]["source_id"] if page else cursor
         source_count += len(page)
@@ -83,9 +104,16 @@ class IndexGenerationBuilder:
             "source_count": source_count,
             "tombstone_count": tombstone_count,
         }
-        await self.index_store.record_generation_checkpoint(
-            generation_id, "index", checkpoint, sealed=complete,
-        )
+        if self.internal_client is not None:
+            await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/checkpoints",
+                request=request,
+                json={"capability": "index", "checkpoint": checkpoint, "sealed": complete},
+            )
+        else:
+            await self.index_store.record_generation_checkpoint(
+                generation_id, "index", checkpoint, sealed=complete,
+            )
         return {
             "generation_id": generation_id,
             "status": "complete" if complete else "in_progress",
