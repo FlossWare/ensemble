@@ -196,3 +196,29 @@ def test_api_uses_injected_deletion_strategy_for_tombstones():
         assert strategy.contexts[0].actor == "human:scot"
         assert strategy.contexts[0].reason == "test deletion"
         assert strategy.contexts[0].retain_until == datetime(2026, 12, 1, tzinfo=timezone.utc)
+
+
+
+def test_api_rejects_invalid_retention_metadata_before_tombstoning():
+    from fastapi.testclient import TestClient
+    from ensemble.api import create_app
+    from ensemble.store import InMemoryDocumentStore
+
+    with TestClient(create_app(store=InMemoryDocumentStore())) as client:
+        created = client.post("/api/v1/index/revisions", json={
+            "source_id": "invalid-retention-source",
+            "revision_sequence": 1,
+            "revision_id": "revision-1",
+            "profiles": {"chunk": "window-v1"},
+        })
+        assert created.status_code == 200
+
+        rejected = client.post("/api/v1/index/tombstones", json={
+            "source_id": "invalid-retention-source",
+            "revision_sequence": 2,
+            "retain_until": "2026-11-06T12:00:00",
+        })
+        assert rejected.status_code == 400
+        source = client.get("/api/v1/index/sources/invalid-retention-source")
+        assert source.status_code == 200
+        assert source.json()["source"]["tombstoned"] is False
