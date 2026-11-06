@@ -369,7 +369,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
 
     @router.get("/projects/{project_id}/members")
     async def list_members(project_id: str, viewer_id: str, request: Request, limit: int = 100):
-        await require_role(project_id, validated_viewer_id(viewer_id, request), roles)
+        await require_role(project_id, validated_validated_viewer_id(viewer_id, request), roles)
         return {"ok": True, "members": await store.list("membership", project_id=project_id, limit=bounded_limit(limit))}
 
     @router.post("/projects/{project_id}/contributions")
@@ -393,7 +393,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
 
     @router.get("/projects/{project_id}/contributions")
     async def list_contributions(project_id: str, viewer_id: str, request: Request, actor_id: str | None = None, status: str | None = None, limit: int = 100):
-        await require_role(project_id, viewer_id(viewer_id, request), roles)
+        await require_role(project_id, validated_viewer_id(viewer_id, request), roles)
         return {"ok": True, "contributions": await store.list(
             "contribution", project_id=project_id, actor_id=actor_id, status=status, limit=bounded_limit(limit),
         )}
@@ -427,7 +427,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
 
     @router.get("/projects/{project_id}/handoffs")
     async def list_handoffs(project_id: str, viewer_id: str, request: Request, status: str | None = None, limit: int = 100):
-        await require_role(project_id, viewer_id(viewer_id, request), roles)
+        await require_role(project_id, validated_viewer_id(viewer_id, request), roles)
         return {"ok": True, "handoffs": await store.list("handoff", project_id=project_id, status=status, limit=bounded_limit(limit))}
 
     @router.get("/handoffs/{handoff_id}")
@@ -435,7 +435,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
         handoff = await store.get("handoff", handoff_id)
         if handoff is None:
             raise HTTPException(status_code=404, detail="unknown handoff")
-        await require_role(handoff["project_id"], viewer_id(viewer_id, request), roles)
+        await require_role(handoff["project_id"], validated_viewer_id(viewer_id, request), roles)
         history = await store.list("handoff_event", project_id=handoff["project_id"], limit=500)
         return {"ok": True, "handoff": handoff, "history": [
             item for item in history if item["payload"].get("handoff_id") == handoff_id
@@ -577,7 +577,7 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
 
     @router.get("/projects/{project_id}/syntheses")
     async def list_syntheses(project_id: str, viewer_id: str, request: Request, limit: int = 100):
-        await require_role(project_id, viewer_id(viewer_id, request), roles)
+        await require_role(project_id, validated_viewer_id(viewer_id, request), roles)
         return {"ok": True, "syntheses": await store.list("synthesis", project_id=project_id, limit=bounded_limit(limit))}
 
     @router.post("/projects/{project_id}/proposals")
@@ -608,15 +608,15 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
 
     @router.get("/projects/{project_id}/proposals")
     async def list_proposals(project_id: str, viewer_id: str, request: Request, status: str | None = None, limit: int = 100):
-        await require_role(project_id, viewer_id(viewer_id, request), roles)
-        return {"ok": True, "proposals": await store.list("proposal", project_id=project_id, status=status, limit=limit)}
+        await require_role(project_id, validated_viewer_id(viewer_id, request), roles)
+        return {"ok": True, "proposals": await store.list("proposal", project_id=project_id, status=status, limit=bounded_limit(limit))}
 
     @router.get("/proposals/{proposal_id}")
     async def get_proposal(proposal_id: str, viewer_id: str, request: Request):
         proposal = await store.get("proposal", proposal_id)
         if proposal is None:
             raise HTTPException(status_code=404, detail="unknown proposal")
-        await require_role(proposal["project_id"], viewer_id(viewer_id, request), roles)
+        await require_role(proposal["project_id"], validated_viewer_id(viewer_id, request), roles)
         objections = await store.list("proposal_objection", project_id=proposal["project_id"], limit=500)
         decisions = await store.list("decision", project_id=proposal["project_id"], limit=500)
         return {"ok": True, "proposal": proposal, "objections": [
@@ -694,12 +694,12 @@ def create_collaboration_router(store: CollaborationStore, synthesis_strategy: S
 
     @router.get("/projects/{project_id}/decisions")
     async def list_decisions(project_id: str, viewer_id: str, request: Request, limit: int = 100):
-        await require_role(project_id, viewer_id(viewer_id, request), roles)
-        return {"ok": True, "decisions": await store.list("decision", project_id=project_id, limit=limit)}
+        await require_role(project_id, validated_viewer_id(viewer_id, request), roles)
+        return {"ok": True, "decisions": await store.list("decision", project_id=project_id, limit=bounded_limit(limit))}
 
     @router.get("/projects/{project_id}/activity")
     async def project_activity(project_id: str, viewer_id: str, request: Request, actor_id: str | None = None, kind: str | None = None, status: str | None = None, limit: int = 100):
-        await require_role(project_id, viewer_id(viewer_id, request), roles)
+        await require_role(project_id, validated_viewer_id(viewer_id, request), roles)
         records = await store.list(kind, project_id=project_id, actor_id=actor_id, status=status, limit=limit)
         return {"ok": True, "activity": records}
 
