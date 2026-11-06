@@ -313,7 +313,7 @@ def create_app(
                 "state": result.state, "retryable": result.retryable,
                 "erasure_required": context.erasure_required,
                 "requested_retain_until": context.retain_until.isoformat() if context.retain_until else None,
-                "retention_overridden": context.erasure_required and context.retain_until is not None,
+                "retention_overridden": context.erasure_required and context.retain_until is not None and context.retain_until > (context.requested_at or datetime.now(timezone.utc)),
             },
         )
 
@@ -350,7 +350,7 @@ def create_app(
             try:
                 await active_reclamation_store.record_audit(
                     source_id, "claimed", actor=job.get("actor"), reason=job.get("reason"),
-                    details={"attempts": job.get("attempts", 0)},
+                    details={"attempts": job.get("attempts", 0), "erasure_required": job.get("erasure_required", False), "requested_retain_until": job.get("requested_retain_until").isoformat() if job.get("requested_retain_until") else None},
                 )
                 async with generation_lifecycle_lock:
                     # A builder may have read source payloads before a tombstone
@@ -409,13 +409,13 @@ def create_app(
                         await active_reclamation_store.complete(source_id)
                         await active_reclamation_store.record_audit(
                             source_id, "completed", actor=job.get("actor"), reason=job.get("reason"),
-                            details={"purged": True},
+                            details={"purged": True, "erasure_required": job.get("erasure_required", False)},
                         )
             except Exception as exc:
                 await active_reclamation_store.retry(source_id, f"{type(exc).__name__}: {exc}")
                 await active_reclamation_store.record_audit(
                     source_id, "retry_scheduled", actor=job.get("actor"), reason=job.get("reason"),
-                    details={"error_type": type(exc).__name__},
+                    details={"error_type": type(exc).__name__, "erasure_required": job.get("erasure_required", False)},
                 )
         return len(jobs)
 
