@@ -82,6 +82,7 @@ Internal callers coordinate generation state through the Index REST contract rat
 | Method | Path | Purpose |
 |---|---|---|
 | GET | /api/v1/index/generation-writes/ready | Reject writes while generation lifecycle state blocks mutation |
+| GET | /api/v1/index/vector-writes/ready | Reject vector mutations while generation or standalone-vector lifecycle state blocks mutation |
 | POST | /api/v1/index/generation-changes/acknowledgements | Acknowledge a source revision or tombstone after downstream capability work completes |
 
 The acknowledgement body requires `source_id`, positive `revision_sequence`, and boolean `tombstoned`. These routes are also the contract used by the co-located ASGI transport; they are not implementation-only shortcuts.
