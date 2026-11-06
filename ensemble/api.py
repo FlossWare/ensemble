@@ -48,7 +48,7 @@ from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
 from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
 from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryReclamationStore
-from .deletion import DeletionContext, DeletionStrategy, DeferredReclamationStrategy, ReclamationJob
+from .deletion import AuditingDeletionDecorator, DeletionContext, DeletionStrategy, DeferredReclamationStrategy, ReclamationJob
 from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
 from .partitioning import (
@@ -304,7 +304,15 @@ def create_app(
         InMemoryReclamationStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteReclamationStore(database_url)
     )
-    active_deletion_strategy = deletion_strategy or DeferredReclamationStrategy(active_reclamation_store)
+    async def audit_deletion(context: DeletionContext, result: Any) -> None:
+        await active_reclamation_store.record_audit(
+            context.source_id, "strategy_result", actor=context.actor,
+            reason=context.reason,
+            details={"state": result.state, "retryable": result.retryable},
+        )
+
+    base_deletion_strategy = deletion_strategy or DeferredReclamationStrategy(active_reclamation_store)
+    active_deletion_strategy = AuditingDeletionDecorator(base_deletion_strategy, audit_deletion)
 
     active_collaboration_store = collaboration_store or (
         InMemoryCollaborationStore() if isinstance(document_store, InMemoryDocumentStore)
