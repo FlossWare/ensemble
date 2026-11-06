@@ -332,6 +332,14 @@ def test_collaboration_rejects_invalid_participant_types_and_membership_roles():
         })
         assert duplicate.status_code == 409
 
+        allowed_read = client.get(f"/api/v1/collaboration/projects/{project['id']}", params={
+            "viewer_id": "agent:role-member",
+        })
+        denied_read = client.get(f"/api/v1/collaboration/projects/{project['id']}", params={
+            "viewer_id": "human:not-a-member",
+        })
+        assert allowed_read.status_code == 200
+        assert denied_read.status_code == 403
 
 def test_handoff_superseding_preserves_original_and_records_replacement_link():
     with TestClient(create_app(
