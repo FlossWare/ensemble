@@ -412,7 +412,7 @@ def test_handoff_superseding_preserves_original_and_records_replacement_link():
         assert result.json()["handoff"]["status"] == "superseded"
         assert result.json()["handoff"]["payload"]["superseded_by"] == result.json()["replacement"]["id"]
         assert result.json()["replacement"]["payload"]["supersedes_id"] == first["id"]
-        original = client.get(f"/api/v1/collaboration/handoffs/{first['id']}")
+        original = client.get(f"/api/v1/collaboration/handoffs/{first['id']}", params={"viewer_id": "human:handoff-owner"})
         assert len(original.json()["history"]) == 2
 
 
