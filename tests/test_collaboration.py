@@ -282,3 +282,86 @@ def test_synthesis_strategy_is_replaceable_through_application_composition():
         assert result.status_code == 200
         assert result.json()["synthesis"]["payload"]["statements"][0]["text"] == "Injected synthesis"
         assert result.json()["synthesis"]["payload"]["statements"][0]["strategy"] == "test"
+
+
+
+def test_collaboration_rejects_invalid_participant_types_and_membership_roles():
+    with TestClient(create_app(
+        store=InMemoryDocumentStore(),
+        collaboration_store=InMemoryCollaborationStore(),
+    )) as client:
+        invalid = client.post("/api/v1/collaboration/participants", json={
+            "display_name": "Unknown",
+            "participant_type": "bot",
+        })
+        assert invalid.status_code == 400
+
+        owner = client.post("/api/v1/collaboration/participants", json={
+            "participant_id": "human:role-owner",
+            "display_name": "Owner",
+            "participant_type": "human",
+        })
+        member = client.post("/api/v1/collaboration/participants", json={
+            "participant_id": "agent:role-member",
+            "display_name": "Member",
+            "participant_type": "agent",
+        })
+        assert owner.status_code == member.status_code == 200
+        project = client.post("/api/v1/collaboration/projects", json={
+            "name": "Role validation",
+            "owner_id": "human:role-owner",
+        }).json()["project"]
+
+        invalid_role = client.post(f"/api/v1/collaboration/projects/{project['id']}/members", json={
+            "actor_id": "human:role-owner",
+            "participant_id": "agent:role-member",
+            "role": "administrator",
+        })
+        assert invalid_role.status_code == 400
+        added = client.post(f"/api/v1/collaboration/projects/{project['id']}/members", json={
+            "actor_id": "human:role-owner",
+            "participant_id": "agent:role-member",
+            "role": "contribute",
+        })
+        assert added.status_code == 200
+        duplicate = client.post(f"/api/v1/collaboration/projects/{project['id']}/members", json={
+            "actor_id": "human:role-owner",
+            "participant_id": "agent:role-member",
+            "role": "read",
+        })
+        assert duplicate.status_code == 409
+
+
+def test_handoff_superseding_preserves_original_and_records_replacement_link():
+    with TestClient(create_app(
+        store=InMemoryDocumentStore(),
+        collaboration_store=InMemoryCollaborationStore(),
+    )) as client:
+        client.post("/api/v1/collaboration/participants", json={
+            "participant_id": "human:handoff-owner",
+            "display_name": "Owner",
+            "participant_type": "human",
+        })
+        project = client.post("/api/v1/collaboration/projects", json={
+            "name": "Handoff supersede",
+            "owner_id": "human:handoff-owner",
+        }).json()["project"]
+        first = client.post(f"/api/v1/collaboration/projects/{project['id']}/handoffs", json={
+            "actor_id": "human:handoff-owner",
+            "objective": "Initial objective",
+            "current_state": "Initial state",
+            "next_actions": ["Start"],
+        }).json()["handoff"]
+
+        result = client.post(f"/api/v1/collaboration/handoffs/{first['id']}/supersede", json={
+            "actor_id": "human:handoff-owner",
+            "objective": "Updated objective",
+            "current_state": "Updated state",
+            "next_actions": ["Continue"],
+        })
+        assert result.status_code == 200
+        assert result.json()["handoff"]["status"] == "superseded"
+        assert result.json()["handoff"]["payload"]["superseded_by"] == result.json()["replacement"]["id"]
+        assert result.json()["replacement"]["payload"]["supersedes_id"] == first["id"]
+        original = client.get(f"/api/v1/collaboration/handoffs/{first['id']}")
+        assert len(original.json()["history"]) == 2
