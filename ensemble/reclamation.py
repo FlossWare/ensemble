@@ -318,7 +318,7 @@ class InMemoryReclamationStore:
         ][-limit:]))
 
     async def status(self) -> dict[str, int]:
-        result = {"pending": 0, "running": 0, "retry": 0, "complete": 0}
+        result = {"pending": 0, "running": 0, "retry": 0, "complete": 0, "cancelled": 0}
         for job in self._jobs.values():
             result[job["state"]] += 1
         return result
