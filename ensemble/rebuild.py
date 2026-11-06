@@ -1059,12 +1059,84 @@ class IndexGenerationBuilder:
 
 
     async def copy_knowledge_page(
-        self, generation_id: str, *, page_size: int = 500,
+        self, generation_id: str, *, page_size: int = 500, request: Any = None,
     ) -> dict[str, Any]:
         if self.knowledge_store is None:
             raise RuntimeError("Knowledge store is required for the generation pass")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
+
+        if self.internal_client is not None:
+            status = await self.internal_client.request("GET", "/api/v1/index/generations", request=request)
+            generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
+            if generation is None or generation["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            checkpoints = generation.get("checkpoints") or {}
+            index_checkpoint = checkpoints.get("index") or {}
+            if index_checkpoint.get("sealed") is not True:
+                raise RuntimeError("Index source copy must be sealed before Knowledge copy")
+            previous = checkpoints.get("knowledge") or {}
+            if previous.get("sealed") is True:
+                value = previous.get("value") or {}
+                return {"generation_id": generation_id, "status": "complete", "page_count": 0,
+                        "source_count": value.get("source_count", 0),
+                        "record_count": value.get("record_count", 0),
+                        "tombstone_count": value.get("tombstone_count", 0),
+                        "cursor": value.get("cursor")}
+            prior = previous.get("value") or {}
+            upper_bound = (index_checkpoint.get("value") or {}).get("source_upper_bound")
+            cursor = prior.get("cursor")
+            source_count = int(prior.get("source_count", 0))
+            record_count = int(prior.get("record_count", 0))
+            tombstone_count = int(prior.get("tombstone_count", 0))
+            page = (await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/sources/page",
+                request=request, json={"cursor": cursor, "upper_bound": upper_bound, "limit": page_size},
+            )).get("sources", [])
+            for source in page:
+                source_id = source["source_id"]
+                if source.get("tombstoned"):
+                    await self.internal_client.request(
+                        "POST", f"/api/v1/knowledge/generations/{generation_id}/records",
+                        request=request, json={"source_id": source_id, "tombstoned": True},
+                    )
+                    tombstone_count += 1
+                    continue
+                record = (await self.internal_client.request(
+                    "POST", "/api/v1/knowledge/records/query",
+                    request=request, json={"source_ids": [source_id]},
+                )).get("records", {}).get(source_id)
+                if record is None:
+                    continue
+                if record.get("tombstoned"):
+                    await self.internal_client.request(
+                        "POST", f"/api/v1/knowledge/generations/{generation_id}/records",
+                        request=request, json={"source_id": source_id, "tombstoned": True},
+                    )
+                    tombstone_count += 1
+                    continue
+                if record["revision_sequence"] != source["high_sequence"]:
+                    raise RuntimeError("active Knowledge revision does not match the Index source")
+                await self.internal_client.request(
+                    "POST", f"/api/v1/knowledge/generations/{generation_id}/records",
+                    request=request, json={"source_id": source_id, "record": record},
+                )
+                record_count += 1
+            next_cursor = page[-1]["source_id"] if page else cursor
+            source_count += len(page)
+            complete = upper_bound is None or next_cursor == upper_bound or len(page) < page_size
+            checkpoint = {"cursor": next_cursor, "source_upper_bound": upper_bound,
+                          "source_count": source_count, "record_count": record_count,
+                          "tombstone_count": tombstone_count}
+            await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/checkpoints", request=request,
+                json={"capability": "knowledge", "checkpoint": checkpoint, "sealed": complete},
+            )
+            return {"generation_id": generation_id, "status": "complete" if complete else "in_progress",
+                    "page_count": len(page), "source_count": source_count,
+                    "record_count": record_count, "tombstone_count": tombstone_count,
+                    "cursor": next_cursor, "upper_bound": upper_bound}
+
         status = await self.index_store.generation_status()
         generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
         if generation is None or generation["state"] != "building":
@@ -1123,12 +1195,90 @@ class IndexGenerationBuilder:
                 "cursor": next_cursor, "upper_bound": upper_bound}
 
     async def reconcile_knowledge_changes_page(
-        self, generation_id: str, *, page_size: int = 250,
+        self, generation_id: str, *, page_size: int = 250, request: Any = None,
     ) -> dict[str, Any]:
         if self.knowledge_store is None:
             raise RuntimeError("Knowledge store is required for reconciliation")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
+
+        if self.internal_client is not None:
+            status = await self.internal_client.request("GET", "/api/v1/index/generations", request=request)
+            generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
+            if generation is None or generation["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            checkpoints = generation.get("checkpoints") or {}
+            if (checkpoints.get("knowledge") or {}).get("sealed") is not True:
+                raise RuntimeError("Knowledge source copy must be sealed before reconciliation")
+            index_cursor = int(((checkpoints.get("index_reconciliation") or {}).get("value") or {}).get("cursor", 0))
+            previous = checkpoints.get("knowledge_reconciliation") or {}
+            if previous.get("sealed") is True:
+                value = previous.get("value") or {}
+                return {"generation_id": generation_id, "status": "complete", "page_count": 0,
+                        "change_count": value.get("change_count", 0), "cursor": value.get("cursor", 0)}
+            value = previous.get("value") or {}
+            cursor = int(value.get("cursor", 0))
+            change_count = int(value.get("change_count", 0))
+            page = (await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/changes/page",
+                request=request, json={"after_change_id": cursor, "limit": page_size},
+            )).get("changes", [])
+            pending = next((i for i, change in enumerate(page) if not change.get("acknowledged", False)), None)
+            ready_page = page if pending is None else page[:pending]
+            for change in ready_page:
+                if change["change_id"] > index_cursor:
+                    raise RuntimeError("Index journal reconciliation must advance before Knowledge")
+                source_id = change["source_id"]
+                source = (await self.internal_client.request(
+                    "POST", f"/api/v1/index/generations/{generation_id}/sources/query",
+                    request=request, json={"source_ids": [source_id]},
+                )).get("sources", {}).get(source_id)
+                if source is None:
+                    raise RuntimeError("reconciled Index source is missing from the target generation")
+                if source.get("tombstoned"):
+                    await self.internal_client.request(
+                        "POST", f"/api/v1/knowledge/generations/{generation_id}/records",
+                        request=request, json={"source_id": source_id, "tombstoned": True},
+                    )
+                    continue
+                record = (await self.internal_client.request(
+                    "POST", "/api/v1/knowledge/records/query",
+                    request=request, json={"source_ids": [source_id]},
+                )).get("records", {}).get(source_id)
+                if record is None:
+                    continue
+                if record.get("tombstoned"):
+                    await self.internal_client.request(
+                        "POST", f"/api/v1/knowledge/generations/{generation_id}/records",
+                        request=request, json={"source_id": source_id, "tombstoned": True},
+                    )
+                    continue
+                if record["revision_sequence"] != source["high_sequence"]:
+                    raise RuntimeError("active Knowledge revision does not match the reconciled Index source")
+                await self.internal_client.request(
+                    "POST", f"/api/v1/knowledge/generations/{generation_id}/records",
+                    request=request, json={"source_id": source_id, "record": record},
+                )
+            next_cursor = ready_page[-1]["change_id"] if ready_page else cursor
+            change_count += len(ready_page)
+            high_watermark = (await self.internal_client.request(
+                "GET", f"/api/v1/index/generations/{generation_id}/changes/high-watermark", request=request,
+            )).get("high_watermark", 0)
+            waiting = pending is not None
+            caught_up = not waiting and next_cursor == high_watermark and len(page) < page_size
+            checkpoint = {"cursor": next_cursor, "change_count": change_count,
+                          "observed_high_watermark": high_watermark}
+            await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/checkpoints", request=request,
+                json={"capability": "knowledge_reconciliation", "checkpoint": checkpoint, "sealed": False},
+            )
+            return {"generation_id": generation_id,
+                    "status": "waiting_for_ack" if waiting else ("caught_up" if caught_up else "in_progress"),
+                    "page_count": len(ready_page),
+                    "pending_change_id": page[pending]["change_id"] if waiting else None,
+                    "change_count": change_count, "cursor": next_cursor,
+                    "high_watermark": high_watermark}
+
         status = await self.index_store.generation_status()
         generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
         if generation is None or generation["state"] != "building":
