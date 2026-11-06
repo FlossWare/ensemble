@@ -24,13 +24,16 @@ reclamation_jobs = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("completed_at", DateTime(timezone=True), nullable=True),
+    Column("actor", String(256), nullable=True),
+    Column("reason", Text, nullable=True),
+    Column("retain_until", DateTime(timezone=True), nullable=True),
 )
 
 
 class ReclamationStore(Protocol):
     async def initialize(self) -> None: ...
     async def close(self) -> None: ...
-    async def enqueue(self, source_id: str) -> dict[str, Any]: ...
+    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> dict[str, Any]: ...
     async def claim_due(self, limit: int = 100) -> list[dict[str, Any]]: ...
     async def complete(self, source_id: str) -> None: ...
     async def retry(self, source_id: str, error: str, delay_seconds: int | None = None) -> None: ...
@@ -57,20 +60,25 @@ class SqliteReclamationStore:
     async def close(self) -> None:
         await self.engine.dispose()
 
-    async def enqueue(self, source_id: str) -> dict[str, Any]:
+    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> dict[str, Any]:
         if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
             raise ValueError("source_id must contain 1-1024 characters")
-        now = datetime.now(timezone.utc)
+        now = requested_at or datetime.now(timezone.utc)
+        if now.tzinfo is None or (retain_until is not None and retain_until.tzinfo is None):
+            raise ValueError("deletion timestamps must be timezone-aware")
+        available_at = retain_until or now
         async with self.engine.begin() as connection:
             statement = sqlite_insert(reclamation_jobs).values(
                 source_id=source_id, state="pending", attempts=0,
-                available_at=now, last_error=None, created_at=now,
-                updated_at=now, completed_at=None,
+                available_at=available_at, last_error=None, created_at=now,
+                updated_at=now, completed_at=None, actor=actor, reason=reason,
+                retain_until=retain_until,
             ).on_conflict_do_update(
                 index_elements=[reclamation_jobs.c.source_id],
                 set_={
-                    "state": "pending", "available_at": now, "last_error": None,
-                    "updated_at": now, "completed_at": None,
+                    "state": "pending", "available_at": available_at, "last_error": None,
+                    "updated_at": now, "completed_at": None, "actor": actor,
+                    "reason": reason, "retain_until": retain_until,
                 },
                 where=reclamation_jobs.c.state != "complete",
             )
@@ -170,16 +178,19 @@ class InMemoryReclamationStore:
     async def close(self) -> None:
         return None
 
-    async def enqueue(self, source_id: str) -> dict[str, Any]:
-        now = datetime.now(timezone.utc)
+    async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> dict[str, Any]:
+        now = requested_at or datetime.now(timezone.utc)
+        if now.tzinfo is None or (retain_until is not None and retain_until.tzinfo is None):
+            raise ValueError("deletion timestamps must be timezone-aware")
         job = self._jobs.get(source_id)
         if job is None or job["state"] != "complete":
             self._jobs[source_id] = {
                 "source_id": source_id, "state": "pending",
                 "attempts": job["attempts"] if job else 0,
-                "available_at": now, "last_error": None,
+                "available_at": retain_until or now, "last_error": None,
                 "created_at": job["created_at"] if job else now,
                 "updated_at": now, "completed_at": None,
+                "actor": actor, "reason": reason, "retain_until": retain_until,
             }
         return dict(self._jobs[source_id])
 
