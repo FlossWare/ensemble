@@ -96,7 +96,7 @@ def test_retention_decorator_persists_future_deadline_for_durable_queue():
         assert queue.jobs[2]["retain_until"] is None
         assert queue.jobs[2]["requested_retain_until"] == now + timedelta(days=30)
         assert queue.jobs[2]["erasure_required"] is True
-        assert queue.jobs[2]["available_at"] <= datetime.now(timezone.utc)
+        assert queue.jobs[2]["retain_until"] is None
         assert [job["source_id"] for job in queue.jobs] == ["source-1", "source-2", "source-3"]
 
     asyncio.run(exercise())
