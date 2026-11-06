@@ -85,28 +85,35 @@ class SqliteReclamationStore:
             raise ValueError("limit must be between 1 and 1000")
         now = datetime.now(timezone.utc)
         stale_claim = now - timedelta(minutes=5)
+        eligible = or_(
+            and_(
+                reclamation_jobs.c.state.in_(["pending", "retry"]),
+                reclamation_jobs.c.available_at <= now,
+            ),
+            and_(
+                reclamation_jobs.c.state == "running",
+                reclamation_jobs.c.updated_at <= stale_claim,
+            ),
+        )
+        due_ids = (
+            select(reclamation_jobs.c.source_id)
+            .where(eligible)
+            .order_by(reclamation_jobs.c.created_at, reclamation_jobs.c.source_id)
+            .limit(limit)
+        )
         async with self.engine.begin() as connection:
-            rows = (await connection.execute(
-                select(reclamation_jobs.c.source_id).where(
-                    or_(
-                        and_(reclamation_jobs.c.state.in_([ "pending", "retry" ]),
-                             reclamation_jobs.c.available_at <= now),
-                        and_(reclamation_jobs.c.state == "running",
-                             reclamation_jobs.c.updated_at <= stale_claim),
-                    )
-                ).order_by(reclamation_jobs.c.created_at, reclamation_jobs.c.source_id).limit(limit)
-            )).scalars().all()
-            if not rows:
-                return []
-            await connection.execute(
-                update(reclamation_jobs).where(reclamation_jobs.c.source_id.in_(rows)).values(
-                    state="running", attempts=reclamation_jobs.c.attempts + 1,
+            # Claim in one conditional UPDATE. A select-then-update sequence
+            # lets two workers read the same pending rows before either writes.
+            # Rechecking eligibility in the UPDATE makes the claim exclusive.
+            claimed = (await connection.execute(
+                update(reclamation_jobs)
+                .where(reclamation_jobs.c.source_id.in_(due_ids), eligible)
+                .values(
+                    state="running",
+                    attempts=reclamation_jobs.c.attempts + 1,
                     updated_at=now,
                 )
-            )
-            claimed = (await connection.execute(
-                select(reclamation_jobs).where(reclamation_jobs.c.source_id.in_(rows))
-                .order_by(reclamation_jobs.c.created_at, reclamation_jobs.c.source_id)
+                .returning(reclamation_jobs)
             )).mappings().all()
         return [dict(row) for row in claimed]
 
