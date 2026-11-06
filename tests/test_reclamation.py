@@ -524,3 +524,58 @@ def test_generation_materializations_remain_restorable_until_physical_purge():
         assert len(await vectors.query_generation("generation-1", "restore-vectors", [1.0, 0.0], 10)) == 1
 
     asyncio.run(exercise())
+
+
+
+def test_sqlite_generation_materializations_can_be_restored_before_purge(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'generation-restore.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    index = SqliteIndexStore(database_url)
+    documents = SqlDocumentStore(database_url)
+    knowledge = SqliteKnowledgeStore(database_url)
+    vectors = SqliteVectorStore(database_url)
+
+    async def exercise():
+        await index.initialize()
+        await documents.initialize()
+        await knowledge.initialize()
+        await vectors.initialize()
+        await index.create_generation("restore-generation")
+        document = Document("restore-sql-source", 1, "Title", "restorable generation payload")
+        await documents.upsert_generation("restore-generation", document, [
+            Chunk(document.id, 0, "restorable generation payload", [1.0, 0.0]),
+        ])
+        await knowledge.upsert_generation("restore-generation", {
+            "source_id": "restore-sql-source", "title": "Title",
+            "content": "restorable generation payload", "origin": "test",
+            "locator": "test://restore-sql-source", "profiles": {},
+        })
+        await vectors.upsert_generation("restore-generation", "restore-sql-vectors", "test-model", 2, [{
+            "id": "restore-sql-vector",
+            "embedding": [1.0, 0.0],
+            "document": "restorable generation payload",
+            "metadata": {"source_id": "restore-sql-source"},
+        }])
+
+        await documents.tombstone_generation_source("restore-generation", "restore-sql-source")
+        await knowledge.tombstone_generation_source("restore-generation", "restore-sql-source")
+        await vectors.tombstone_generation_source("restore-generation", "restore-sql-source")
+        assert await documents.generation_all_chunks("restore-generation") == []
+        assert (await knowledge.get_generation("restore-generation", "restore-sql-source"))["tombstoned"] is True
+        assert await vectors.query_generation("restore-generation", "restore-sql-vectors", [1.0, 0.0], 10) == []
+
+        await documents.restore_generation_source("restore-generation", "restore-sql-source")
+        await knowledge.restore_generation_source("restore-generation", "restore-sql-source")
+        await vectors.restore_generation_source("restore-generation", "restore-sql-source")
+        assert len(await documents.generation_all_chunks("restore-generation")) == 1
+        assert (await knowledge.get_generation("restore-generation", "restore-sql-source"))["tombstoned"] is False
+        assert len(await vectors.query_generation("restore-generation", "restore-sql-vectors", [1.0, 0.0], 10)) == 1
+
+        await vectors.close()
+        await knowledge.close()
+        await documents.close()
+        await index.close()
+
+    asyncio.run(exercise())
