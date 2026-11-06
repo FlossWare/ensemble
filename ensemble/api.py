@@ -4101,6 +4101,11 @@ def create_app(
                     request=request,
                     json={"source_id": source_id, "revision_sequence": state["revision"], "tombstoned": False},
                 )
+                trace_id = result.metadata.get("execution_trace_id")
+                if isinstance(trace_id, str):
+                    await active_execution_trace_store.record_stage(trace_id, {
+                        "name": "generation_acknowledgement", "status": "completed", "duration_ms": 0,
+                    })
                 state.update(
                     status="completed", decision=decision,
                     document=result.model_dump(mode="json"), last_error=None,
@@ -4163,6 +4168,11 @@ def create_app(
                 request=request,
                 json={"source_id": source_id, "revision_sequence": revision, "tombstoned": False},
             )
+            trace_id = result.metadata.get("execution_trace_id")
+            if isinstance(trace_id, str):
+                await active_execution_trace_store.record_stage(trace_id, {
+                    "name": "generation_acknowledgement", "status": "completed", "duration_ms": 0,
+                })
             return {"ok": True, "decision": decision, "source": preview, "document": result}
         except ScrapeError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
