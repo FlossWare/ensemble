@@ -1449,6 +1449,20 @@ def create_app(
         result = await active_knowledge_store.upsert_generation(generation_id, record)
         return {"ok": True, "tombstoned": False, "record_id": result}
 
+    @app.post("/api/v1/knowledge/sources/reclaim", tags=["knowledge"])
+    async def knowledge_source_reclaim(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await active_knowledge_store.reclaim_source(source_id)}
+
+    @app.post("/api/v1/knowledge/generations/{generation_id}/sources/reclaim", tags=["knowledge"])
+    async def knowledge_generation_source_reclaim(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await active_knowledge_store.reclaim_generation_source(generation_id, source_id)}
+
     @app.post("/api/v1/knowledge/sources/restore", tags=["knowledge"])
     async def knowledge_source_restore(payload: dict[str, Any]):
         source_id = payload.get("source_id")
@@ -1492,6 +1506,20 @@ def create_app(
             "POST", "/api/v1/index/tombstones", request=request,
             json={"source_id": source_id, "revision_sequence": sequence},
         )
+
+    @app.post("/api/v1/documents/sources/reclaim", tags=["documents"])
+    async def documents_source_reclaim(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await document_store.reclaim_source(source_id)}
+
+    @app.post("/api/v1/documents/generations/{generation_id}/sources/reclaim", tags=["documents"])
+    async def documents_generation_source_reclaim(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await document_store.reclaim_generation_source(generation_id, source_id)}
 
     @app.post("/api/v1/documents/sources/restore", tags=["documents"])
     async def documents_source_restore(payload: dict[str, Any]):
@@ -2111,6 +2139,35 @@ def create_app(
         )
         return {"ok": True}
 
+    @app.post("/api/v1/index/reclamation/jobs/claim", tags=["index"])
+    async def index_reclamation_jobs_claim(payload: dict[str, Any]):
+        limit = payload.get("limit", 100)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+        return {"jobs": await active_reclamation_store.claim_due(limit)}
+
+    @app.post("/api/v1/index/reclamation/jobs/retry", tags=["index"])
+    async def index_reclamation_jobs_retry(payload: dict[str, Any]):
+        source_id, reason = payload.get("source_id"), payload.get("reason")
+        delay = payload.get("delay_seconds")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        if not isinstance(reason, str) or not reason:
+            raise HTTPException(status_code=400, detail="reason must be a non-empty string")
+        try:
+            await active_reclamation_store.retry(source_id, reason, delay_seconds=delay)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/api/v1/index/reclamation/jobs/complete", tags=["index"])
+    async def index_reclamation_jobs_complete(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        await active_reclamation_store.complete(source_id)
+        return {"ok": True}
+
     @app.get("/api/v1/index/reclamation", tags=["index"])
     async def index_reclamation_status():
         return {"ok": True, "jobs": await active_reclamation_store.status()}
@@ -2134,6 +2191,17 @@ def create_app(
             "ok": True, "processed": processed,
             "jobs": await active_reclamation_store.status(),
         }
+
+    @app.post("/api/v1/index/sources/purge", tags=["index"])
+    async def index_source_mark_purged(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        try:
+            await active_index_store.mark_purged(source_id)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "source_id": source_id, "purged": True}
 
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
     async def index_source(source_id: str):
@@ -2227,6 +2295,20 @@ def create_app(
             document_count += 1
             chunk_count += len(chunks)
         return {"ok": True, "document_count": document_count, "chunk_count": chunk_count, "tombstoned": False}
+
+    @app.post("/api/v1/vector/sources/reclaim", tags=["vector"])
+    async def vector_source_reclaim(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await active_vector_store.reclaim_source(source_id)}
+
+    @app.post("/api/v1/vector/generations/{generation_id}/sources/reclaim", tags=["vector"])
+    async def vector_generation_source_reclaim(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await active_vector_store.delete_generation_source(generation_id, source_id)}
 
     @app.post("/api/v1/vector/sources/restore", tags=["vector"])
     async def vector_source_restore(payload: dict[str, Any]):
@@ -3612,6 +3694,13 @@ def create_app(
             "vector_indexed": False, "lexical_indexed": False,
             "index_error": None,
         }
+
+    @app.post("/api/v1/graph/sources/reclaim", tags=["graph"])
+    async def graph_source_reclaim(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await active_graph_store.reclaim_source(source_id)}
 
     @app.get("/api/v1/graph/health", tags=["graph"])
     async def graph_health():
