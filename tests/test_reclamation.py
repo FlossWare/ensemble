@@ -39,7 +39,7 @@ def test_source_reclamation_queue_is_durable_and_idempotent(tmp_path):
         assert jobs[0]["attempts"] == 1
         await queue.complete("source-1")
         assert await queue.status() == {
-            "pending": 0, "running": 0, "retry": 0, "complete": 1,
+            "pending": 0, "running": 0, "retry": 0, "complete": 1, "cancelled": 0,
         }
         # A completed reclamation is not re-enqueued by a repeated tombstone.
         assert (await queue.enqueue("source-1"))["state"] == "complete"
