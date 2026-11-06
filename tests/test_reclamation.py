@@ -395,3 +395,39 @@ def test_sqlite_reclamation_removes_source_graph_materialization_but_retains_sha
         await graph.close()
 
     asyncio.run(exercise())
+
+
+
+def test_reclamation_persists_deletion_attribution_and_honors_retention_deadline(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'reclamation-retention.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    queue = SqliteReclamationStore(database_url)
+
+    async def exercise():
+        await queue.initialize()
+        requested_at = datetime.now(timezone.utc)
+        retain_until = requested_at.replace(year=requested_at.year + 1)
+        job = await queue.enqueue(
+            "retained-source", actor="human:scot", reason="retention test",
+            requested_at=requested_at, retain_until=retain_until,
+        )
+        assert job["actor"] == "human:scot"
+        assert job["reason"] == "retention test"
+        assert job["retain_until"] is not None
+        assert job["available_at"] is not None
+        assert await queue.claim_due(10) == []
+
+        with sqlite3.connect(tmp_path / "reclamation-retention.db") as connection:
+            connection.execute(
+                "UPDATE ensemble_source_reclamation SET available_at = ? WHERE source_id = ?",
+                ("2000-01-01 00:00:00", "retained-source"),
+            )
+        claimed = await queue.claim_due(10)
+        assert [item["source_id"] for item in claimed] == ["retained-source"]
+        assert claimed[0]["actor"] == "human:scot"
+        assert claimed[0]["reason"] == "retention test"
+        await queue.close()
+
+    asyncio.run(exercise())
