@@ -354,11 +354,14 @@ class IndexGenerationBuilder:
 
 
     async def reconcile_index_changes_page(
-        self, generation_id: str, *, page_size: int = 500,
+        self, generation_id: str, *, page_size: int = 500, request: Any = None,
     ) -> dict[str, Any]:
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
-        status = await self.index_store.generation_status()
+        status = (
+            await self.internal_client.request("GET", "/api/v1/index/generations", request=request)
+            if self.internal_client is not None else await self.index_store.generation_status()
+        )
         generation = next(
             (item for item in status["generations"] if item["generation_id"] == generation_id),
             None,
@@ -379,24 +382,42 @@ class IndexGenerationBuilder:
         value = previous.get("value") or {}
         cursor = int(value.get("cursor", 0))
         change_count = int(value.get("change_count", 0))
-        page = await self.index_store.list_generation_changes_after(
+        page = (
+            await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/changes/page",
+                request=request, json={"after_change_id": cursor, "limit": page_size},
+            )
+        ).get("changes", []) if self.internal_client is not None else await self.index_store.list_generation_changes_after(
             generation_id, cursor, page_size,
         )
         pending_change = next((index for index, change in enumerate(page)
                                if not change.get("acknowledged", False)), None)
         ready_page = page if pending_change is None else page[:pending_change]
         for change in ready_page:
-            await self.index_store.put_generation_source(generation_id, {
+            source = {
                 "source_id": change["source_id"],
                 "high_sequence": change["high_sequence"],
                 "revision_id": change["revision_id"],
                 "profiles": change["profiles"],
                 "tombstoned": change["tombstoned"],
                 "updated_at": change["created_at"],
-            })
+            }
+            if self.internal_client is not None:
+                await self.internal_client.request(
+                    "PUT", f"/api/v1/index/generations/{generation_id}/sources",
+                    request=request, json={"source": source},
+                )
+            else:
+                await self.index_store.put_generation_source(generation_id, source)
+
         next_cursor = ready_page[-1]["change_id"] if ready_page else cursor
         change_count += len(ready_page)
-        high_watermark = await self.index_store.generation_change_high_watermark(generation_id)
+        high_watermark = (
+            await self.internal_client.request(
+                "GET", f"/api/v1/index/generations/{generation_id}/changes/high-watermark",
+                request=request,
+            )
+        ).get("high_watermark", 0) if self.internal_client is not None else await self.index_store.generation_change_high_watermark(generation_id)
         waiting_for_ack = pending_change is not None
         caught_up = not waiting_for_ack and next_cursor == high_watermark and len(page) < page_size
         checkpoint = {
@@ -404,9 +425,16 @@ class IndexGenerationBuilder:
             "change_count": change_count,
             "observed_high_watermark": high_watermark,
         }
-        await self.index_store.record_generation_checkpoint(
-            generation_id, "index_reconciliation", checkpoint, sealed=False,
-        )
+        if self.internal_client is not None:
+            await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/checkpoints",
+                request=request,
+                json={"capability": "index_reconciliation", "checkpoint": checkpoint, "sealed": False},
+            )
+        else:
+            await self.index_store.record_generation_checkpoint(
+                generation_id, "index_reconciliation", checkpoint, sealed=False,
+            )
         return {
             "generation_id": generation_id,
             "status": "waiting_for_ack" if waiting_for_ack else ("caught_up" if caught_up else "in_progress"),
