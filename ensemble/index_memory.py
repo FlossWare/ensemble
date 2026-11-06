@@ -113,6 +113,41 @@ class InMemoryIndexStore:
                     })
         return {"decision": decision, "source": dict(current)}
 
+    async def restore_source(self, source_id: str, sequence: int) -> dict[str, Any]:
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("sequence must be a positive integer")
+        if self._write_fence_generation is not None:
+            raise RuntimeError("writes are fenced during generation cutover")
+        current = self._sources.get(source_id)
+        if current is None:
+            raise KeyError("unknown source")
+        if current.get("purged"):
+            raise RuntimeError("permanently purged sources cannot be restored")
+        if not current.get("tombstoned"):
+            raise RuntimeError("source is not soft-deleted")
+        if sequence <= current["high_sequence"]:
+            raise ValueError("restore sequence must exceed the current source sequence")
+        now = datetime.now(timezone.utc).isoformat()
+        current.update(high_sequence=sequence, tombstoned=False, updated_at=now)
+        for generation in self._generations.values():
+            if generation["state"] not in {"active", "building"}:
+                continue
+            generation_id = generation["generation_id"]
+            if generation["state"] == "active":
+                self._generation_sources.setdefault(generation_id, {})[source_id] = {
+                    "source_id": source_id, "high_sequence": sequence,
+                    "revision_id": current["revision_id"], "profiles": dict(current["profiles"]),
+                    "tombstoned": False, "updated_at": now,
+                }
+            self._change_sequence += 1
+            self._generation_changes.setdefault(generation_id, []).append({
+                "change_id": self._change_sequence, "generation_id": generation_id,
+                "source_id": source_id, "high_sequence": sequence,
+                "revision_id": current["revision_id"], "profiles": dict(current["profiles"]),
+                "tombstoned": False, "acknowledged": False, "created_at": now,
+            })
+        return dict(current)
+
     async def mark_purged(self, source_id: str) -> None:
         source = self._sources.get(source_id)
         if source is None or not source["tombstoned"]:
