@@ -325,8 +325,8 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1, *, trace:
         raise
     await record_stage(
         "robots_policy", "completed", robots_started,
-        policy_applied=True, crawl_delay_seconds=min(
-            5.0, max(0.0, float(rules.crawl_delay(CRAWLER_AGENT) or rules.crawl_delay("*") or 0))
+        policy_applied=True, crawl_delay_seconds=max(
+            0.0, float(rules.crawl_delay(CRAWLER_AGENT) or rules.crawl_delay("*") or 0)
         ),
     )
     initial_policy_started = time.perf_counter()
@@ -369,7 +369,7 @@ async def crawl_uri(uri: str, max_pages: int = 10, max_depth: int = 1, *, trace:
     skipped_count = 0
     failures = []
     crawl_delay = rules.crawl_delay(CRAWLER_AGENT) or rules.crawl_delay("*") or 0
-    crawl_delay = min(5.0, max(0.0, float(crawl_delay)))
+    crawl_delay = max(0.0, float(crawl_delay))
 
     while queue and attempts < max_pages:
         target, depth = queue.popleft()
