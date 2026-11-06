@@ -239,3 +239,30 @@ def test_generic_deletion_contracts_preserve_context_and_result_parameters():
     assert RetryingDeletionDecorator.__parameters__ == (TContext, TValue)
     assert DeletionResult.__parameters__ == (TValue,)
     assert get_type_hints(ReclamationQueue.enqueue)["return"] is ReclamationJob
+
+
+
+def test_api_records_deletion_strategy_audit():
+    from fastapi.testclient import TestClient
+    from ensemble.api import create_app
+    from ensemble.store import InMemoryDocumentStore
+
+    with TestClient(create_app(store=InMemoryDocumentStore())) as client:
+        client.post("/api/v1/index/revisions", json={
+            "source_id": "audited-api-source",
+            "revision_sequence": 1,
+            "revision_id": "revision-1",
+            "profiles": {"chunk": "window-v1"},
+        })
+        tombstone = client.post("/api/v1/index/tombstones", json={
+            "source_id": "audited-api-source",
+            "revision_sequence": 2,
+            "actor": "human:operator",
+            "reason": "test audit trail",
+        })
+        assert tombstone.status_code == 200
+        audit = client.get("/api/v1/index/sources/audited-api-source/deletion-audit")
+        assert audit.status_code == 200
+        assert audit.json()["events"][0]["event"] == "strategy_result"
+        assert audit.json()["events"][0]["actor"] == "human:operator"
+        assert audit.json()["events"][0]["reason"] == "test audit trail"
