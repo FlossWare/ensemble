@@ -1580,6 +1580,19 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"sources": sources}
 
+    @app.post("/api/v1/index/generations/{generation_id}/sources/page", tags=["index"])
+    async def index_generation_target_sources_page(generation_id: str, payload: dict[str, Any]):
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id and item["state"] == "building" for item in status["generations"]):
+            raise HTTPException(status_code=409, detail="generation is not in building state")
+        limit = payload.get("limit", 500)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 10000")
+        sources = await active_index_store.list_generation_sources_after(
+            generation_id, payload.get("cursor"), payload.get("upper_bound"), limit,
+        )
+        return {"sources": sources}
+
     @app.put("/api/v1/index/generations/{generation_id}/sources", tags=["index"])
     async def index_generation_source_put(generation_id: str, payload: dict[str, Any]):
         try:
@@ -2033,6 +2046,37 @@ def create_app(
                 "text_sha": hashlib.sha256(chunk.content.encode("utf-8")).hexdigest(),
             })
         return {"ok": True, "chunks": chunks}
+
+    @app.post("/api/v1/documents/generations/{generation_id}/sources", tags=["documents"])
+    async def documents_generation_source(generation_id: str, payload: dict[str, Any]):
+        source = payload.get("source")
+        if not isinstance(source, dict) or not isinstance(source.get("source_id"), str):
+            raise HTTPException(status_code=400, detail="source must include source_id")
+        source_id = source["source_id"]
+        if source.get("tombstoned") is True:
+            await document_store.tombstone_generation_source(generation_id, source_id)
+            return {"ok": True, "document_count": 0, "chunk_count": 0, "tombstoned": True}
+        grouped: dict[str, list[Any]] = {}
+        for item in await document_store.all_chunks():
+            if item.document.source_id == source_id:
+                grouped.setdefault(str(item.document.id), []).append(item)
+        document_count = 0
+        chunk_count = 0
+        for items in grouped.values():
+            document = items[0].document
+            chunks = [item.chunk for item in items]
+            await document_store.upsert_generation(generation_id, document, chunks)
+            document_count += 1
+            chunk_count += len(chunks)
+        return {"ok": True, "document_count": document_count, "chunk_count": chunk_count, "tombstoned": False}
+
+    @app.post("/api/v1/vector/generations/{generation_id}/sources/tombstone", tags=["vector"])
+    async def vector_generation_source_tombstone(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        deleted = await active_vector_store.tombstone_generation_source(generation_id, source_id)
+        return {"ok": True, "deleted": deleted}
 
     @app.get("/api/v1/vector/health", tags=["vector"])
     async def vector_health():
