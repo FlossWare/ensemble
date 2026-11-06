@@ -179,7 +179,9 @@ The required capability surface is defined by Ensemble's own product scope, arch
 | Context | Bounded context assembly across Memory and Ensemble retrieval with explicit source provenance and extractive compression |
 | Collaboration | Provider-neutral participants, memberships, contributions, handoffs, checkpoints, synthesis, proposals, and auditable human-gated decisions |
 
-Collaboration contracts are documented in [Collaboration REST Contracts](collaboration-contracts.md). The initial implementation uses the existing SQLite database and Control Center; integrations own automatic capture and publish incremental checkpoints through REST.\n\nA Control Center is also a required product surface. It is served by the same application and consumes these REST contracts; it does not create a second backend or duplicate capability logic.
+Collaboration contracts are documented in [Collaboration REST Contracts](collaboration-contracts.md). The initial implementation uses the existing SQLite database and Control Center; integrations own automatic capture and publish incremental checkpoints through REST.
+
+A Control Center is also a required product surface. It is served by the same application and consumes these REST contracts; it does not create a second backend or duplicate capability logic.
 
 ## Memory resource conventions
 
