@@ -12,11 +12,13 @@ from ensemble.vector_memory import InMemoryVectorStore
 
 def test_control_panel_is_served_by_the_api():
     app = create_app(store=InMemoryDocumentStore())
-    assert sum(route.path == "/control" for route in app.routes) == 1
+    assert sum(getattr(route, "path", None) == "/control" for route in app.routes) == 1
     with TestClient(app) as client:
         response = client.get("/control")
         assert response.status_code == 200
         assert "Ensemble Control Center" in response.text
+        assert "/api/v1/collaboration/participants" in client.get("/openapi.json").text
+        assert "/api/v1/index/restorations" in client.get("/openapi.json").text
         assert 'class="app-header"' in response.text
         assert 'class="app-shell"' in response.text
         assert 'class="sidebar"' in response.text
