@@ -284,8 +284,31 @@ class SqliteVectorStore:
         return 0
 
     async def restore_source(self, source_id: str) -> int:
-        # SQLite vector queries consult the authoritative Index source state.
-        return 0
+        changed = 0
+        async with self.engine.begin() as connection:
+            for table, key_columns in (
+                (records, (records.c.collection_name, records.c.record_id)),
+                (generation_records, (
+                    generation_records.c.generation_id,
+                    generation_records.c.collection_name,
+                    generation_records.c.record_id,
+                )),
+            ):
+                rows = (await connection.execute(
+                    select(*key_columns, table.c.metadata).where(
+                        table.c.metadata["source_id"].as_string() == source_id
+                        | (table.c.metadata["url"].as_string() == source_id)
+                    )
+                )).mappings().all()
+                for row in rows:
+                    metadata = dict(row["metadata"] or {})
+                    if metadata.pop("_tombstoned", None):
+                        filters = [column == row[column.name] for column in key_columns]
+                        await connection.execute(
+                            table.update().where(*filters).values(metadata=metadata)
+                        )
+                        changed += 1
+        return changed
 
     async def reclaim_source(self, source_id: str) -> int:
         async with self.engine.begin() as connection:
@@ -487,6 +510,7 @@ class SqliteVectorStore:
         return updated
 
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:
+        changed = 0
         async with self.engine.begin() as connection:
             rows = (await connection.execute(
                 select(
@@ -495,19 +519,39 @@ class SqliteVectorStore:
                     generation_records.c.metadata,
                 ).where(generation_records.c.generation_id == generation_id)
             )).mappings().all()
-            matches = [
-                (row["collection_name"], row["record_id"])
-                for row in rows
-                if row["metadata"].get("source_id") == source_id
-                or row["metadata"].get("url") == source_id
-            ]
-            for collection_name, record_id in matches:
-                await connection.execute(delete(generation_records).where(
-                    generation_records.c.generation_id == generation_id,
-                    generation_records.c.collection_name == collection_name,
-                    generation_records.c.record_id == record_id,
-                ))
-        return len(matches)
+            for row in rows:
+                metadata = dict(row["metadata"] or {})
+                if metadata.get("source_id") == source_id or metadata.get("url") == source_id:
+                    if not metadata.get("_tombstoned"):
+                        metadata["_tombstoned"] = True
+                        await connection.execute(generation_records.update().where(
+                            generation_records.c.generation_id == generation_id,
+                            generation_records.c.collection_name == row["collection_name"],
+                            generation_records.c.record_id == row["record_id"],
+                        ).values(metadata=metadata))
+                        changed += 1
+        return changed
+
+    async def restore_generation_source(self, generation_id: str, source_id: str) -> int:
+        changed = 0
+        async with self.engine.begin() as connection:
+            rows = (await connection.execute(
+                select(
+                    generation_records.c.collection_name,
+                    generation_records.c.record_id,
+                    generation_records.c.metadata,
+                ).where(generation_records.c.generation_id == generation_id)
+            )).mappings().all()
+            for row in rows:
+                metadata = dict(row["metadata"] or {})
+                if (metadata.get("source_id") == source_id or metadata.get("url") == source_id) and metadata.pop("_tombstoned", None):
+                    await connection.execute(generation_records.update().where(
+                        generation_records.c.generation_id == generation_id,
+                        generation_records.c.collection_name == row["collection_name"],
+                        generation_records.c.record_id == row["record_id"],
+                    ).values(metadata=metadata))
+                    changed += 1
+        return changed
 
     async def delete_generation(self, generation_id: str) -> int:
         async with self.engine.begin() as connection:
