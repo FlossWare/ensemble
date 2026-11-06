@@ -87,7 +87,20 @@ Internal callers coordinate generation state through the Index REST contract rat
 
 The acknowledgement body requires `source_id`, positive `revision_sequence`, and boolean `tombstoned`. These routes are also the contract used by the co-located ASGI transport; they are not implementation-only shortcuts.
 
-## 8. Initial implemented endpoints
+## 8. Index generation-copy primitives
+
+The Index generation builder is an orchestrator. Its source-copy pass reads and mutates Index-owned state only through these REST contracts:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | /api/v1/index/generations/{generation_id}/source-upper-bound | Capture the bounded source-key snapshot |
+| POST | /api/v1/index/generations/{generation_id}/sources/page | Read one ordered source page |
+| PUT | /api/v1/index/generations/{generation_id}/sources | Copy one source into the building generation |
+| POST | /api/v1/index/generations/{generation_id}/checkpoints | Persist progress and seal the Index checkpoint |
+
+The public generation-copy operation uses these contracts through the internal REST client. This preserves the single-process ASGI deployment while allowing the Index capability to move behind its configured REST base URL.
+
+## 9. Initial implemented endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
