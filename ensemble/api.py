@@ -575,15 +575,15 @@ def create_app(
             await active_thompson_store.initialize()
             await active_learning_store.initialize()
             await active_transcript_store.initialize()
-            await active_transcript_store.recover_interrupted()
             await active_reclamation_store.initialize()
             await active_crawl_store.initialize()
             # Each partition has its own SQLite database. Recovering only the
-            # default scope leaves stale jobs in authenticated partitions stuck
-            # in "running" forever after a process restart.
+            # default scope leaves stale transcript checkpoints and crawl jobs
+            # in authenticated partitions stuck after a process restart.
             for partition_id in _configured_worker_partitions():
                 recovery_scope = set_request_scope(RequestScope(partition_id=partition_id))
                 try:
+                    await active_transcript_store.recover_interrupted()
                     await active_crawl_store.recover_interrupted()
                 finally:
                     reset_request_scope(recovery_scope)
