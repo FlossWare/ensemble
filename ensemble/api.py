@@ -2503,6 +2503,31 @@ def create_app(
         )
         return {"ok": True, "upserted": result}
 
+    @app.post("/api/v1/vector/collections/{name}/query", tags=["vector"])
+    async def vector_query(name: str, payload: dict[str, Any]):
+        _validate_vector_collection_name(name)
+        embedding = payload.get("embedding")
+        limit = payload.get("limit", 200)
+        generation_id = payload.get("generation_id")
+        if not isinstance(embedding, list) or not embedding or len(embedding) > 8192:
+            raise HTTPException(status_code=400, detail="embedding must be a non-empty vector of at most 8192 values")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
+        try:
+            vector = [float(value) for value in embedding]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="embedding values must be numeric") from exc
+        import math
+        if any(not math.isfinite(value) for value in vector):
+            raise HTTPException(status_code=400, detail="embedding values must be finite")
+        if generation_id is not None and (not isinstance(generation_id, str) or not generation_id):
+            raise HTTPException(status_code=400, detail="generation_id must be a non-empty string")
+        if generation_id:
+            results = await active_vector_store.query_generation(generation_id, name, vector, limit)
+        else:
+            results = await active_vector_store.query(name, vector, limit)
+        return {"ok": True, "results": results}
+
     @app.post("/api/v1/vector/collections/{name}/records/lookup", tags=["vector"])
     async def vector_existing(name: str, payload: dict[str, Any]):
         _validate_vector_collection_name(name)
