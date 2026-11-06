@@ -48,7 +48,7 @@ from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
 from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
 from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryReclamationStore
-from .deletion import DeletionContext, DeletionStrategy, DeferredReclamationStrategy
+from .deletion import DeletionContext, DeletionStrategy, DeferredReclamationStrategy, ReclamationJob
 from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
 from .partitioning import (
@@ -251,7 +251,7 @@ def create_app(
     transcript_store: TranscriptCheckpointStore | None = None,
     crawl_store: CrawlJobStore | None = None,
     source_schedule_store: SourceScheduleStore | None = None,
-    deletion_strategy: DeletionStrategy[DeletionContext, dict[str, Any]] | None = None,
+    deletion_strategy: DeletionStrategy[DeletionContext, ReclamationJob] | None = None,
     collaboration_store: CollaborationStore | None = None,
     synthesis_strategy: SynthesisStrategy | None = None,
 ) -> FastAPI:
