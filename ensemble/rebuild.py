@@ -846,10 +846,10 @@ class IndexGenerationBuilder:
             )
             try:
                 memory_after_fence = (await self.internal_client.request(
-                    "GET", f"/api/v1/memory/generations/{generation_id}/changes/high-watermark",
+                    "GET", f"/api/v1/memory/generations/{generation_id}/changes/high-watermark", request=request,
                 )).get("high_watermark", 0)
                 pending_after_fence = (await self.internal_client.request(
-                    "GET", f"/api/v1/memory/generations/{generation_id}/changes/pending",
+                    "GET", f"/api/v1/memory/generations/{generation_id}/changes/pending", request=request,
                 )).get("pending", 0)
                 expected_memory = reconciliation_values["memory_reconciliation"][1]
                 if memory_after_fence != expected_memory or pending_after_fence:
