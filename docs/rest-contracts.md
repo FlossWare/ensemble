@@ -118,6 +118,7 @@ When a key is unset, requests for that capability use the co-located ASGI transp
 | GET | /api/v1/index/health, /ready | Index capability status |
 | POST | /api/v1/index/revisions | Record a revision and return accepted/duplicate/conflict/superseded/tombstoned decision |
 | POST | /api/v1/index/tombstones | Permanently tombstone a source at a revision sequence |
+| POST | /api/v1/index/restorations | Restore a soft-deleted source and cancel pending physical reclamation |
 | GET | /api/v1/index/reclamation, POST /api/v1/index/reclamation/run | Inspect or explicitly run durable physical reclamation jobs |
 | GET | /api/v1/index/sources/{source_id}/deletion-audit | Read bounded append-only deletion strategy and reclamation audit history |
 | GET | /api/v1/index/sources/{source_id}, /manifest | Read source state and bounded source manifest |
