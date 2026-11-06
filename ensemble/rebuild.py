@@ -627,12 +627,59 @@ class IndexGenerationBuilder:
         }
 
     async def copy_memory_page(
-        self, generation_id: str, *, page_size: int = 500,
+        self, generation_id: str, *, page_size: int = 500, request: Any = None,
     ) -> dict[str, Any]:
         if self.memory_store is None:
             raise RuntimeError("Memory store is required for the Memory generation pass")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
+
+        if self.internal_client is not None:
+            status = await self.internal_client.request("GET", "/api/v1/index/generations", request=request)
+            generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
+            if generation is None or generation["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            previous = (generation.get("checkpoints") or {}).get("memory") or {}
+            if previous.get("sealed") is True:
+                value = previous.get("value") or {}
+                return {"generation_id": generation_id, "status": "complete", "page_count": 0,
+                        "record_count": value.get("record_count", 0),
+                        "cursor": value.get("cursor"), "upper_bound": value.get("upper_bound")}
+            value = previous.get("value") or {}
+            upper_bound = value.get("upper_bound") if value else (
+                await self.internal_client.request("GET", "/api/v1/memory/generations/source-upper-bound", request=request)
+            ).get("upper_bound")
+            cursor = value.get("cursor") if value else None
+            record_count = int(value.get("record_count", 0))
+            names = (await self.internal_client.request(
+                "POST", "/api/v1/memory/generations/sources/page", request=request,
+                json={"cursor": cursor, "upper_bound": upper_bound, "limit": page_size},
+            )).get("names", [])
+            snapshots = {}
+            if names:
+                snapshots = (await self.internal_client.request(
+                    "POST", "/api/v1/memory/generations/snapshots/query", request=request,
+                    json={"names": names},
+                )).get("snapshots", {})
+            for name in names:
+                snapshot = snapshots.get(name)
+                if snapshot is not None:
+                    await self.internal_client.request(
+                        "PUT", f"/api/v1/memory/generations/{generation_id}/snapshots/{name}",
+                        request=request, json={"snapshot": snapshot},
+                    )
+                    record_count += 1
+            next_cursor = names[-1] if names else cursor
+            complete = upper_bound is None or next_cursor == upper_bound or len(names) < page_size
+            checkpoint = {"cursor": next_cursor, "upper_bound": upper_bound, "record_count": record_count}
+            await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/checkpoints", request=request,
+                json={"capability": "memory", "checkpoint": checkpoint, "sealed": complete},
+            )
+            return {"generation_id": generation_id, "status": "complete" if complete else "in_progress",
+                    "page_count": len(names), "record_count": record_count,
+                    "cursor": next_cursor, "upper_bound": upper_bound}
+
         status = await self.index_store.generation_status()
         generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
         if generation is None or generation["state"] != "building":
@@ -663,12 +710,61 @@ class IndexGenerationBuilder:
                 "cursor": next_cursor, "upper_bound": upper_bound}
 
     async def reconcile_memory_changes_page(
-        self, generation_id: str, *, page_size: int = 250,
+        self, generation_id: str, *, page_size: int = 250, request: Any = None,
     ) -> dict[str, Any]:
         if self.memory_store is None:
             raise RuntimeError("Memory store is required for Memory reconciliation")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
             raise ValueError("page_size must be between 1 and 10000")
+
+        if self.internal_client is not None:
+            status = await self.internal_client.request("GET", "/api/v1/index/generations", request=request)
+            generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
+            if generation is None or generation["state"] != "building":
+                raise RuntimeError("generation is not in building state")
+            checkpoints = generation.get("checkpoints") or {}
+            if (checkpoints.get("memory") or {}).get("sealed") is not True:
+                raise RuntimeError("Memory source copy must be sealed before reconciliation")
+            previous = checkpoints.get("memory_reconciliation") or {}
+            if previous.get("sealed") is True:
+                value = previous.get("value") or {}
+                return {"generation_id": generation_id, "status": "complete", "page_count": 0,
+                        "change_count": value.get("change_count", 0), "cursor": value.get("cursor", 0)}
+            value = previous.get("value") or {}
+            cursor = int(value.get("cursor", 0))
+            change_count = int(value.get("change_count", 0))
+            page = (await self.internal_client.request(
+                "POST", f"/api/v1/memory/generations/{generation_id}/changes/page",
+                request=request, json={"after_change_id": cursor, "limit": page_size},
+            )).get("changes", [])
+            for change in page:
+                await self.internal_client.request(
+                    "PUT", f"/api/v1/memory/generations/{generation_id}/snapshots/{change['name']}",
+                    request=request, json={"snapshot": change["snapshot"]},
+                )
+            next_cursor = page[-1]["change_id"] if page else cursor
+            if page:
+                await self.internal_client.request(
+                    "POST", f"/api/v1/memory/generations/{generation_id}/changes/acknowledgements",
+                    request=request, json={"through_change_id": next_cursor},
+                )
+            change_count += len(page)
+            high_watermark = (await self.internal_client.request(
+                "GET", f"/api/v1/memory/generations/{generation_id}/changes/high-watermark",
+                request=request,
+            )).get("high_watermark", 0)
+            caught_up = next_cursor == high_watermark and len(page) < page_size
+            checkpoint = {"cursor": next_cursor, "change_count": change_count,
+                          "observed_high_watermark": high_watermark}
+            await self.internal_client.request(
+                "POST", f"/api/v1/index/generations/{generation_id}/checkpoints", request=request,
+                json={"capability": "memory_reconciliation", "checkpoint": checkpoint, "sealed": False},
+            )
+            return {"generation_id": generation_id,
+                    "status": "caught_up" if caught_up else "in_progress",
+                    "page_count": len(page), "change_count": change_count,
+                    "cursor": next_cursor, "high_watermark": high_watermark}
+
         status = await self.index_store.generation_status()
         generation = next((item for item in status["generations"] if item["generation_id"] == generation_id), None)
         if generation is None or generation["state"] != "building":
