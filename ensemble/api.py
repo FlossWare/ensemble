@@ -220,6 +220,18 @@ def _assemble_context(
     }
 
 
+def _configured_worker_partitions() -> list[str]:
+    raw = os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip()
+    if not raw:
+        return ["default"]
+    token_map = json.loads(raw)
+    return ["default", *sorted({
+        partition
+        for principal in token_map.values()
+        for partition in principal.get("partitions", [])
+    })]
+
+
 def create_app(
     database_url: str | None = None,
     store: DocumentStore | None = None,
@@ -409,15 +421,7 @@ def create_app(
         while True:
             processed = False
             try:
-                raw = os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip()
-                if raw:
-                    token_map = json.loads(raw)
-                    partitions = ["default", *sorted({
-                        partition for principal in token_map.values()
-                        for partition in principal.get("partitions", [])
-                    })]
-                else:
-                    partitions = ["default"]
+                partitions = _configured_worker_partitions()
                 for partition_id in partitions:
                     scope_token = set_request_scope(RequestScope(partition_id=partition_id))
                     heartbeat_task = None
@@ -541,15 +545,7 @@ def create_app(
         while True:
             processed = False
             try:
-                raw = os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip()
-                if raw:
-                    token_map = json.loads(raw)
-                    partitions = ["default", *sorted({
-                        partition for principal in token_map.values()
-                        for partition in principal.get("partitions", [])
-                    })]
-                else:
-                    partitions = ["default"]
+                partitions = _configured_worker_partitions()
                 for partition_id in partitions:
                     scope_token = set_request_scope(RequestScope(partition_id=partition_id))
                     try:
@@ -582,7 +578,15 @@ def create_app(
             await active_transcript_store.recover_interrupted()
             await active_reclamation_store.initialize()
             await active_crawl_store.initialize()
-            await active_crawl_store.recover_interrupted()
+            # Each partition has its own SQLite database. Recovering only the
+            # default scope leaves stale jobs in authenticated partitions stuck
+            # in "running" forever after a process restart.
+            for partition_id in _configured_worker_partitions():
+                recovery_scope = set_request_scope(RequestScope(partition_id=partition_id))
+                try:
+                    await active_crawl_store.recover_interrupted()
+                finally:
+                    reset_request_scope(recovery_scope)
             await active_source_schedule_store.initialize()
             await active_execution_trace_store.initialize()
             worker_task = asyncio.create_task(reclamation_worker())
