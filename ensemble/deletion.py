@@ -95,7 +95,7 @@ class ImmediateReclamationStrategy:
         self._drain = drain
 
     async def execute(self, context: DeletionContext) -> DeletionResult[ReclamationJob]:
-        job = await self._queue.enqueue(context.source_id, actor=context.actor, reason=context.reason, requested_at=context.requested_at, retain_until=context.retain_until)
+        job = await self._queue.enqueue(context.source_id, actor=context.actor, reason=context.reason, requested_at=context.requested_at, retain_until=None if context.erasure_required else context.retain_until, requested_retain_until=context.retain_until, erasure_required=context.erasure_required)
         processed = await self._drain()
         return DeletionResult(
             source_id=context.source_id,
