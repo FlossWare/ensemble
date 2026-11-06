@@ -53,6 +53,19 @@ def test_collaboration_contributions_handoffs_synthesis_and_human_decisions():
         })
         assert contribution.status_code == 200
         contribution_id = contribution.json()["contribution"]["id"]
+        self_review = client.post(f"/api/v1/collaboration/contributions/{contribution_id}/review", json={
+            "actor_id": "agent:assistant",
+            "status": "accepted",
+            "rationale": "Self-review is not authorized.",
+        })
+        assert self_review.status_code == 403
+        reviewed = client.post(f"/api/v1/collaboration/contributions/{contribution_id}/review", json={
+            "actor_id": "human:owner",
+            "status": "accepted",
+            "rationale": "The contribution was verified against its source reference.",
+        })
+        assert reviewed.status_code == 200
+        assert reviewed.json()["contribution"]["status"] == "accepted"
 
         handoff = client.post(f"/api/v1/collaboration/projects/{project_id}/handoffs", json={
             "actor_id": "human:owner",
