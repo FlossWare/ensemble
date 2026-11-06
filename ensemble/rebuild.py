@@ -965,7 +965,7 @@ class IndexGenerationBuilder:
                     raise RuntimeError("reconciled Index source is missing from the target generation")
                 await self.internal_client.request(
                     "POST", f"/api/v1/documents/generations/{generation_id}/sources",
-                    request=request, json={"source": source},
+                    request=request, json={"source": source, "require_documents": True},
                 )
             next_cursor = ready_page[-1]["change_id"] if ready_page else cursor
             change_count += len(ready_page)
