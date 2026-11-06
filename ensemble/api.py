@@ -4085,6 +4085,7 @@ def create_app(
                 )
                 result, decision = await ingest_indexed_document(
                     document, origin="web", locator=source_id, request=request,
+                    acknowledge_generation=False,
                 )
                 await internal.request(
                     "POST", "/api/v1/knowledge/records/materialize", request=request,
@@ -4094,6 +4095,11 @@ def create_app(
                         "content": content, "origin": "web", "locator": source_id,
                         "profiles": profiles,
                     }},
+                )
+                await internal.request(
+                    "POST", "/api/v1/index/generation-changes/acknowledgements",
+                    request=request,
+                    json={"source_id": source_id, "revision_sequence": state["revision"], "tombstoned": False},
                 )
                 state.update(
                     status="completed", decision=decision,
@@ -4141,7 +4147,8 @@ def create_app(
                 metadata={"origin": "web", "locator": source_id},
             )
             result, decision = await ingest_indexed_document(
-                document, origin="web", locator=source_id, request=request
+                document, origin="web", locator=source_id, request=request,
+                acknowledge_generation=False,
             )
             await internal.request(
                 "POST", "/api/v1/knowledge/records/materialize", request=request,
@@ -4150,6 +4157,11 @@ def create_app(
                     "title": preview["title"], "content": preview["text"], "origin": "web",
                     "locator": source_id, "profiles": profiles,
                 }},
+            )
+            await internal.request(
+                "POST", "/api/v1/index/generation-changes/acknowledgements",
+                request=request,
+                json={"source_id": source_id, "revision_sequence": revision, "tombstoned": False},
             )
             return {"ok": True, "decision": decision, "source": preview, "document": result}
         except ScrapeError as exc:
