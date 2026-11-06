@@ -601,6 +601,7 @@ def create_app(
                     reset_request_scope(recovery_scope)
             await active_source_schedule_store.initialize()
             await active_execution_trace_store.initialize()
+            await active_collaboration_store.initialize()
             worker_task = asyncio.create_task(reclamation_worker())
             crawl_worker_task = asyncio.create_task(crawl_worker())
             schedule_worker_task = asyncio.create_task(source_schedule_worker())
@@ -615,6 +616,7 @@ def create_app(
                         await task
                     except asyncio.CancelledError:
                         pass
+                await active_collaboration_store.close()
                 await active_execution_trace_store.close()
                 await active_source_schedule_store.close()
                 await active_crawl_store.close()
@@ -637,7 +639,8 @@ def create_app(
         description="REST-first memory, knowledge, and retrieval platform.",
         lifespan=lifespan,
     )
-    app.middleware("http")(partition_scope_middleware)\n    app.include_router(create_collaboration_router(active_collaboration_store))
+    app.middleware("http")(partition_scope_middleware)
+    app.include_router(create_collaboration_router(active_collaboration_store))
     app.state.execution_trace_store = active_execution_trace_store
     # Keep the durable maintenance runner addressable for in-process operations and tests.
     app.state.reclamation_runner = reclaim_due_sources
