@@ -431,3 +431,34 @@ def test_reclamation_persists_deletion_attribution_and_honors_retention_deadline
         await queue.close()
 
     asyncio.run(exercise())
+
+
+
+def test_sqlite_deletion_audit_is_append_only_and_survives_restart(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'deletion-audit.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+    async def exercise():
+        first = SqliteReclamationStore(database_url)
+        await first.initialize()
+        await first.record_audit(
+            "audited-source", "strategy_result", actor="human:owner",
+            reason="requested erasure", details={"state": "queued"},
+        )
+        await first.record_audit(
+            "audited-source", "completed", actor="human:owner",
+            reason="requested erasure", details={"purged": True},
+        )
+        await first.close()
+
+        second = SqliteReclamationStore(database_url)
+        await second.initialize()
+        events = await second.audit_events("audited-source")
+        assert [item["event"] for item in events] == ["completed", "strategy_result"]
+        assert events[0]["actor"] == "human:owner"
+        assert events[0]["details"] == {"purged": True}
+        await second.close()
+
+    asyncio.run(exercise())
