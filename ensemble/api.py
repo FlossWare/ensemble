@@ -1467,6 +1467,41 @@ def create_app(
             raise HTTPException(status_code=404, detail="unknown record")
         return {"ok": True, "record": record}
 
+    @app.post("/api/v1/knowledge/records/materialize", tags=["knowledge"])
+    async def knowledge_record_materialize(payload: dict[str, Any], request: Request):
+        record = payload.get("record")
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=400, detail="record must be an object")
+        source_id = record.get("source_id")
+        revision_sequence = record.get("revision_sequence")
+        revision_id = record.get("revision_id")
+        content = record.get("content")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="record.source_id must be a non-empty string")
+        if isinstance(revision_sequence, bool) or not isinstance(revision_sequence, int) or revision_sequence < 1:
+            raise HTTPException(status_code=400, detail="record.revision_sequence must be a positive integer")
+        if not isinstance(revision_id, str) or not revision_id or len(revision_id) > 512:
+            raise HTTPException(status_code=400, detail="record.revision_id must be a non-empty string")
+        if not isinstance(content, str) or not content or len(content) > 4_000_000:
+            raise HTTPException(status_code=400, detail="record.content must contain 1-4000000 characters")
+        if not isinstance(record.get("title"), str) or not record["title"]:
+            raise HTTPException(status_code=400, detail="record.title must be a non-empty string")
+        if not isinstance(record.get("origin"), str) or not isinstance(record.get("locator"), str):
+            raise HTTPException(status_code=400, detail="record origin and locator are required")
+        if not isinstance(record.get("profiles"), dict) or not record["profiles"]:
+            raise HTTPException(status_code=400, detail="record.profiles must be a non-empty object")
+        digest = await active_knowledge_store.put(record)
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        status = await internal.request("GET", "/api/v1/index/generations", request=request)
+        generation_id = status.get("active_generation_id")
+        if generation_id:
+            await internal.request(
+                "POST", f"/api/v1/knowledge/generations/{generation_id}/records",
+                request=request,
+                json={"source_id": source_id, "record": await active_knowledge_store.get(source_id)},
+            )
+        return {"ok": True, "source_id": source_id, "content_sha256": digest}
+
     @app.post("/api/v1/knowledge/records/query", tags=["knowledge"])
     async def knowledge_records_query(payload: dict[str, Any]):
         source_ids = payload.get("source_ids")
