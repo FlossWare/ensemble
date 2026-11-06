@@ -36,6 +36,8 @@ def test_permanent_reclamation_delegates_to_capability_rest():
         assert source.json()["source"]["tombstoned"] is True
         assert source.json()["source"]["purged"] is True
 
-        jobs = client.get("/api/v1/index/reclamation")
-        job = next(item for item in jobs.json()["jobs"] if item["source_id"] == "purge-source")
-        assert job["state"] == "complete"
+        job = client.post("/api/v1/index/reclamation/jobs/query", json={
+            "source_id": "purge-source",
+        })
+        assert job.status_code == 200
+        assert job.json()["job"]["state"] == "complete"
