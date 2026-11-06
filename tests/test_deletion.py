@@ -401,6 +401,12 @@ def test_api_legal_erasure_overrides_future_retention_deadline():
         assert job["requested_retain_until"].isoformat() == retain_until
         assert job["erasure_required"] is True
         assert job["available_at"] <= datetime.now(timezone.utc)
+        restore = client.post("/api/v1/index/restorations", json={
+            "source_id": "legal-erasure-source",
+            "revision_sequence": 3,
+        })
+        assert restore.status_code == 409
+        assert "legally required erasure" in restore.json()["detail"]
         audit = client.get("/api/v1/index/sources/legal-erasure-source/deletion-audit").json()["events"]
         strategy_event = next(item for item in audit if item["event"] == "strategy_result")
         assert strategy_event["details"]["retention_overridden"] is True
