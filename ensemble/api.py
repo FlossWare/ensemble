@@ -1648,17 +1648,6 @@ def create_app(
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
-        result = await active_index_store.record_tombstone(source_id, sequence)
-        if result["decision"] == "tombstoned":
-            try:
-                cleanup = await tombstone_indexed_source(source_id, request)
-            except Exception as exc:
-                cleanup = {
-                    "status": "partial", "retryable": True,
-                    "completed": [], "failed": [{
-                        "target": "logical_cleanup", "error": type(exc).__name__,
-                    }],
-                }
             actor = payload.get("actor")
             reason = payload.get("reason")
             retain_until_value = payload.get("retain_until")
@@ -1676,6 +1665,17 @@ def create_app(
                         raise ValueError("timezone required")
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail="retain_until must be a timezone-aware ISO-8601 timestamp") from exc
+        result = await active_index_store.record_tombstone(source_id, sequence)
+        if result["decision"] == "tombstoned":
+            try:
+                cleanup = await tombstone_indexed_source(source_id, request)
+            except Exception as exc:
+                cleanup = {
+                    "status": "partial", "retryable": True,
+                    "completed": [], "failed": [{
+                        "target": "logical_cleanup", "error": type(exc).__name__,
+                    }],
+                }
             try:
                 deletion_result = await active_deletion_strategy.execute(
                     DeletionContext(
