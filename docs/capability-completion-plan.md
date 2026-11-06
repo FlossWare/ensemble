@@ -231,3 +231,18 @@ The GitHub Actions workflow must expose clear validation stages and run the full
 Issues #43–46 are no longer treated as review-exempt merely because their original descriptions call them post-parity. They must be completed before the final review gate. Their dependencies remain enforced: #43 before #44; #44 before #45 and #46.
 
 An issue is complete only when implementation, documentation, tests, and acceptance criteria are all satisfied. Closing an issue because code exists or a route responds is not sufficient.
+
+
+## PR #47 issue implementation update
+
+The following implementation work is now present on the PR branch. It remains subject to full CI, SonarCloud, and final acceptance verification; these notes do not authorize closing issues prematurely.
+
+- **#27 deletion lifecycle:** typed generic Strategy/Decorator/Result contracts; deferred and immediate queue strategies; persisted actor, reason, request time, and retention deadline; durable retention scheduling; append-only audit events for strategy outcomes and reclamation worker claims, deferrals, retries, cancellation, completion, and restoration; safe cancellation of pending reclamation; restoration of soft-deleted sources and retained Documents, Knowledge, and Vector generation materializations; fail-closed restoration after reclamation starts or completes; idempotent derived-data cleanup remains in place.
+- **#26 generic contracts:** deletion contexts/results, strategy protocols, decorators, and reclamation jobs now preserve concrete Python types. Type-contract tests verify generic parameter preservation and typed queue results. The current repository has no Java implementation; no artificial Java source tree has been added. Java/Python equivalence remains an explicit limitation until a real Java implementation is introduced.
+- **#43 identity and project contracts:** provider-neutral human/agent participants, projects, membership roles, validation, and language-neutral REST resources use the existing SQLite database.
+- **#44 contributions and activity:** independently addressable attributable contributions, stable source references, project-scoped activity queries, and concurrent-write coverage are implemented.
+- **#45 handoffs:** open/acknowledged/completed/superseded lifecycle, optimistic concurrency, append-only event history, incremental checkpoints, structured blockers/next actions/references, and supersession links are implemented. Environment-specific hooks remain outside Ensemble; integrations publish checkpoints through REST.
+- **#46 synthesis and decisions:** replaceable deterministic synthesis strategy, contribution-linked statements, immutable refresh history, competing proposals, separate objections, decision history, contribution provenance, and human-gated final approval are implemented. Agent recommendations cannot accept or reject human-gated proposals.
+- The Control Center now includes participant/project setup, membership, contributions, handoffs/checkpoints, synthesis, proposal, decision, and activity controls. The full collaboration contracts are documented in [collaboration-contracts.md](collaboration-contracts.md).
+
+The new tests cover deletion metadata and retention persistence, audit history across restart, cancellation/restoration boundaries, generation materialization restoration, collaboration persistence across restart, concurrent contribution writes, concurrent handoff transitions, incremental checkpoints, synthesis refresh and strategy injection, proposal objections and provenance, human approval enforcement, and Control Center JavaScript syntax through the existing workflow. CI verification is still required before issue closure.
