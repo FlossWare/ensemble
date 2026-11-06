@@ -2126,6 +2126,13 @@ def create_app(
         for item in await document_store.all_chunks():
             if item.document.source_id == source_id:
                 grouped.setdefault(str(item.document.id), []).append(item)
+        if payload.get("require_documents") is True:
+            source_chunks = [item for items in grouped.values() for item in items]
+            if not source_chunks:
+                raise HTTPException(status_code=409, detail="acknowledged source has no active document chunks")
+            revisions = {item.document.revision for item in source_chunks}
+            if revisions != {source.get("high_sequence")}:
+                raise HTTPException(status_code=409, detail="active document revision does not match the reconciled Index source")
         document_count = 0
         chunk_count = 0
         for items in grouped.values():
