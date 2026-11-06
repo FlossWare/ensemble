@@ -50,6 +50,32 @@ class ReclamationStore(Protocol):
     async def enqueue(self, source_id: str, *, actor: str | None = None, reason: str | None = None, requested_at: datetime | None = None, retain_until: datetime | None = None) -> ReclamationJob: ...
     async def claim_due(self, limit: int = 100) -> list[ReclamationJob]: ...
     async def complete(self, source_id: str) -> None: ...
+    async def cancel(self, source_id: str) -> bool: ...
+    async def cancel(self, source_id: str) -> bool:
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            row = (await connection.execute(
+                select(reclamation_jobs.c.state).where(
+                    reclamation_jobs.c.source_id == source_id,
+                )
+            )).first()
+            if row is None:
+                return True
+            if row.state in {"running", "complete"}:
+                return False
+            if row.state == "cancelled":
+                return True
+            result = await connection.execute(
+                update(reclamation_jobs).where(
+                    reclamation_jobs.c.source_id == source_id,
+                    reclamation_jobs.c.state.in_(["pending", "retry"]),
+                ).values(state="cancelled", updated_at=now, last_error=None)
+            )
+            cancelled = result.rowcount == 1
+        if cancelled:
+            await self.record_audit(source_id, "cancelled", details={"reason": "source_restored"})
+        return cancelled
+
     async def retry(self, source_id: str, error: str, delay_seconds: int | None = None) -> None: ...
     async def status(self) -> dict[str, int]: ...
     async def record_audit(self, source_id: str, event: str, *, actor: str | None = None, reason: str | None = None, details: dict[str, Any] | None = None) -> None: ...
@@ -203,7 +229,7 @@ class SqliteReclamationStore:
                 select(reclamation_jobs.c.state, __import__("sqlalchemy").func.count())
                 .group_by(reclamation_jobs.c.state)
             )).all()
-        result = {"pending": 0, "running": 0, "retry": 0, "complete": 0}
+        result = {"pending": 0, "running": 0, "retry": 0, "complete": 0, "cancelled": 0}
         result.update({state: count for state, count in rows})
         return result
 
@@ -253,6 +279,18 @@ class InMemoryReclamationStore:
         job = self._jobs[source_id]
         job.update(state="complete", completed_at=datetime.now(timezone.utc),
                    updated_at=datetime.now(timezone.utc), last_error=None)
+
+    async def cancel(self, source_id: str) -> bool:
+        job = self._jobs.get(source_id)
+        if job is None:
+            return True
+        if job["state"] in {"running", "complete"}:
+            return False
+        if job["state"] == "cancelled":
+            return True
+        job.update(state="cancelled", updated_at=datetime.now(timezone.utc), last_error=None)
+        await self.record_audit(source_id, "cancelled", actor=job.get("actor"), reason=job.get("reason"), details={"reason": "source_restored"})
+        return True
 
     async def retry(self, source_id: str, error: str, delay_seconds: int | None = None) -> None:
         if delay_seconds is not None and (isinstance(delay_seconds, bool) or not isinstance(delay_seconds, int) or not 0 <= delay_seconds <= 3600):
