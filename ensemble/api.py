@@ -842,7 +842,7 @@ def create_app(
     async def ingest_indexed_document(
         document: DocumentIn, *, embed: bool = True, vector_collection: str | None = None,
         origin: str = "document", locator: str | None = None,
-        request: Request | None = None,
+        request: Request | None = None, acknowledge_generation: bool = True,
     ):
         trace_id = uuid4().hex
         request_id = _execution_request_id(request, trace_id)
@@ -959,28 +959,31 @@ def create_app(
             await trace_stage("graph_entity_linking", "degraded", stage_started, error_category=type(exc).__name__)
             trace_status = "degraded"
 
-        stage_started = time.perf_counter()
-        try:
-            await internal.request(
-                "POST", "/api/v1/index/generation-changes/acknowledgements",
-                request=request,
-                json={
-                    "source_id": document.source_id,
-                    "revision_sequence": document.revision,
-                    "tombstoned": False,
-                },
-            )
-            await trace_stage("generation_acknowledgement", "completed", stage_started)
-        except Exception as exc:
-            await trace_stage("generation_acknowledgement", "failed", stage_started, error_category=type(exc).__name__)
-            try:
-                if trace_created:
-                    await active_execution_trace_store.finish(
-                        trace_id, "failed", (time.perf_counter() - trace_started) * 1000, type(exc).__name__,
-                    )
-            except Exception:
-                pass
-            raise
+        if acknowledge_generation:
+                stage_started = time.perf_counter()
+                    try:
+                    await internal.request(
+                    "POST", "/api/v1/index/generation-changes/acknowledgements",
+                        request=request,
+                        json={
+                            "source_id": document.source_id,
+                            "revision_sequence": document.revision,
+                            "tombstoned": False,
+                        },
+                        )
+                        await trace_stage("generation_acknowledgement", "completed", stage_started)
+                except Exception as exc:
+                        await trace_stage("generation_acknowledgement", "failed", stage_started, error_category=type(exc).__name__)
+                    try:
+                        if trace_created:
+                            await active_execution_trace_store.finish(
+                            trace_id, "failed", (time.perf_counter() - trace_started) * 1000, type(exc).__name__,
+                                )
+                    except Exception:
+                        pass
+                    raise
+
+
 
         try:
             if trace_created:
