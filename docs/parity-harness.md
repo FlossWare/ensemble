@@ -19,7 +19,7 @@ The parity harness makes observable POC behavior comparable with Ensemble behavi
 
 ## Run
 
-Set the POC and Ensemble service base URLs for the scenario set. The initial POC examples assume the POC Chunking or Tokenization service is the selected reference base URL; because those POC services run independently, run one capability group per matching service endpoint or extend the scenario with a per-capability environment variable.
+Set the POC service base URLs independently because the POC runs these capabilities on separate listeners. Ensemble uses its single REST listener.
 
 ```sh
 POC_BASE_URL=http://127.0.0.1:8775 \
