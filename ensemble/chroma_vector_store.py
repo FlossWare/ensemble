@@ -6,6 +6,8 @@ import hashlib
 import json
 import math
 import os
+
+import numpy as np
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -41,6 +43,7 @@ class ChromaVectorStore:
         self.persistence_root = root.resolve()
         self._clients: dict[str, Any] = {}
         self._record_id_snapshots: dict[tuple[str, str, str], list[str]] = {}
+        self._vector_cache: dict[tuple[str, str, str | None], dict[str, Any]] = {}
         self._lock = RLock()
 
     def _partition_path(self) -> Path:
@@ -89,6 +92,130 @@ class ChromaVectorStore:
             ]
             for key in stale:
                 self._record_id_snapshots.pop(key, None)
+
+    def _invalidate_vector_cache(self, name: str, generation_id: str | None = None) -> None:
+        key = (current_partition_id(), name, generation_id)
+        with self._lock:
+            self._vector_cache.pop(key, None)
+
+    def _invalidate_generation_caches(self, generation_id: str, name: str | None = None) -> None:
+        partition = current_partition_id()
+        with self._lock:
+            stale = [
+                key for key in self._vector_cache
+                if key[0] == partition and key[2] == generation_id
+                and (name is None or key[1] == name)
+            ]
+            for key in stale:
+                self._vector_cache.pop(key, None)
+
+    def _load_vector_cache(self, collection) -> dict[str, Any]:
+        ids: list[str] = []
+        documents: list[str] = []
+        metadatas: list[dict[str, Any]] = []
+        vectors: list[Any] = []
+        for offset in range(0, collection.count(), 2000):
+            page = collection.get(
+                include=["embeddings", "documents", "metadatas"],
+                limit=2000, offset=offset,
+            )
+            ids.extend(page["ids"])
+            documents.extend(page["documents"] or [])
+            metadatas.extend(self._metadata_from_chroma(item) for item in (page["metadatas"] or []))
+            vectors.extend(page["embeddings"] if page["embeddings"] is not None else [])
+        metadata = collection.metadata or {}
+        dimensions = int(metadata.get("ensemble_dimensions", metadata.get("dimensions", 0)) or 0)
+        if vectors:
+            dimensions = len(vectors[0])
+        capacity = max(1024, 2 * len(ids))
+        matrix = np.zeros((capacity, dimensions), dtype=np.float32)
+        if ids:
+            matrix[:len(ids)] = np.asarray(vectors, dtype=np.float32)
+        return {
+            "ids": ids, "documents": documents, "metadatas": metadatas,
+            "buf": matrix, "rows": len(ids),
+            "index": {record_id: row for row, record_id in enumerate(ids)},
+        }
+
+    def _apply_vector_upsert(
+        self, name: str, items: list[dict[str, Any]],
+        generation_id: str | None = None,
+    ) -> None:
+        key = (current_partition_id(), name, generation_id)
+        with self._lock:
+            entry = self._vector_cache.get(key)
+            if entry is None:
+                return
+            for item in items:
+                record_id = str(item["id"])
+                row = entry["index"].get(record_id)
+                if row is None:
+                    if entry["rows"] == entry["buf"].shape[0]:
+                        grown = np.zeros(
+                            (2 * entry["buf"].shape[0], entry["buf"].shape[1]),
+                            dtype=np.float32,
+                        )
+                        grown[:entry["rows"]] = entry["buf"][:entry["rows"]]
+                        entry["buf"] = grown
+                    row = entry["rows"]
+                    entry["rows"] += 1
+                    entry["index"][record_id] = row
+                    entry["ids"].append(record_id)
+                    entry["documents"].append(str(item["document"]))
+                    entry["metadatas"].append(dict(item["metadata"]))
+                else:
+                    entry["documents"][row] = str(item["document"])
+                    entry["metadatas"][row] = dict(item["metadata"])
+                entry["buf"][row] = np.asarray(item["embedding"], dtype=np.float32)
+
+    def _update_cached_metadata(
+        self, name: str, items: list[dict[str, Any]],
+        generation_id: str | None = None,
+    ) -> None:
+        key = (current_partition_id(), name, generation_id)
+        with self._lock:
+            entry = self._vector_cache.get(key)
+            if entry is None:
+                return
+            for item in items:
+                row = entry["index"].get(str(item["id"]))
+                if row is not None:
+                    entry["metadatas"][row] = dict(item["metadata"])
+
+    def _exact_query(
+        self, name: str, embedding: list[float], top_k: int,
+        generation_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        collection = self._get_collection(
+            name, generation_id=generation_id, create=False,
+        )
+        key = (current_partition_id(), name, generation_id)
+        with self._lock:
+            entry = self._vector_cache.get(key)
+            if entry is None:
+                entry = self._load_vector_cache(collection)
+                self._vector_cache[key] = entry
+            rows = entry["rows"]
+            if rows == 0:
+                return []
+            query = np.asarray(embedding, dtype=np.float32)
+            if query.shape != (entry["buf"].shape[1],) or not np.isfinite(query).all():
+                raise ValueError("query embedding dimensions or values are invalid")
+            scores = entry["buf"][:rows] @ query
+            eligible = [
+                index for index in range(rows)
+                if not entry["metadatas"][index].get("_tombstoned")
+            ]
+            order = sorted(
+                eligible,
+                key=lambda index: (-float(scores[index]), entry["ids"][index]),
+            )[:top_k]
+            return [{
+                "id": entry["ids"][index],
+                "document": entry["documents"][index],
+                "score": float(scores[index]),
+                "metadata": dict(entry["metadatas"][index]),
+            } for index in order]
 
     @staticmethod
     def _generation_name(generation_id: str, name: str) -> str:
@@ -261,6 +388,7 @@ class ChromaVectorStore:
             return len(items)
         result = await asyncio.to_thread(run)
         self._invalidate_record_snapshot(name)
+        self._apply_vector_upsert(name, items)
         return result
 
     async def update_metadata(self, name: str, items: list[dict[str, Any]]) -> int:
@@ -360,33 +488,10 @@ class ChromaVectorStore:
     async def query(self, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]:
         if top_k < 1:
             return []
-        def run():
-            collection = self._get_collection(name, create=False)
-            count = collection.count()
-            requested = min(count, max(top_k, 32))
-            rows = []
-            while requested:
-                result = collection.query(
-                    query_embeddings=[[float(value) for value in embedding]],
-                    n_results=requested,
-                    include=["documents", "metadatas", "distances"],
-                )
-                ids = (result.get("ids") or [[]])[0]
-                docs = (result.get("documents") or [[]])[0]
-                metas = (result.get("metadatas") or [[]])[0]
-                distances = (result.get("distances") or [[]])[0]
-                rows = [{
-                    "id": record_id, "document": docs[index],
-                    "score": float(1.0 - distances[index]),
-                    "metadata": self._metadata_from_chroma(metas[index]),
-                } for index, record_id in enumerate(ids)
-                    if not self._metadata_from_chroma(metas[index]).get("_tombstoned")]
-                if len(rows) >= top_k or requested >= count:
-                    break
-                requested = min(count, requested * 2)
-            return sorted(rows, key=lambda item: (-item["score"], item["id"]))[:top_k]
         try:
-            return await asyncio.to_thread(run)
+            return await asyncio.to_thread(
+                self._exact_query, name, embedding, top_k,
+            )
         except Exception as exc:
             if self._is_missing_collection(exc):
                 return []
@@ -417,33 +522,10 @@ class ChromaVectorStore:
     async def query_generation(self, generation_id: str, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]:
         if top_k < 1:
             return []
-        def run():
-            collection = self._get_collection(name, generation_id=generation_id, create=False)
-            count = collection.count()
-            requested = min(count, max(top_k, 32))
-            rows = []
-            while requested:
-                result = collection.query(
-                    query_embeddings=[[float(value) for value in embedding]],
-                    n_results=requested,
-                    include=["documents", "metadatas", "distances"],
-                )
-                ids = (result.get("ids") or [[]])[0]
-                docs = (result.get("documents") or [[]])[0]
-                metas = (result.get("metadatas") or [[]])[0]
-                distances = (result.get("distances") or [[]])[0]
-                rows = [{
-                    "id": record_id, "document": docs[index],
-                    "score": float(1.0 - distances[index]),
-                    "metadata": self._metadata_from_chroma(metas[index]),
-                } for index, record_id in enumerate(ids)
-                    if not self._metadata_from_chroma(metas[index]).get("_tombstoned")]
-                if len(rows) >= top_k or requested >= count:
-                    break
-                requested = min(count, requested * 2)
-            return sorted(rows, key=lambda item: (-item["score"], item["id"]))[:top_k]
         try:
-            return await asyncio.to_thread(run)
+            return await asyncio.to_thread(
+                self._exact_query, name, embedding, top_k, generation_id,
+            )
         except Exception as exc:
             if self._is_missing_collection(exc):
                 return []
