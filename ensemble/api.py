@@ -664,14 +664,13 @@ def create_app(
             await active_transcript_store.initialize()
             await active_reclamation_store.initialize()
             await active_crawl_store.initialize()
-            # Transcript ingestion is request-owned and does not yet have a
-            # renewable lease. Do not mark its running jobs interrupted during
-            # every replica startup; that would disrupt another live instance.
-            # Crawl workers do have renewable leases, so recover expired jobs
-            # independently in every configured partition.
+            # Both transcript and crawl recovery are lease-expiry based. A
+            # replica may recover only operations whose renewable owner lease
+            # has expired; live work in another instance remains untouched.
             for partition_id in _configured_worker_partitions():
                 recovery_scope = set_request_scope(RequestScope(partition_id=partition_id))
                 try:
+                    await active_transcript_store.recover_interrupted()
                     await active_crawl_store.recover_interrupted()
                 finally:
                     reset_request_scope(recovery_scope)
