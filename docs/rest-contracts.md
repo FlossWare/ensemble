@@ -89,6 +89,21 @@ The acknowledgement body requires `source_id`, positive `revision_sequence`, and
 
 ## 8. Index generation-copy primitives
 
+Generation rebuilds are durable operations represented by the Index generation record and its capability checkpoints. The public lifecycle is:
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | /api/v1/index/generations | Create a durable building generation |
+| GET | /api/v1/index/generations | Inspect generation state, checkpoints, missing work, and activation readiness |
+| POST | /api/v1/index/generations/{generation_id}/copy/{capability} | Run one bounded copy page for Index, Documents, Vectors, Knowledge, or Memory |
+| POST | /api/v1/index/generations/{generation_id}/reconcile/{capability} | Run one bounded reconciliation page for a capability |
+| POST | /api/v1/index/generations/{generation_id}/fence | Acquire the write fence after every required copy/reconciliation checkpoint is sealed |
+| POST | /api/v1/index/generations/{generation_id}/activate | Verify and atomically activate the generation |
+| POST | /api/v1/index/generations/{generation_id}/abort | Cancel a building generation with a required reason |
+
+Copy and reconciliation calls commit their cursors/checkpoints before returning. A retry resumes from the last committed cursor; replaying a sealed capability returns its completed checkpoint without copying the page again. An aborted generation remains in the `aborted` state and rejects further copy/reconciliation work. An interrupted cutover fence is recovered on application startup by reopening the building generation's reconciliation checkpoints; activation remains fail-closed until reconciliation is repeated.
+
+The Index generation builder is an orchestrator. Its source-copy pass reads and mutates Index-owned state only through these REST contracts:
 The Index generation builder is an orchestrator. Its source-copy pass reads and mutates Index-owned state only through these REST contracts:
 
 | Method | Path | Purpose |
