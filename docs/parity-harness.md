@@ -8,7 +8,7 @@ The parity harness makes observable POC behavior comparable with Ensemble behavi
 - Both systems are exercised through HTTP contracts. Do not compare private implementation details as a substitute for caller-visible behavior.
 - Every scenario is versioned and names its capability, method, path, request, and comparison policy.
 - Exact JSON equality is the default. Differences may be ignored or assigned numeric tolerances only when the scenario documents why.
-- HTTP status and response body are both compared.
+- HTTP status and response body are both compared; a matching 404 is still a failure because each scenario expects HTTP 200 unless it explicitly overrides `expected_status`.
 - Missing base URLs or unavailable reference services are **NOT_RUN**, never PASS. Transport failures are **ERROR**. A real behavioral mismatch is **FAIL**.
 - Dependency parity is reported independently. A behavioral PASS does not approve a dependency substitution.
 - POC behaviors that do not exist in the POC are not invented as acceptance requirements. Intentional architectural adaptations must be documented.
