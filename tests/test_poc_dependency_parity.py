@@ -13,11 +13,11 @@ def test_poc_service_runtime_libraries_are_declared_in_ensemble():
 
     assert any(item.lower().startswith("chromadb") for item in required)
     assert any(item.lower().startswith("networkx") for item in required)
+    assert any(item.lower().startswith("numpy") for item in required)
 
     def declared(extra: str, package: str) -> bool:
         return any(item.lower().startswith(package.lower()) for item in optional[extra])
 
-    assert declared("local-embeddings", "numpy")
     assert declared("local-embeddings", "tokenizers")
     assert declared("local-embeddings", "onnxruntime")
     assert declared("openvino", "openvino")
