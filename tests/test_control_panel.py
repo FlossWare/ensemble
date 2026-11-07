@@ -81,7 +81,7 @@ def test_control_panel_is_served_by_the_api():
         assert "/api/v1/search/hybrid" in script.text
         assert "renderRetrievalPipeline" in script.text
         assert "RRF contributions" in script.text
-        assert "Independent lexical/vector" in script.text
+        assert "channelName" in script.text
         assert 'details.candidates||[]' in script.text
         assert "/api/v1/embeddings/health" in script.text
         assert "/api/v1/embeddings/model" in script.text
