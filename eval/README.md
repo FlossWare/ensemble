@@ -24,3 +24,19 @@ A production qrels set should record:
 - Separate runs for lexical, vector, hybrid/RRF, and reranked retrieval.
 
 Keep evaluation runs separate from qrels so multiple retrieval systems can be compared against the same judgments.
+
+
+## Memory channel smoke comparison
+
+The same fixture is also exercised through Memory's REST keyword, semantic, and
+hybrid endpoints by `tests/test_memory.py`. The test calculates Recall@k,
+MRR@k, and nDCG@k for each channel using the fixture's explicit graded
+judgments. This verifies that the three paths execute and remain measurable
+against one shared qrels set.
+
+This comparison is deliberately limited to the five-document synthetic smoke
+corpus. Its metrics are regression signals only; they are not representative
+of user Memory workloads and must not be used to select production ranking
+weights or claim retrieval quality. The production acceptance criterion remains
+open until representative corpus snapshots, real workload queries, and
+human-reviewed relevance judgments are available.
