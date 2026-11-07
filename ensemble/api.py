@@ -48,6 +48,7 @@ from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
 from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
 from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
+from .learning_analytics import analyze_outcomes
 from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryReclamationStore
 from .deletion import AuditingDeletionDecorator, DeletionContext, DeletionStrategy, DeferredReclamationStrategy, ReclamationJob
 from .rebuild import IndexGenerationBuilder
@@ -3076,6 +3077,20 @@ def create_app(
     @app.get("/api/v1/learning/report", tags=["learning"])
     async def learning_report():
         return await active_learning_store.report()
+
+    @app.get("/api/v1/learning/analytics", tags=["learning"])
+    async def learning_analytics(days: int = 30, contamination: float = 0.1):
+        """Analyze observed outcomes; anomaly flags are review signals only."""
+        try:
+            outcomes = await active_learning_store.recent_outcomes(days)
+            cache_root = Path(os.getenv("ENSEMBLE_ANALYTICS_CACHE_DIR", ".ensemble/analytics")).expanduser()
+            report = await asyncio.to_thread(
+                analyze_outcomes, outcomes, cache_dir=cache_root,
+                contamination=contamination,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return report
 
     @app.post("/api/v1/learning/reset", tags=["learning"])
     async def learning_reset(payload: dict[str, Any]):
