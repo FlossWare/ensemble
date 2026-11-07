@@ -4381,6 +4381,9 @@ def create_app(
             # All capability composition crosses the versioned REST contracts.
             # Search owns its retrieval algorithm and persistence implementation.
             retrieval_payload = search_request.model_dump(mode="json")
+            # Hybrid owns the final rerank after Graph expansion. Disable the
+            # inner retrieval rerank to avoid scoring the same candidates twice.
+            retrieval_payload["rerank"] = False
             retrieval_payload["limit"] = min(
                 200, max(search_request.limit, search_request.limit * 4),
             )
