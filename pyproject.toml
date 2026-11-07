@@ -17,6 +17,7 @@ dependencies = [
   "alembic>=1.15,<2",
   "pypdf>=5.4,<7",
   "chromadb>=1.0,<2",
+  "networkx>=3.4,<4",
 ]
 
 [project.scripts]
