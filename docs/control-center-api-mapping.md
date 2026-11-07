@@ -56,7 +56,7 @@ A future correlated trace must be emitted by the actual ingestion/retrieval exec
 
 1. Add independent lexical/vector candidate comparison alongside the existing hybrid fusion/reranking explanation and provenance.
 2. Add dedicated Embeddings and Ranking/Reranking workbenches for provider identity, readiness, and before/after candidate inspection.
-3. Add a dedicated Index generation rebuild/copy/reconcile/fence/activate/abort workbench; the lifecycle currently exists at REST level only.
+3. Add bounded Index generation rebuild/copy/reconcile/fence/activate/abort operations to Control Center; the workbench operates one page per capability and requires explicit confirmation for write-fence acquisition, activation, and abort.
 4. Add bounded operational metrics from backend measurements, with units and time windows, plus general durable-operation history where backend contracts support it.
 5. Add safe migration, backup/restore, and source/index recovery diagnostics.
 6. Preserve explicit confirmation for destructive maintenance operations.
