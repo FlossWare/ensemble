@@ -86,3 +86,19 @@ def test_json_pointer_projection_detects_missing_or_different_fields():
         reference, candidate,
         {"include_json_pointers": ["/label", "/confidence"]},
     ) == ["/label: 'history' != 'debug'", "/confidence: missing from candidate"]
+
+
+
+def test_capability_map_references_known_scenarios_and_keeps_unmeasured_explicit():
+    root = Path.cwd()
+    capability_map = json.loads((root / "parity/capability-map.json").read_text())
+    manifest = json.loads((root / "parity/scenarios/core-contracts.json").read_text())
+    scenario_ids = {scenario["id"] for scenario in manifest["scenarios"]}
+    capability_ids = [item["id"] for item in capability_map["capabilities"]]
+    assert len(capability_ids) == len(set(capability_ids))
+    for capability in capability_map["capabilities"]:
+        assert set(capability["scenario_ids"]) <= scenario_ids
+        if not capability["scenario_ids"]:
+            assert capability["measurement"] == "mapped-unmeasured"
+        else:
+            assert capability["measurement"] == "scenario-backed"
