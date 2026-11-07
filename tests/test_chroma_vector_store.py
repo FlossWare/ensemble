@@ -85,3 +85,34 @@ def test_chroma_vector_store_isolates_partitions(tmp_path):
         finally:
             reset_request_scope(token)
     asyncio.run(exercise())
+
+
+def test_chroma_generation_snapshot_pages_stable_ids_and_resumes(tmp_path):
+    async def exercise():
+        store = ChromaVectorStore(tmp_path)
+        await store.initialize()
+        try:
+            items = [
+                {"id": "z-last", "embedding": [1.0, 0.0], "document": "z", "metadata": {"source_id": "s"}},
+                {"id": "a-first", "embedding": [0.0, 1.0], "document": "a", "metadata": {"source_id": "s"}},
+                {"id": "m-middle", "embedding": [0.5, 0.5], "document": "m", "metadata": {"source_id": "s"}},
+            ]
+            await store.upsert("snapshot-vectors", "model-a", 2, items)
+            upper = await store.record_key_upper_bound("snapshot-vectors")
+            assert upper == "z-last"
+            first = await store.list_records_after("snapshot-vectors", None, upper, 2)
+            assert [item["id"] for item in first] == ["a-first", "m-middle"]
+
+            resumed = ChromaVectorStore(tmp_path)
+            second = await resumed.list_records_after("snapshot-vectors", "m-middle", upper, 2)
+            assert [item["id"] for item in second] == ["z-last"]
+
+            await store.upsert("snapshot-vectors", "model-a", 2, [{
+                "id": "zz-after-snapshot", "embedding": [1.0, 0.0],
+                "document": "late", "metadata": {"source_id": "s"},
+            }])
+            third = await resumed.list_records_after("snapshot-vectors", "m-middle", upper, 2)
+            assert [item["id"] for item in third] == ["z-last"]
+        finally:
+            await store.close()
+    asyncio.run(exercise())
