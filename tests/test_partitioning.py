@@ -464,8 +464,23 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
 
         assert alpha.status_code == 200, alpha.text
         assert beta.status_code == 200, beta.text
-        assert alpha.json()["reranked"] is True
-        assert beta.json()["reranked"] is True
+        alpha_body, beta_body = alpha.json(), beta.json()
+        assert alpha_body["reranked"] is True
+        assert beta_body["reranked"] is True
+        for body, own_marker, foreign_marker in (
+            (alpha_body, "alpha confidential", "beta confidential"),
+            (beta_body, "beta confidential", "alpha confidential"),
+        ):
+            assert body["results"]
+            assert all(
+                own_marker in hit["text"] and foreign_marker not in hit["text"]
+                for hit in body["results"]
+            )
+            # Diagnostics must describe only the authorized partition's candidates.
+            assert body["fusion"]["channels"]["lexical"]["candidate_count"] == 1
+            assert body["fusion"]["channels"]["vector"]["candidate_count"] == 1
+            assert body["fusion"]["channels"]["graph"]["candidate_count"] == 0
+            assert len(body["fusion"]["results"]) == 1
         # Hybrid retrieval invokes the reranker once per candidate channel.
         # Every invocation must remain within the authenticated partition.
         assert len(reranker.calls) >= 2
