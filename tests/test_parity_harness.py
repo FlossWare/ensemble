@@ -119,3 +119,17 @@ def test_latest_poc_memory_and_knowledge_changes_are_in_parity_inventory():
     assert prompt["measurement"] == "mapped-unmeasured"
     assert "chunk_index" in hybrid["notes"]
     assert "content_sha256" in hybrid["notes"]
+
+
+
+def test_capability_map_contains_source_and_candidate_routes_for_every_area():
+    capability_map = json.loads((Path.cwd() / "parity/capability-map.json").read_text())
+    for capability in capability_map["capabilities"]:
+        assert capability["poc"].get("routes") or capability["poc"].get("operations")
+        assert capability["ensemble"].get("routes")
+        assert capability["poc"].get("transport")
+        assert capability["ensemble"].get("transport")
+        if capability["scenario_ids"]:
+            assert capability["measurement"] == "scenario-backed"
+        else:
+            assert capability["measurement"] == "mapped-unmeasured"
