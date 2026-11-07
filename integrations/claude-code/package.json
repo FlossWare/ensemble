@@ -1,0 +1,18 @@
+{
+  "name": "@flossware/ensemble-claude-code-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional Claude Code host-side adapter dependencies retained from the POC; not a separate Ensemble service.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.0.1",
+    "better-sqlite3": "^12.10.0",
+    "chromadb": "^1.10.5",
+    "neo4j-driver": "^6.2.0",
+    "uuid": "^14.0.1",
+    "js-yaml": "^4.1.0"
+  }
+}
