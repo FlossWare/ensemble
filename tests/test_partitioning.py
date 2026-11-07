@@ -505,6 +505,7 @@ def test_hybrid_knowledge_retrieval_is_partition_isolated(tmp_path, monkeypatch)
     monkeypatch.setenv("ENSEMBLE_PARTITION_TOKENS", json.dumps(token_map))
     monkeypatch.setenv("ENSEMBLE_AUTH_REQUIRED", "1")
     base = f"sqlite+aiosqlite:///{tmp_path / 'knowledge-partitions.db'}"
+    asyncio.run(asyncio.to_thread(_ensure_partition_schema, base, "default"))
     app = create_app(
         database_url=base, embedding_provider=Embeddings(),
         run_reclamation_worker=False,
