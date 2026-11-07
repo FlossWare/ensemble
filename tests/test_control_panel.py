@@ -18,6 +18,8 @@ def test_control_panel_is_served_by_the_api():
         assert response.status_code == 200
         assert "Ensemble Control Center" in response.text
         assert "/api/v1/collaboration/participants" in client.get("/openapi.json").text
+        session_parameters = client.get("/openapi.json").json()["paths"]["/api/v1/ingest/sessions"]["post"].get("parameters", [])
+        assert "heartbeat" not in [parameter["name"] for parameter in session_parameters]
         assert "/api/v1/index/restorations" in client.get("/openapi.json").text
         assert 'class="app-header"' in response.text
         assert 'class="app-shell"' in response.text
