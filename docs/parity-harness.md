@@ -41,6 +41,10 @@ Use `--strict` when a run must fail if any scenario could not execute. The repor
 - `numeric_tolerances` maps JSON pointers to absolute numeric tolerances. It must not be used to paper over ranking, confidence, or model drift without an explicit quality rationale.
 - Add retrieval-specific metrics (Recall@k, MRR, nDCG, rank agreement) as separate evaluators over a shared judged corpus. Do not reduce retrieval quality to raw JSON equality.
 
+## Capability inventory
+
+`parity/capability-map.json` records source-audited POC and Ensemble route mappings for Chunking, Tokenization, Ranking, Extraction, Intent, Hybrid Search, Knowledge, Graph, and Memory. A route mapping is not a parity result: capabilities without executed scenarios remain `mapped-unmeasured`. Memory is explicitly recorded as a private Unix-socket POC service, so it needs a transport adapter before it can participate in the HTTP runner.
+
 ## Current limitations
 
 This increment provides the manifest-driven HTTP runner, explicit contract projections, deterministic comparison policy, machine-readable report, unit tests, and source-verified scenarios for five capabilities. It does not yet include the full POC-to-Ensemble route inventory, a shared judged retrieval corpus, live model/runtime comparisons, or a Control Center view. Those require source-audited scenario contracts and reference/candidate environment wiring. A capability with no executed scenario remains unmeasured, not complete.
