@@ -67,3 +67,22 @@ def test_matching_error_statuses_do_not_pass():
 def test_empty_manifest_is_rejected():
     with pytest.raises(ValueError, match="at least one scenario"):
         run_manifest({"version": 1, "scenarios": []}, environ={})
+
+
+
+def test_json_pointer_projection_compares_only_declared_contract_fields():
+    reference = {"label": "history", "confidence": 0.75, "evidence": [{"rule": "history"}]}
+    candidate = {"label": "history", "confidence": 0.75, "evidence": [{"intent": "history"}], "extra": True}
+    assert compare_json(
+        reference, candidate,
+        {"include_json_pointers": ["/label", "/confidence"]},
+    ) == []
+
+
+def test_json_pointer_projection_detects_missing_or_different_fields():
+    reference = {"label": "history", "confidence": 0.75}
+    candidate = {"label": "debug"}
+    assert compare_json(
+        reference, candidate,
+        {"include_json_pointers": ["/label", "/confidence"]},
+    ) == ["/label: 'history' != 'debug'", "/confidence: missing from candidate"]
