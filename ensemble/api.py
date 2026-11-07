@@ -4735,7 +4735,10 @@ def create_app(
                 "messages": parsed["messages"],
             }
             try:
-                result = await ingest_session(session_payload, request)
+                result = await ingest_session(
+                    session_payload, request,
+                    heartbeat=lambda: active_transcript_store.heartbeat_job(job_id, owner_id),
+                )
             except Exception as exc:
                 await active_transcript_store.fail_job(job_id, f"{type(exc).__name__}: {exc}", owner_id)
                 raise
@@ -4796,7 +4799,7 @@ def create_app(
         return {"ok": True, "checkpoint": checkpoint}
 
     @app.post("/api/v1/ingest/sessions", tags=["ingestion"])
-    async def ingest_session(payload: dict[str, Any], request: Request):
+    async def ingest_session(payload: dict[str, Any], request: Request, heartbeat=None):
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > 8 * 1_048_576:
             raise HTTPException(status_code=413, detail="request body exceeds 8 MiB")
@@ -4855,6 +4858,8 @@ def create_app(
             inserted = duplicates = 0
             degraded = []
             for message in messages:
+                if heartbeat is not None and not await heartbeat():
+                    raise RuntimeError("transcript worker lease was lost")
                 kind = message.get("kind", "text")
                 content_revision = hashlib.sha256(message["text"].encode("utf-8")).hexdigest()
                 event_id = hashlib.sha256(
