@@ -40,7 +40,7 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 <div class="app-shell">
 <aside class="sidebar" aria-label="Control Center navigation">
 <div class="nav-label">Workspace</div><nav>
-<a href="#platform-status">Overview</a><a href="#retrieval-explorer">Retrieval</a><a href="#memory-inspector">Intelligence</a><a href="#graph-workbench">Knowledge Graph</a><a href="#generation-workbench">Index Generations</a><a href="#pipeline-inspector">Pipelines</a><a href="#collaboration-panel">Collaboration</a><a href="#ga-panel">Experiments</a>
+<a href="#platform-status">Overview</a><a href="#retrieval-explorer">Retrieval</a><a href="#model-workbench">Embeddings &amp; Ranking</a><a href="#memory-inspector">Intelligence</a><a href="#graph-workbench">Knowledge Graph</a><a href="#generation-workbench">Index Generations</a><a href="#pipeline-inspector">Pipelines</a><a href="#collaboration-panel">Collaboration</a><a href="#ga-panel">Experiments</a>
 </nav><div class="nav-label">Administration</div><nav>
 <a href="#index-inspector">Index &amp; Vectors</a><a href="#runtime-config">Runtime</a><a href="#partition-session">Partition session</a>
 </nav></aside><main class="main-content">
@@ -62,6 +62,32 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 <p>Run the actual Hybrid endpoint and inspect result provenance, scores and degraded dependencies.</p>
 <form id="retrieval-form"><input id="retrieval-query" type="text" required maxlength="2000" placeholder="Search documents and knowledge"><input id="retrieval-limit" type="number" min="1" max="100" value="10"><label><input id="retrieval-rerank" type="checkbox"> Rerank candidates</label><button type="submit">Search</button></form>
 <div id="retrieval-results">No query run.</div>
+</section>
+<section id="model-workbench">
+<h2>Embeddings and Ranking Diagnostics</h2>
+<p class="muted">Inspect configured provider identity and readiness, run a bounded embedding probe, compare independent RRF inputs, and inspect cross-encoder scores. These probes do not persist data or change model configuration.</p>
+<div class="toolbar"><button id="model-status-refresh" type="button">Refresh provider status</button></div>
+<pre id="model-provider-status">Provider status not loaded.</pre>
+<form id="embedding-probe-form">
+<label>Embedding query <input id="embedding-probe-text" type="text" required maxlength="2000" placeholder="Text to embed"></label>
+<button type="submit">Run query embedding probe</button>
+</form>
+<pre id="embedding-probe-result">No embedding probe run.</pre>
+<h3>Independent RRF comparison</h3>
+<p class="muted">Provide ranked candidate lists as JSON. Each channel is a ranked array of objects containing the same identity key. The operation is deterministic and does not alter stored ranking policy.</p>
+<form id="ranking-probe-form">
+<label>Ranked channels JSON <textarea id="ranking-probe-channels" rows="6" style="width:100%">{"lexical":[{"chunk_id":"candidate-a","rank":1},{"chunk_id":"candidate-b","rank":2}],"vector":[{"chunk_id":"candidate-b","rank":1},{"chunk_id":"candidate-a","rank":2}]}</textarea></label>
+<label>RRF k <input id="ranking-probe-k" type="number" min="1" max="10000" value="60"></label>
+<button type="submit">Fuse candidate lists</button>
+</form>
+<pre id="ranking-probe-result">No RRF probe run.</pre>
+<h3>Cross-encoder before/after inspection</h3>
+<form id="reranking-probe-form">
+<label>Query <input id="reranking-probe-query" type="text" required maxlength="2000" placeholder="Ranking query"></label>
+<label>Candidate documents, one per line <textarea id="reranking-probe-documents" rows="6" style="width:100%" placeholder="Candidate document one&#10;Candidate document two"></textarea></label>
+<button type="submit">Score and compare candidates</button>
+</form>
+<pre id="reranking-probe-result">No reranking probe run.</pre>
 </section>
 <section id="session-ingest">
 <h2>Transcript Session Ingestion</h2>
