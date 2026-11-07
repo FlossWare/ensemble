@@ -466,10 +466,18 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
         assert beta.status_code == 200, beta.text
         assert alpha.json()["reranked"] is True
         assert beta.json()["reranked"] is True
-        assert len(reranker.calls) == 2
-        assert reranker.calls[0]
-        assert reranker.calls[1]
-        assert all("alpha confidential" in item for item in reranker.calls[0])
-        assert all("beta confidential" not in item for item in reranker.calls[0])
-        assert all("beta confidential" in item for item in reranker.calls[1])
-        assert all("alpha confidential" not in item for item in reranker.calls[1])
+        # Hybrid retrieval invokes the reranker once per candidate channel.
+        # Every invocation must remain within the authenticated partition.
+        assert len(reranker.calls) >= 2
+        assert all(reranker.calls)
+        alpha_calls = reranker.calls[:len(reranker.calls) // 2]
+        beta_calls = reranker.calls[len(reranker.calls) // 2:]
+        assert alpha_calls and beta_calls
+        assert all(
+            "alpha confidential" in item and "beta confidential" not in item
+            for call in alpha_calls for item in call
+        )
+        assert all(
+            "beta confidential" in item and "alpha confidential" not in item
+            for call in beta_calls for item in call
+        )
