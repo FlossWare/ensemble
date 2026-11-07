@@ -232,22 +232,20 @@ class SqliteTranscriptCheckpointStore:
         now = datetime.now(timezone.utc)
         lease_until = now + timedelta(seconds=300)
         async with self.engine.begin() as connection:
-            row = (await connection.execute(select(jobs).where(jobs.c.job_id == job_id))).mappings().first()
+            inserted = await connection.execute(sqlite_insert(jobs).values(
+                job_id=job_id, source_id=source_id, revision_id=revision_id,
+                project=project, file=file, start_offset=start_offset, end_offset=None,
+                payload_sha256=payload_sha256, status="running", attempts=1,
+                last_error=None, result=None, created_at=now, updated_at=now,
+                completed_at=None, lease_owner=owner_id, lease_expires_at=lease_until,
+            ).on_conflict_do_nothing(index_elements=[jobs.c.job_id]))
+            if inserted.rowcount == 1:
+                return {"status": "running", "attempts": 1, "created": True}
+            row = (await connection.execute(
+                select(jobs).where(jobs.c.job_id == job_id)
+            )).mappings().first()
             if row is None:
-                inserted = await connection.execute(sqlite_insert(jobs).values(
-                    job_id=job_id, source_id=source_id, revision_id=revision_id,
-                    project=project, file=file, start_offset=start_offset, end_offset=None,
-                    payload_sha256=payload_sha256, status="running", attempts=1,
-                    last_error=None, result=None, created_at=now, updated_at=now,
-                    completed_at=None, lease_owner=owner_id, lease_expires_at=lease_until,
-                ).on_conflict_do_nothing(index_elements=[jobs.c.job_id]))
-                if inserted.rowcount == 1:
-                    return {"status": "running", "attempts": 1, "created": True}
-                row = (await connection.execute(
-                    select(jobs).where(jobs.c.job_id == job_id)
-                )).mappings().first()
-                if row is None:
-                    raise RuntimeError("transcript job claim conflicted without a visible row")
+                raise RuntimeError("transcript job claim conflicted without a visible row")
             if (row["source_id"] != source_id or row["revision_id"] != revision_id
                 or row["start_offset"] != start_offset or row["payload_sha256"] != payload_sha256):
                 raise ValueError("transcript job identity conflicts with an existing operation")
