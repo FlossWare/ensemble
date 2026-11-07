@@ -14,5 +14,8 @@
     "neo4j-driver": "^6.2.0",
     "uuid": "^14.0.1",
     "js-yaml": "^4.1.0"
+  },
+  "scripts": {
+    "test": "node --test dependency-adapters.test.mjs"
   }
 }
