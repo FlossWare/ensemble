@@ -2663,7 +2663,7 @@ def create_app(
             )
 
         status = embeddings.status()
-        requested_model = payload.get("model") or status.get("model")
+        requested_model = payload.get("model") if "model" in payload else status.get("model")
         if requested_model is not None and (
             not isinstance(requested_model, str) or not requested_model or len(requested_model) > 512
         ):
