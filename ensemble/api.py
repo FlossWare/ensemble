@@ -4735,7 +4735,7 @@ def create_app(
                 "messages": parsed["messages"],
             }
             try:
-                result = await ingest_session(
+                result = await _ingest_session(
                     session_payload, request,
                     heartbeat=lambda: active_transcript_store.heartbeat_job(job_id, owner_id),
                 )
@@ -4800,8 +4800,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="transcript checkpoint not found")
         return {"ok": True, "checkpoint": checkpoint}
 
-    @app.post("/api/v1/ingest/sessions", tags=["ingestion"])
-    async def ingest_session(payload: dict[str, Any], request: Request, heartbeat=None):
+    async def _ingest_session(payload: dict[str, Any], request: Request, heartbeat=None):
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > 8 * 1_048_576:
             raise HTTPException(status_code=413, detail="request body exceeds 8 MiB")
@@ -4949,6 +4948,10 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=503, detail="session ingestion dependency unavailable") from exc
+
+    @app.post("/api/v1/ingest/sessions", tags=["ingestion"])
+    async def ingest_session(payload: dict[str, Any], request: Request):
+        return await _ingest_session(payload, request)
 
     @app.get("/api/v1/execution-traces", tags=["operations"])
     async def list_execution_traces(limit: int = 50):
