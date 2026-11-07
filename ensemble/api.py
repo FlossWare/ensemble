@@ -4678,6 +4678,8 @@ def create_app(
                 status_code=409,
                 detail={"message": "transcript slice is already being processed", "job_id": job_id},
             )
+        if not await active_transcript_store.heartbeat_job(job_id, owner_id):
+            raise HTTPException(status_code=409, detail="transcript worker lease was lost")
         checkpoint = await active_transcript_store.get(source_id, revision_id)
         if checkpoint is not None and offset != checkpoint["byte_offset"]:
             if (
@@ -4691,7 +4693,7 @@ def create_app(
                 replay_result["inserted"] = 0
                 replay_result["already_present"] = replayed_count
                 job = await active_transcript_store.complete_job(
-                    job_id, checkpoint["byte_offset"], replay_result,
+                    job_id, checkpoint["byte_offset"], replay_result, owner_id,
                 )
                 return {
                     **replay_result, "replayed": True, "checkpoint": checkpoint,
@@ -4707,7 +4709,7 @@ def create_app(
         try:
             parsed = parse_jsonl(raw_content, session_id=session_id, offset=offset)
         except OverflowError as exc:
-            await active_transcript_store.fail_job(job_id, str(exc))
+            await active_transcript_store.fail_job(job_id, str(exc), owner_id)
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except ValueError as exc:
             await active_transcript_store.fail_job(job_id, str(exc))
@@ -4735,7 +4737,7 @@ def create_app(
             try:
                 result = await ingest_session(session_payload, request)
             except Exception as exc:
-                await active_transcript_store.fail_job(job_id, f"{type(exc).__name__}: {exc}")
+                await active_transcript_store.fail_job(job_id, f"{type(exc).__name__}: {exc}", owner_id)
                 raise
             result.update({
                 "bytes_consumed": parsed["bytes_consumed"],
@@ -4756,7 +4758,7 @@ def create_app(
             raise HTTPException(status_code=503, detail="transcript checkpoint persistence unavailable") from exc
         if committed["replayed"]:
             result = committed["result"]
-        job = await active_transcript_store.complete_job(job_id, parsed["end_offset"], result)
+        job = await active_transcript_store.complete_job(job_id, parsed["end_offset"], result, owner_id)
         return {
             **result, "replayed": committed["replayed"], "source_id": source_id,
             "revision_id": revision_id, "checkpoint": committed["checkpoint"],
