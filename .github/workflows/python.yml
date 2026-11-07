@@ -30,6 +30,16 @@ jobs:
           done
       - name: Validate Control Center JavaScript
         run: node --check ensemble/control.js
+      - name: Set up Node.js host adapter
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Node host adapter dependencies
+        run: npm install --no-package-lock
+        working-directory: integrations/claude-code
+      - name: Test retained Node host adapters
+        run: npm test
+        working-directory: integrations/claude-code
       - name: Audit POC dependency retention
         run: python -m parity.dependency_audit
       - name: Smoke-test judged retrieval evaluator
