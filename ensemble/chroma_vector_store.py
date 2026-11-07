@@ -18,12 +18,9 @@ from .partitioning import current_partition_id
 
 
 class ChromaVectorStore:
-    """
-    backend_name = "chromadb"ChromaDB persistent vector backend with partition-isolated storage.
+    """ChromaDB persistent vector backend with partition-isolated storage."""
 
-    SQLite remains the authority for Index, source revisions, and generation
-    coordination. Vector records and similarity search live in ChromaDB.
-    """
+    backend_name = "chromadb"
 
     def __init__(
         self, persistence_root: str | Path | None = None,
@@ -295,8 +292,13 @@ class ChromaVectorStore:
             or stored.get("dimensions") != effective_dimensions
             or stored.get("ensemble_name") != name
         ):
+            # ChromaDB treats hnsw:space as immutable after collection creation.
+            # Keep the original metric untouched while enriching application metadata.
+            collection_metadata = {
+                key: value for key, value in stored.items() if key != "hnsw:space"
+            }
             collection.modify(metadata={
-                **stored, "hnsw:space": "cosine", "ensemble_name": name,
+                **collection_metadata, "ensemble_name": name,
                 "model": effective_model, "dimensions": int(effective_dimensions),
                 "ensemble_model": effective_model, "ensemble_dimensions": int(effective_dimensions),
                 **({"ensemble_generation_id": generation_id} if generation_id else {}),
