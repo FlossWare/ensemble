@@ -293,9 +293,29 @@
     {
       "id": "memory",
       "poc": {
-        "transport": "unix-socket",
+        "transport": "mixed",
         "socket": "private memory daemon socket",
-        "operations": [
+        "http_base_url_env": "POC_MEMORY_URL",
+        "http_routes": [
+          {
+            "method": "GET",
+            "path": "/history",
+            "query": [
+              "limit",
+              "cursor",
+              "event_type",
+              "source",
+              "correlation_id",
+              "since",
+              "until"
+            ]
+          },
+          {
+            "method": "GET",
+            "path": "/history/{event_id}"
+          }
+        ],
+        "socket_operations": [
           "/memory/read",
           "/memory/write",
           "/memory/append",
@@ -344,12 +364,47 @@
           {
             "method": "POST",
             "path": "/api/v1/memory/search/hybrid"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/memory/memories/session-events/entries",
+            "query": [
+              "limit",
+              "offset"
+            ]
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/events",
+            "purpose": "idempotent prompt capture"
           }
         ]
       },
       "scenario_ids": [],
       "measurement": "mapped-unmeasured",
-      "notes": "Different transports and event models require a reference adapter. Do not assume REST route similarity proves append-only ledger or semantic recall parity."
+      "notes": "POC now exposes read-only session history over HTTP while retaining its private socket for other memory operations. Ensemble exposes append-only named-memory entries and prompt capture, but not the same filtered history contract; compare event identity/content first and track filtering, timestamp validation, malformed-ledger behavior, and pagination semantics as separate gaps."
+    },
+    {
+      "id": "prompt-capture",
+      "poc": {
+        "transport": "hook-and-jsonl",
+        "capture": "services/hooks/session-end-memory-capture.js",
+        "ledger": "~/.FlossWare/ledger/prompts/prompts.jsonl",
+        "indexer": "services/embeddings/build_knowledge_chunks.py"
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/events"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "POC indexes captured prompts as a knowledge source, with credential-looking prompts filtered before indexing. Ensemble exposes idempotent prompt capture but reports vector_indexed=false and lexical_indexed=false; this is not yet equivalent to searchable prompt knowledge."
     }
   ]
 }
