@@ -520,10 +520,9 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
             (beta_body, "beta confidential", "alpha confidential"),
         ):
             assert body["results"]
-            assert all(
-                own_marker in hit["text"] and foreign_marker not in hit["text"]
-                for hit in body["results"]
-            )
+            assert all(foreign_marker not in hit["text"] for hit in body["results"])
+            assert any(own_marker in hit["text"] for hit in body["results"])
+            assert any("graph expansion only" in hit["text"] for hit in body["results"])
             # Diagnostics must describe only the authorized partition's candidates.
             assert body["fusion"]["channels"]["lexical"]["candidate_count"] == 1
             lexical_candidates = body["fusion"]["channels"]["lexical"]["candidates"]
@@ -546,14 +545,12 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
         alpha_calls = reranker.calls[:1]
         beta_calls = reranker.calls[1:]
         assert alpha_calls and beta_calls
-        assert all(
-            "alpha confidential" in item and "beta confidential" not in item
-            for call in alpha_calls for item in call
-        )
-        assert all(
-            "beta confidential" in item and "alpha confidential" not in item
-            for call in beta_calls for item in call
-        )
+        assert all("beta confidential" not in item and "beta graph expansion only" not in item
+                   for call in alpha_calls for item in call)
+        assert all("alpha confidential" not in item and "alpha graph expansion only" not in item
+                   for call in beta_calls for item in call)
+        assert any("alpha graph expansion only" in item for call in alpha_calls for item in call)
+        assert any("beta graph expansion only" in item for call in beta_calls for item in call)
 
 
 def test_hybrid_knowledge_retrieval_is_partition_isolated(tmp_path, monkeypatch):
