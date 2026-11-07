@@ -16,6 +16,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+_MISSING = object()
+
+
 def compare_json(reference: Any, candidate: Any, policy: dict[str, Any] | None = None) -> list[str]:
     """Return deterministic JSON-pointer differences under an explicit policy."""
     policy = policy or {}
@@ -53,7 +56,34 @@ def compare_json(reference: Any, candidate: Any, policy: dict[str, Any] | None =
         elif left != right:
             differences.append(f"{pointer or '/'}: {left!r} != {right!r}")
 
-    walk(reference, candidate, "")
+    included = policy.get("include_json_pointers")
+    if included is not None:
+        def resolve_pointer(value: Any, pointer: str) -> Any:
+            current = value
+            if pointer == "":
+                return current
+            if not pointer.startswith("/"):
+                raise ValueError(f"invalid JSON pointer: {pointer!r}")
+            for raw_part in pointer[1:].split("/"):
+                part = raw_part.replace("~1", "/").replace("~0", "~")
+                if isinstance(current, dict) and part in current:
+                    current = current[part]
+                elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+                    current = current[int(part)]
+                else:
+                    return _MISSING
+            return current
+
+        for pointer in included:
+            left, right = resolve_pointer(reference, pointer), resolve_pointer(candidate, pointer)
+            if left is _MISSING:
+                differences.append(f"{pointer}: missing from reference")
+            elif right is _MISSING:
+                differences.append(f"{pointer}: missing from candidate")
+            else:
+                walk(left, right, pointer)
+    else:
+        walk(reference, candidate, "")
     return differences
 
 
