@@ -8,10 +8,11 @@
 | Workbench | Current behavior | REST operations | Known limitation |
 |---|---|---|---|
 | Platform status | Overall readiness, capability health/readiness, and a current snapshot of graph nodes/edges, vector collections, index sources, and recent persisted execution traces | `GET /ready`, capability `/health` and `/ready`, `GET /api/v1/graph/stats`, `GET /api/v1/index/manifest`, `GET /api/v1/vector/collections`, `GET /api/v1/execution-traces` | Snapshot only; no historical metrics or general durable-operation dashboard |
-| Retrieval Explorer | Hybrid search, per-channel candidate counts/status, RRF contributions, final result provenance, intent/entity diagnostics, optional reranking | `POST /api/v1/search/hybrid` | Does not yet render each channel's complete ranked candidate list independently |
+| Retrieval Explorer | Hybrid search, independent bounded lexical/vector ranked candidate lists, per-channel candidate counts/status, RRF contributions, final result provenance, intent/entity diagnostics, optional reranking | `POST /api/v1/search/hybrid` | Candidate lists are bounded to at most 100 per channel and contain provenance/score metadata, not source text |
 | Context Assembly | Compose Memory and Hybrid retrieval context with a bounded extractive budget | `POST /api/v1/context/assemble` | Character-based token estimate; no model-backed summarizer |
+| Embeddings and Ranking Diagnostics | Provider identity/readiness, bounded query-embedding probe, independent RRF candidate-list probe, and cross-encoder score/before-after inspection | `GET /api/v1/embeddings/health`, `GET /api/v1/embeddings/model`, `POST /api/v1/embeddings/embed`, `GET /api/v1/ranking/health`, `GET /api/v1/ranking/ready`, `POST /api/v1/ranking/fuse`, `GET /api/v1/reranking/health`, `POST /api/v1/reranking/rerank` | Probes are request-scoped and non-persistent; provider health is distinct from Ranking's deterministic RRF readiness |
 | Transcript ingestion | Submit structured session payload | `POST /api/v1/ingest/sessions` | Synchronous ingestion; no durable job/checkpoint UI |
-| Index and Vector | Index manifest/source lookup/confirmed tombstone; vector collection inventory and embedding-backed similarity query with model/dimension checks | `GET /api/v1/index/manifest`, `GET /api/v1/vector/collections`, `POST /api/v1/embeddings/embed`, `POST /api/v1/vector/collections/{name}/query`, `GET /api/v1/index/sources/{source_id}`, `POST /api/v1/index/tombstones` | Exact vector scan, not ANN; generation rebuild/copy/reconcile/fence/activate/abort has REST coverage but no dedicated Control Center workflow |
+| Index and Vector | Index manifest/source lookup/confirmed tombstone; vector collection inventory and embedding-backed similarity query with model/dimension checks; bounded Index generation copy/reconcile/fence/activate/abort workbench | `GET /api/v1/index/manifest`, `GET /api/v1/vector/collections`, `POST /api/v1/embeddings/embed`, `POST /api/v1/vector/collections/{name}/query`, `GET /api/v1/index/sources/{source_id}`, `POST /api/v1/index/tombstones`, `/api/v1/index/generations/*` | Exact vector scan, not ANN; generation operations run one bounded page at a time and state changes require confirmation |
 | Memory and Knowledge | Memory names, Knowledge status, Memory search, Knowledge record lookup | `/api/v1/memory/*`, `/api/v1/knowledge/records/{source_id}` | No complete event/session lifecycle workbench or scoped filesystem scanner |
 | URI ingestion | Preview followed by explicit ingestion | `POST /api/v1/ingest/urls/preview`, `POST /api/v1/ingest/urls` | Single-page fetch; no crawler or scheduled refresh |
 | Graph | Aggregate node/edge counts by type and relationship, property-filtered node query, node lookup, bounded directional traversal | `GET /api/v1/graph/stats`, `POST /api/v1/graph/query`, `GET /api/v1/graph/nodes/{node_id}`, `POST /api/v1/graph/traverse` | Read-only inspection; no graph-wide visualization or activity history |
@@ -54,12 +55,9 @@ A future correlated trace must be emitted by the actual ingestion/retrieval exec
 
 ## 4. Remaining Control Center work
 
-1. Add independent lexical/vector candidate comparison alongside the existing hybrid fusion/reranking explanation and provenance.
-2. Add dedicated Embeddings and Ranking/Reranking workbenches for provider identity, readiness, and before/after candidate inspection.
-3. Add bounded Index generation rebuild/copy/reconcile/fence/activate/abort operations to Control Center; the workbench operates one page per capability and requires explicit confirmation for write-fence acquisition, activation, and abort.
-4. Add bounded operational metrics from backend measurements, with units and time windows, plus general durable-operation history where backend contracts support it.
-5. Add safe migration, backup/restore, and source/index recovery diagnostics.
-6. Preserve explicit confirmation for destructive maintenance operations.
+1. Add bounded operational metrics from backend measurements, with units and time windows, plus general durable-operation history where backend contracts support it.
+2. Add safe migration, backup/restore, and source/index recovery diagnostics.
+3. Preserve explicit confirmation for destructive maintenance operations.
 
 ## 5. Implementation caveats
 
