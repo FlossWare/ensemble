@@ -663,6 +663,26 @@ function renderRetrievalPipeline(result){
   line.append(label,track,count);chart.append(line);
  }
  retrievalResults.append(chart);
+ for(const channelName of ["lexical","vector"]){
+  const details=fusion.channels?.[channelName]||{};
+  const title=document.createElement("h3");title.textContent=channelName.charAt(0).toUpperCase()+channelName.slice(1)+" candidates";retrievalResults.append(title);
+  const table=document.createElement("table");
+  const head=document.createElement("tr");
+  for(const label of ["Rank","Source","Revision","Chunk","Title","Channel score"]){const cell=document.createElement("th");cell.textContent=label;head.append(cell);}
+  table.append(head);
+  for(const item of details.candidates||[]){
+   const row=document.createElement("tr");
+   for(const value of [item.rank,item.source_id,item.revision,item.chunk_id,item.title,item.score]){
+    const cell=document.createElement("td");cell.textContent=String(value??"");row.append(cell);
+   }
+   table.append(row);
+  }
+  if(!(details.candidates||[]).length){const row=document.createElement("tr");const cell=document.createElement("td");cell.colSpan=6;cell.textContent="No candidates returned for this channel.";row.append(cell);table.append(row);}
+  retrievalResults.append(table);
+  const note=document.createElement("p");note.className="muted";
+  note.textContent="Showing "+String((details.candidates||[]).length)+" of "+String(details.candidate_count??0)+" ranked candidates.";
+  retrievalResults.append(note);
+ }
  const fusionTitle=document.createElement("h3");fusionTitle.textContent="RRF contributions";retrievalResults.append(fusionTitle);
  const fusionTable=document.createElement("table");
  const fusionHead=document.createElement("tr");
@@ -716,6 +736,67 @@ retrievalForm.addEventListener("submit",async event=>{
   });
   renderRetrievalPipeline(result);
  }catch(error){retrievalResults.textContent="Search failed: "+error.message;}
+});
+
+// Provider diagnostics are read-only except for bounded in-memory scoring probes.
+const modelProviderStatus=document.getElementById("model-provider-status");
+const embeddingProbeResult=document.getElementById("embedding-probe-result");
+const rankingProbeResult=document.getElementById("ranking-probe-result");
+const rerankingProbeResult=document.getElementById("reranking-probe-result");
+async function refreshModelProviderStatus(){
+ modelProviderStatus.textContent="Checking Embeddings, Ranking, and Reranking providers…";
+ const checks=await Promise.allSettled([
+  controlJson("/api/v1/embeddings/health"),
+  controlJson("/api/v1/embeddings/model"),
+  controlJson("/api/v1/ranking/health"),
+  controlJson("/api/v1/ranking/ready"),
+  controlJson("/api/v1/reranking/health")
+ ]);
+ const names=["Embeddings health","Embedding model","Ranking health","Ranking readiness","Reranking provider"];
+ modelProviderStatus.textContent=JSON.stringify(Object.fromEntries(checks.map((item,index)=>[
+  names[index],item.status==="fulfilled"?item.value:{status:"unavailable",error:item.reason?.message||"request failed"}
+ ])),null,2);
+}
+document.getElementById("model-status-refresh").addEventListener("click",refreshModelProviderStatus);
+refreshModelProviderStatus();
+document.getElementById("embedding-probe-form").addEventListener("submit",async event=>{
+ event.preventDefault();embeddingProbeResult.textContent="Embedding query…";
+ try{
+  const result=await controlJson("/api/v1/embeddings/embed","POST",{
+   texts:[document.getElementById("embedding-probe-text").value.trim()],mode:"query"
+  });
+  const vector=result.embeddings?.[0];
+  embeddingProbeResult.textContent=JSON.stringify({
+   ok:result.ok,model:result.model,dimensions:result.dimensions,
+   vector_length:Array.isArray(vector)?vector.length:0,
+   finite:Array.isArray(vector)&&vector.every(value=>Number.isFinite(value)),
+   sample:Array.isArray(vector)?vector.slice(0,8):[]
+  },null,2);
+ }catch(error){embeddingProbeResult.textContent="Embedding probe failed: "+error.message;}
+});
+document.getElementById("ranking-probe-form").addEventListener("submit",async event=>{
+ event.preventDefault();rankingProbeResult.textContent="Fusing ranked candidates…";
+ try{
+  const channels=JSON.parse(document.getElementById("ranking-probe-channels").value);
+  const result=await controlJson("/api/v1/ranking/fuse","POST",{
+   channels,k:Number(document.getElementById("ranking-probe-k").value),identity_key:"chunk_id"
+  });
+  rankingProbeResult.textContent=JSON.stringify(result,null,2);
+ }catch(error){rankingProbeResult.textContent="RRF comparison failed: "+error.message;}
+});
+document.getElementById("reranking-probe-form").addEventListener("submit",async event=>{
+ event.preventDefault();rerankingProbeResult.textContent="Scoring candidates…";
+ try{
+  const query=document.getElementById("reranking-probe-query").value.trim();
+  const documents=document.getElementById("reranking-probe-documents").value.split("\n").map(value=>value.trim()).filter(Boolean);
+  if(!documents.length)throw new Error("Enter at least one candidate document.");
+  const result=await controlJson("/api/v1/reranking/rerank","POST",{query,documents});
+  const before=documents.map((document,index)=>({original_rank:index+1,document}));
+  const after=before.map((item,index)=>({...item,score:result.scores[index]})).sort((left,right)=>right.score-left.score);
+  rerankingProbeResult.textContent=JSON.stringify({
+   provider:result.provider,model:result.model,before,after
+  },null,2);
+ }catch(error){rerankingProbeResult.textContent="Reranking probe failed: "+error.message;}
 });
 
 const indexResults=document.getElementById("index-results");
