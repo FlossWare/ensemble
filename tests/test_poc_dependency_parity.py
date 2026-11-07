@@ -36,3 +36,10 @@ def test_postgresql_clients_are_not_part_of_ensemble_runtime():
     names = {item.split(">")[0].split("=")[0].strip().lower() for item in declared}
     assert "psycopg2-binary" not in names
     assert "asyncpg" not in names
+
+
+
+def test_chroma_migration_scripts_compile():
+    for name in ("import-poc-chroma.py", "migrate-sqlite-vectors-to-chroma.py"):
+        path = ROOT / "scripts" / name
+        compile(path.read_text(encoding="utf-8"), str(path), "exec")
