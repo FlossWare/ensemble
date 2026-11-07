@@ -117,6 +117,88 @@
           "text": "Deploy memory-service v1.2 from /var/lib/ensemble; café UUID-1234."
         }
       }
+    },
+    {
+      "id": "ranking-rrf-deterministic",
+      "capability": "ranking",
+      "reference": {
+        "method": "POST",
+        "path": "/rank",
+        "base_url_env": "POC_RANKING_URL",
+        "request": {
+          "lists": {
+            "lexical": [
+              {
+                "key": "chunk-a",
+                "rank": 1
+              },
+              {
+                "key": "chunk-b",
+                "rank": 2
+              },
+              {
+                "key": "chunk-c",
+                "rank": 3
+              }
+            ],
+            "vector": [
+              {
+                "key": "chunk-b",
+                "rank": 1
+              },
+              {
+                "key": "chunk-a",
+                "rank": 2
+              },
+              {
+                "key": "chunk-d",
+                "rank": 3
+              }
+            ]
+          },
+          "top_k": 4,
+          "k": 60
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/ranking/rank",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "lists": {
+            "lexical": [
+              {
+                "key": "chunk-a",
+                "rank": 1
+              },
+              {
+                "key": "chunk-b",
+                "rank": 2
+              },
+              {
+                "key": "chunk-c",
+                "rank": 3
+              }
+            ],
+            "vector": [
+              {
+                "key": "chunk-b",
+                "rank": 1
+              },
+              {
+                "key": "chunk-a",
+                "rank": 2
+              },
+              {
+                "key": "chunk-d",
+                "rank": 3
+              }
+            ]
+          },
+          "top_k": 4,
+          "k": 60
+        }
+      }
     }
   ]
 }
