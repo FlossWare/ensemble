@@ -139,3 +139,13 @@ Still required before partition isolation is review-ready: broader adversarial c
 - Added an end-to-end hybrid retrieval regression in `tests/test_partitioning.py` that forces a Graph-only candidate into fusion while lexical and vector channels cannot retrieve it. The fixture reuses source/entity identifiers and a path entity across two partitions, then verifies the current partition's Graph candidate reaches results and reranker inputs while the foreign partition's candidate never appears.
 - GitHub Actions run [42406508965](https://github.com/FlossWare/ensemble/actions/runs/42406508965) passed: **365 passed, 1 skipped, 1 warning, 0 failed**. Installer/backup/restore shell syntax and Control Center JavaScript validation passed. The skip remains the pinned Nomic ONNX model integration test (model graph unavailable on the runner); the warning remains Starlette's `httpx` TestClient deprecation notice.
 - This closes the implementation/test portion of the scoped hybrid retrieval and durable-operation parity work. Memory's production-quality acceptance remains unmeasured until real representative queries and corpus snapshots receive human-reviewed relevance grades; the empty qrels template and synthetic smoke fixture are not substitutes.
+
+
+## POC parity measurement tooling (2026-11-07)
+
+- Added a manifest-driven POC-versus-Ensemble HTTP contract runner under `parity/`. It compares expected HTTP status and JSON responses, supports documented JSON-pointer projections and numeric tolerances, and distinguishes `PASS`, `FAIL`, `NOT_RUN`, and `ERROR`.
+- Added source-verified scenarios for Chunking, Tokenization, RRF Ranking, Extraction, and Intent. These cover deterministic behavior, not the full capability surface.
+- Added a source-audited capability map for 15 POC areas, including transport differences and known architectural adaptations. Unmeasured areas remain explicitly marked.
+- Added an automated dependency-retention audit for POC Python and Node dependencies. PostgreSQL clients are asserted absent under the SQLite-only Ensemble decision.
+- Added a judged-retrieval evaluator for Recall@k, MRR@k, nDCG@k, quality deltas, top-k Jaccard overlap, and Kendall tau. CI runs only a synthetic smoke corpus; real retrieval acceptance still requires human-judged representative queries and approved thresholds.
+- Added CI validation for the dependency audit, scenario harness, and retrieval evaluator. The Control Center parity view and live model/runtime comparisons remain future work.
