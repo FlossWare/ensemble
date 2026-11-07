@@ -52,6 +52,9 @@ def test_control_panel_is_served_by_the_api():
         assert "Memory and Knowledge Inspection" in response.text
         assert "Tombstone source" in response.text
         assert "Transcript Session Ingestion" in response.text
+        assert "Durable Transcript Slice Jobs" in response.text
+        assert 'id="refresh-transcript-jobs"' in response.text
+        assert 'id="transcript-job-results"' in response.text
         assert "Preview same-origin crawl" in response.text
         assert 'id="crawl-pages"' in response.text
         assert 'id="crawl-depth"' in response.text
@@ -105,6 +108,8 @@ def test_control_panel_is_served_by_the_api():
         assert "refreshCapabilityTable" in script.text
         assert "/api/v1/index/tombstones" in script.text
         assert "/api/v1/ingest/sessions" in script.text
+        assert "/api/v1/ingest/transcripts/jobs?limit=50" in script.text
+        assert "refreshTranscriptJobs" in script.text
         assert "/api/v1/ingest/urls/crawl-preview" in script.text
         assert "/api/v1/execution-traces" in script.text
         assert "renderExecutionTrace" in script.text
