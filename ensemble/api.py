@@ -43,6 +43,7 @@ from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpo
 from .file_ingestion import extract_pdf, PDFExtractionError, MAX_PDF_BYTES
 from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
 from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
+from .ga_config import load_ga_config
 from .ga_artifacts import build_ga_learning_artifact
 from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
 from .thompson import select_model as thompson_select_model
@@ -3317,12 +3318,13 @@ def create_app(
         unknown = set(payload) - allowed
         if unknown:
             raise HTTPException(status_code=400, detail=f"unsupported GA config fields: {', '.join(sorted(unknown))}")
+        try:
+            defaults = load_ga_config()
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=f"GA configuration is invalid: {exc}") from exc
         config = {
-            "population_size": payload.get("population_size", 50),
-            "generations": payload.get("generations", 25),
-            "crossover_rate": payload.get("crossover_rate", 0.8),
-            "mutation_rate": payload.get("mutation_rate", 0.1),
-            "tournament_k": payload.get("tournament_k", 3),
+            **defaults,
+            **{key: value for key, value in payload.items() if key != "seed"},
             "seed": payload.get("seed") if payload.get("seed") is not None else secrets.randbits(32),
         }
         try:
