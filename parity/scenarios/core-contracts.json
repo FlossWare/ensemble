@@ -255,6 +255,68 @@
           "/confidence"
         ]
       }
+    },
+    {
+      "id": "extraction-path-version-v1",
+      "capability": "extraction",
+      "reference": {
+        "method": "POST",
+        "path": "/extract",
+        "base_url_env": "POC_EXTRACTION_URL",
+        "request": {
+          "text": "please inspect /var/lib/ensemble/config.yaml and release v1.2.3"
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/entities/extract",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "text": "please inspect /var/lib/ensemble/config.yaml and release v1.2.3"
+        }
+      },
+      "comparison": {
+        "include_json_pointers": [
+          "/entities/0/type",
+          "/entities/0/text",
+          "/entities/0/start",
+          "/entities/0/end",
+          "/entities/0/exact",
+          "/entities/0/confidence",
+          "/entities/1/type",
+          "/entities/1/text",
+          "/entities/1/start",
+          "/entities/1/end",
+          "/entities/1/exact",
+          "/entities/1/confidence"
+        ]
+      }
+    },
+    {
+      "id": "intent-no-match-v1",
+      "capability": "intent",
+      "reference": {
+        "method": "POST",
+        "path": "/classify",
+        "base_url_env": "POC_INTENT_URL",
+        "request": {
+          "text": "the quick brown fox crosses the quiet field"
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/intent/classify",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "text": "the quick brown fox crosses the quiet field"
+        }
+      },
+      "comparison": {
+        "include_json_pointers": [
+          "/label",
+          "/confidence"
+        ]
+      }
     }
   ]
 }
