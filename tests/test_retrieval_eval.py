@@ -51,3 +51,13 @@ def test_evaluation_rejects_runs_for_unknown_queries():
             {"q": {"a": 1}},
             {"rrf": {"q": ["a"], "q-typo": ["b"]}},
         )
+
+
+@pytest.mark.parametrize("qrels,runs,message", [
+    ({}, {"rrf": {}}, "at least one judged query"),
+    ({"q": {}}, {"rrf": {"q": []}}, "contain no human judgments"),
+    ({"q": {"a": 1}}, {}, "at least one retrieval system"),
+])
+def test_evaluation_rejects_empty_judgment_or_run_sets(qrels, runs, message):
+    with pytest.raises(ValueError, match=message):
+        evaluate_runs(qrels, runs)
