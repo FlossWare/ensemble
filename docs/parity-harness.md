@@ -46,6 +46,10 @@ Use `--strict` when a run must fail if any scenario could not execute. The repor
 - `numeric_tolerances` maps JSON pointers to absolute numeric tolerances. It must not be used to paper over ranking, confidence, or model drift without an explicit quality rationale.
 - Add retrieval-specific metrics (Recall@k, MRR, nDCG, rank agreement) as separate evaluators over a shared judged corpus. Do not reduce retrieval quality to raw JSON equality.
 
+## Latest POC baseline
+
+The capability map is pinned to POC `main` at `b1581e317d291bb9e16a12f42916640146f3ba5a` (2026-11-07). The latest POC changes add read-only session-history REST endpoints, prompt-ledger ingestion into Knowledge with credential-looking prompts filtered, and chunk provenance (`chunk_index`, `chunk_count`, `content_sha256`) on exact-match knowledge hits. The map records these as explicit parity work; prompt capture without vector/lexical indexing is not considered searchable prompt parity.
+
 ## Capability inventory
 
 `parity/capability-map.json` records source-audited POC and Ensemble route mappings for Chunking, Tokenization, Ranking, Extraction, Intent, Hybrid Search, Knowledge, Graph, and Memory. A route mapping is not a parity result: capabilities without executed scenarios remain `mapped-unmeasured`. Memory is explicitly recorded as a private Unix-socket POC service, so it needs a transport adapter before it can participate in the HTTP runner.
