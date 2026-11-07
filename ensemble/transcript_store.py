@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from sqlalchemy import (
     Column, DateTime, Integer, JSON, MetaData, String, Table, Text, select, update,
 )
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.engine import make_url
 
@@ -233,14 +234,20 @@ class SqliteTranscriptCheckpointStore:
         async with self.engine.begin() as connection:
             row = (await connection.execute(select(jobs).where(jobs.c.job_id == job_id))).mappings().first()
             if row is None:
-                await connection.execute(jobs.insert().values(
+                inserted = await connection.execute(sqlite_insert(jobs).values(
                     job_id=job_id, source_id=source_id, revision_id=revision_id,
                     project=project, file=file, start_offset=start_offset, end_offset=None,
                     payload_sha256=payload_sha256, status="running", attempts=1,
                     last_error=None, result=None, created_at=now, updated_at=now,
                     completed_at=None, lease_owner=owner_id, lease_expires_at=lease_until,
-                ))
-                return {"status": "running", "attempts": 1, "created": True}
+                ).on_conflict_do_nothing(index_elements=[jobs.c.job_id]))
+                if inserted.rowcount == 1:
+                    return {"status": "running", "attempts": 1, "created": True}
+                row = (await connection.execute(
+                    select(jobs).where(jobs.c.job_id == job_id)
+                )).mappings().first()
+                if row is None:
+                    raise RuntimeError("transcript job claim conflicted without a visible row")
             if (row["source_id"] != source_id or row["revision_id"] != revision_id
                 or row["start_offset"] != start_offset or row["payload_sha256"] != payload_sha256):
                 raise ValueError("transcript job identity conflicts with an existing operation")
