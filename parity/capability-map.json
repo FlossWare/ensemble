@@ -2,7 +2,8 @@
   "schema_version": 1,
   "reference": {
     "repository": "FlossWare/poc-claude-ensemble",
-    "ref": "main"
+    "ref": "main",
+    "commit": "b1581e317d291bb9e16a12f42916640146f3ba5a"
   },
   "candidate": {
     "repository": "FlossWare/ensemble",
@@ -188,7 +189,7 @@
       },
       "scenario_ids": [],
       "measurement": "mapped-unmeasured",
-      "notes": "Requires a shared deterministic search corpus, fixed embedding/reranker configuration, and retrieval-quality evaluation."
+      "notes": "POC knowledge search combines vector and exact-match retrieval with weighted RRF and optional reranking. Exact-match hits now preserve chunk_index, chunk_count, and content_sha256. Ensemble currently needs the exact-match lexical leg and provenance projection verified; vector-only route similarity is not sufficient."
     },
     {
       "id": "knowledge",
@@ -230,7 +231,7 @@
       },
       "scenario_ids": [],
       "measurement": "mapped-unmeasured",
-      "notes": "Record acceptance decisions, duplicate revisions, retrieval materialization, and tombstone semantics separately."
+      "notes": "POC knowledge sources now include captured prompts in addition to RFCs, patents, research papers, research, and books. Prompt indexing skips credential-looking text and carries chunk provenance. Compare prompt-source lifecycle and provenance independently from record revision/tombstone behavior."
     },
     {
       "id": "graph",
