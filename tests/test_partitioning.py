@@ -191,6 +191,28 @@ def test_document_ingestion_and_retrieval_do_not_cross_partitions(tmp_path, monk
         assert any("beta-only" in item["text"] for item in beta_search.json())
         assert not any("alpha-only" in item["text"] for item in beta_search.json())
 
+        # Hybrid composes retrieval, entity extraction, Graph expansion, and
+        # Memory through internal REST calls. Those calls must retain the
+        # authenticated request's partition rather than falling back to default.
+        alpha_hybrid = client.post(
+            "/api/v1/search/hybrid",
+            headers=alpha_headers,
+            json={"query": "alpha-only partition secret phrase", "limit": 10},
+        )
+        beta_hybrid = client.post(
+            "/api/v1/search/hybrid",
+            headers=beta_headers,
+            json={"query": "beta-only partition secret phrase", "limit": 10},
+        )
+        assert alpha_hybrid.status_code == 200, alpha_hybrid.text
+        assert beta_hybrid.status_code == 200, beta_hybrid.text
+        assert "graph_expansion" in alpha_hybrid.json()
+        assert "intent" in alpha_hybrid.json()
+        assert any("alpha-only" in item["text"] for item in alpha_hybrid.json()["results"])
+        assert not any("beta-only" in item["text"] for item in alpha_hybrid.json()["results"])
+        assert any("beta-only" in item["text"] for item in beta_hybrid.json()["results"])
+        assert not any("alpha-only" in item["text"] for item in beta_hybrid.json()["results"])
+
         denied = client.post(
             "/api/v1/search",
             headers={**alpha_headers, "X-Ensemble-Partition": "beta"},
