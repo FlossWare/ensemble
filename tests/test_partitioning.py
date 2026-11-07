@@ -394,7 +394,14 @@ def test_startup_recovers_crawl_jobs_in_every_configured_partition(tmp_path, mon
 
 
 def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path, monkeypatch):
-    from ensemble.embeddings import DisabledEmbeddingProvider
+    class FixedEmbeddings:
+        available = True
+
+        def status(self):
+            return {"ok": True, "ready": True, "model": "partition-test", "dimensions": 3}
+
+        async def embed(self, texts, mode="document"):
+            return [[1.0, 0.0, 0.0] for _ in texts]
 
     class RecordingReranker:
         def __init__(self):
@@ -427,7 +434,7 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
     reranker = RecordingReranker()
     app = create_app(
         database_url=base, reranker=reranker,
-        embedding_provider=DisabledEmbeddingProvider(),
+        embedding_provider=FixedEmbeddings(),
     )
 
     alpha_headers = {
@@ -487,9 +494,11 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
             assert len(lexical_candidates) == 1
             assert lexical_candidates[0]["source_id"] == "same-source"
             assert lexical_candidates[0]["title"] == ("Alpha" if own_marker.startswith("alpha") else "Beta")
-            assert body["fusion"]["channels"]["vector"]["candidate_count"] == 0
-            assert body["fusion"]["channels"]["vector"]["candidates"] == []
-            assert body["channels"]["vector"]["status"] == "unavailable"
+            vector_candidates = body["fusion"]["channels"]["vector"]["candidates"]
+            assert body["fusion"]["channels"]["vector"]["candidate_count"] == len(vector_candidates) > 0
+            assert all(candidate["title"] == ("Alpha" if own_marker.startswith("alpha") else "Beta")
+                       for candidate in vector_candidates)
+            assert body["channels"]["vector"]["status"] == "ok"
             assert body["fusion"]["channels"]["graph"]["candidate_count"] == 0
             assert len(body["fusion"]["results"]) == 1
         # Hybrid reranks once, after retrieval and Graph expansion.
