@@ -9,6 +9,7 @@ import random
 import os
 import math
 import time
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
@@ -20,6 +21,7 @@ from .chunking import Chunker, ChunkingError, PROFILES as CHUNKING_PROFILES, chu
 from .embeddings import EmbeddingProvider, MAX_BODY_BYTES as MAX_EMBED_BODY_BYTES, configured_embedding_provider, validate_embedding_request
 from .models import DocumentIn, DocumentOut, SearchIn, SearchHit
 from .services import DocumentService, SearchService
+from .rrf import reciprocal_rank_fusion
 from .rest_client import InternalRestClient
 from .store import DocumentStore, InMemoryDocumentStore, SqlDocumentStore
 from .vector_store import SqliteVectorStore, VectorStore
@@ -34,25 +36,39 @@ from .extraction import extract, normalize_entity
 from .intent import RULES as INTENT_RULES, classify
 from .ranking import DEFAULT_K, fuse
 from .reranking import MODEL_ID as RERANK_MODEL_ID, Reranker, RerankingUnavailable, configured_ranking_provider, configured_reranker, validate_rerank_request
-from .scraping import ScrapeError, preview_uri
+from .scraping import ScrapeError, crawl_uri, preview_uri, _validate_public_uri
 from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
 from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpointStore, InMemoryTranscriptCheckpointStore
 from .file_ingestion import extract_pdf, PDFExtractionError, MAX_PDF_BYTES
 from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
 from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
+from .ga_artifacts import build_ga_learning_artifact
 from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
 from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
 from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
 from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryReclamationStore
+from .deletion import AuditingDeletionDecorator, DeletionContext, DeletionStrategy, DeferredReclamationStrategy, ReclamationJob
 from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
-from .partitioning import partition_scope_middleware
+from .partitioning import (
+    RequestScope, current_request_scope, partition_scope_middleware, reset_request_scope, set_request_scope,
+)
+from .crawl_store import CrawlJobStore, SqliteCrawlJobStore, InMemoryCrawlJobStore
+from .context_tokens import ContextTokenCounter, ApproximateContextTokenCounter, configured_context_token_counter
+from .source_schedule_store import SourceScheduleStore, SqliteSourceScheduleStore, InMemorySourceScheduleStore
+from .execution_trace_store import ExecutionTraceStore, SqliteExecutionTraceStore, InMemoryExecutionTraceStore, traces as execution_traces
+from .collaboration import CollaborationStore, SynthesisStrategy, SqliteCollaborationStore, InMemoryCollaborationStore, create_collaboration_router
 
 
 def _validate_vector_collection_name(name: str) -> None:
     if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name) or name in {".", ".."}:
         raise HTTPException(status_code=400, detail="collection name must be 1-128 safe characters")
+
+
+def _execution_request_id(request: Request | None, trace_id: str) -> str:
+    candidate = request.headers.get("x-request-id", "") if request else ""
+    return candidate if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", candidate) else trace_id
 
 
 def _problem(request: Request, status: int, title: str, detail: str, code: str) -> JSONResponse:
@@ -105,16 +121,25 @@ def _compress_context_text(value: str, query: str, max_chars: int) -> tuple[str,
     return value[:max_chars].rstrip(), True
 
 
-def _assemble_context(candidates: list[dict[str, Any]], query: str, max_tokens: int) -> dict[str, Any]:
+def _assemble_context(
+    candidates: list[dict[str, Any]], query: str, max_tokens: int,
+    token_counter: ContextTokenCounter | None = None,
+) -> dict[str, Any]:
     if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1 <= max_tokens <= 32_000:
         raise ValueError("max_tokens must be an integer between 1 and 32000")
+    counter = token_counter or ApproximateContextTokenCounter()
     included, blocks, seen = [], [], {}
-    remaining, omitted, truncated, compressed = max_tokens, 0, 0, 0
+    omitted = truncated = compressed = 0
+
+    def joined(candidate_block: str) -> str:
+        return "\n\n".join([*blocks, candidate_block])
+
     for candidate in candidates:
         value = candidate.get("content")
         if not isinstance(value, str) or not value.strip():
             omitted += 1
             continue
+        value = value.strip()
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
         if digest in seen:
             previous = included[seen[digest]]
@@ -122,46 +147,92 @@ def _assemble_context(candidates: list[dict[str, Any]], query: str, max_tokens: 
             previous.setdefault("also_from", []).append(alternate)
             omitted += 1
             continue
+
         source = candidate.get("source", "unknown")
         title = candidate.get("title") or candidate.get("section") or source
         header = f"[{source}] {title}"
-        block = header + "\n" + value.strip()
-        needed = _context_token_estimate(block)
-        was_truncated = was_compressed = False
-        if needed > remaining:
-            available = remaining * 4 - len(header) - 1
-            if available <= 0:
+        prefix = ("\n\n" if blocks else "") + header + "\n"
+        candidate_text = value
+        block = header + "\n" + candidate_text
+        was_compressed = was_truncated = False
+
+        if counter.count(joined(block)) > max_tokens:
+            sentences = [
+                match.group(0).strip()
+                for match in re.finditer(r"[^.!?\n]+(?:[.!?]+|$)", value)
+                if match.group(0).strip()
+            ]
+            query_terms = {
+                token.casefold() for token in re.findall(r"[^\W_]+", query)
+                if len(token) > 1
+            }
+            ranked = []
+            for index, sentence in enumerate(sentences):
+                terms = {token.casefold() for token in re.findall(r"[^\W_]+", sentence)}
+                ranked.append((len(query_terms & terms), index, sentence))
+            selected: list[tuple[int, str]] = []
+            for _, index, sentence in sorted(ranked, key=lambda item: (-item[0], item[1])):
+                trial = " ".join([item[1] for item in selected] + [sentence])
+                trial_block = header + "\n" + trial
+                if counter.count(joined(trial_block)) <= max_tokens:
+                    selected.append((index, sentence))
+            if selected:
+                selected.sort(key=lambda item: item[0])
+                candidate_text = " ".join(sentence for _, sentence in selected)
+                was_compressed = True
+            else:
+                available = max_tokens - counter.count("\n\n".join(blocks) + prefix)
+                candidate_text = counter.truncate(value, max(0, available))
+                while candidate_text and counter.count(joined(header + "\n" + candidate_text)) > max_tokens:
+                    available -= 1
+                    candidate_text = counter.truncate(value, max(0, available))
+                was_truncated = len(candidate_text) < len(value)
+
+            if not candidate_text:
                 omitted += 1
                 continue
-            selected, was_compressed = _compress_context_text(value.strip(), query, available)
-            if not selected:
+            block = header + "\n" + candidate_text
+            was_truncated = was_truncated or len(candidate_text) < len(value)
+            if counter.count(joined(block)) > max_tokens:
                 omitted += 1
                 continue
-            block = header + "\n" + selected
-            was_truncated = len(selected) < len(value.strip())
-            needed = _context_token_estimate(block)
-            if needed > remaining:
-                omitted += 1
-                continue
+
         item = {key: val for key, val in candidate.items() if key != "content"}
         item.update({
-            "content": block, "estimated_tokens": needed,
-            "truncated": was_truncated, "compressed": was_compressed,
+            "content": block,
+            "estimated_tokens": max(0, counter.count(joined(block)) - counter.count("\n\n".join(blocks))),
+            "truncated": was_truncated,
+            "compressed": was_compressed,
             "content_sha256": digest,
         })
         seen[digest] = len(included)
         included.append(item)
         blocks.append(block)
-        remaining -= needed
         truncated += int(was_truncated)
         compressed += int(was_compressed)
+
+    context = "\n\n".join(blocks)
     return {
-        "context": "\n\n".join(blocks), "sources": included,
-        "estimated_tokens": max_tokens - remaining,
-        "token_estimator": "UTF-8 character count divided by four; approximate, not model-tokenizer exact",
+        "context": context, "sources": included,
+        "estimated_tokens": counter.count(context),
+        "token_estimator": counter.description,
+        "tokenizer_id": counter.tokenizer_id,
+        "tokenizer_exact": counter.exact,
         "max_tokens": max_tokens, "omitted_count": omitted,
         "truncated_count": truncated, "compressed_count": compressed,
     }
+
+
+def _configured_worker_partitions() -> list[str]:
+    raw = os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip()
+    if not raw:
+        return ["default"]
+    token_map = json.loads(raw)
+    return ["default", *sorted({
+        partition
+        for principal in token_map.values()
+        for partition in principal.get("partitions", [])
+    })]
 
 
 def create_app(
@@ -178,8 +249,15 @@ def create_app(
     thompson_store: ThompsonStore | None = None,
     learning_store: LearningStore | None = None,
     transcript_store: TranscriptCheckpointStore | None = None,
+    crawl_store: CrawlJobStore | None = None,
+    source_schedule_store: SourceScheduleStore | None = None,
+    deletion_strategy: DeletionStrategy[DeletionContext, ReclamationJob] | None = None,
+    collaboration_store: CollaborationStore | None = None,
+    synthesis_strategy: SynthesisStrategy | None = None,
+    run_reclamation_worker: bool = True,
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
+    context_token_counter = configured_context_token_counter()
     document_store = store or SqlDocumentStore(database_url)
     if isinstance(document_store, InMemoryDocumentStore) and os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip():
         raise ValueError("partition authentication requires durable SQLite-backed stores; in-memory adapters are test-only")
@@ -227,27 +305,163 @@ def create_app(
         InMemoryReclamationStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteReclamationStore(database_url)
     )
+    async def audit_deletion(context: DeletionContext, result: Any) -> None:
+        await active_reclamation_store.record_audit(
+            context.source_id, "strategy_result", actor=context.actor,
+            reason=context.reason,
+            details={
+                "state": result.state, "retryable": result.retryable,
+                "erasure_required": context.erasure_required,
+                "requested_retain_until": context.retain_until.isoformat() if context.retain_until else None,
+                "retention_overridden": context.erasure_required and context.retain_until is not None and context.retain_until > (context.requested_at or datetime.now(timezone.utc)),
+            },
+        )
+
+    base_deletion_strategy = deletion_strategy or DeferredReclamationStrategy(active_reclamation_store)
+    active_deletion_strategy = AuditingDeletionDecorator(base_deletion_strategy, audit_deletion)
+
+    active_collaboration_store = collaboration_store or (
+        InMemoryCollaborationStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteCollaborationStore(database_url)
+    )
+
+    active_crawl_store = crawl_store or (
+        InMemoryCrawlJobStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteCrawlJobStore(database_url)
+    )
+
+    active_source_schedule_store = source_schedule_store or (
+        InMemorySourceScheduleStore(active_crawl_store) if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteSourceScheduleStore(database_url)
+    )
+
+    active_execution_trace_store: ExecutionTraceStore = (
+        InMemoryExecutionTraceStore() if isinstance(document_store, InMemoryDocumentStore)
+        else SqliteExecutionTraceStore(database_url)
+    )
+
+    # Serialize permanent source reclamation against creation of a new generation.
+    generation_lifecycle_lock = asyncio.Lock()
 
     async def reclaim_due_sources() -> int:
-        jobs = await active_reclamation_store.claim_due(100)
+        internal = InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+            "graph": os.getenv("ENSEMBLE_GRAPH_REST_URL"),
+        })
+        jobs = (await internal.request(
+            "POST", "/api/v1/index/reclamation/jobs/claim", json={"limit": 100},
+        )).get("jobs", [])
         for job in jobs:
             source_id = job["source_id"]
+            actor, reason = job.get("actor"), job.get("reason")
             try:
-                # The authoritative Index tombstone is retained. Only active
-                # materialized data is reclaimed; generation tombstones remain.
-                reclaimed = [
-                    await document_store.reclaim_source(source_id),
-                    await active_knowledge_store.reclaim_source(source_id),
-                    await active_vector_store.reclaim_source(source_id),
-                ]
-                if any(count > 500 for count in reclaimed):
-                    # A full page means there may be more rows. Retry the
-                    # idempotent source cleanup in another bounded pass.
-                    await active_reclamation_store.retry(source_id, "additional reclamation pages remain")
-                else:
-                    await active_reclamation_store.complete(source_id)
+                requested_retain_until = job.get("requested_retain_until")
+                if hasattr(requested_retain_until, "isoformat"):
+                    requested_retain_until = requested_retain_until.isoformat()
+                await internal.request(
+                    "POST", "/api/v1/index/reclamation/audit",
+                    json={
+                        "source_id": source_id, "event": "claimed",
+                        "actor": actor, "reason": reason,
+                        "details": {
+                            "attempts": job.get("attempts", 0),
+                            "erasure_required": job.get("erasure_required", False),
+                            "requested_retain_until": requested_retain_until,
+                        },
+                    },
+                )
+                async with generation_lifecycle_lock:
+                    generation_status = await internal.request("GET", "/api/v1/index/generations")
+                    if any(item.get("state") == "building" for item in generation_status.get("generations", [])):
+                        await internal.request(
+                            "POST", "/api/v1/index/reclamation/jobs/retry",
+                            json={
+                                "source_id": source_id,
+                                "reason": "generation build in progress; reclamation deferred",
+                                "delay_seconds": 15,
+                            },
+                        )
+                        await internal.request(
+                            "POST", "/api/v1/index/reclamation/audit",
+                            json={
+                                "source_id": source_id, "event": "deferred",
+                                "actor": actor, "reason": reason,
+                                "details": {"cause": "generation_build_in_progress"},
+                            },
+                        )
+                        continue
+                    await internal.request("GET", "/api/v1/index/generation-writes/ready")
+
+                    # Graph entities and mentions are derived materialized data.
+                    await internal.request(
+                        "POST", "/api/v1/graph/sources/reclaim",
+                        json={"source_id": source_id},
+                    )
+                    generation_reclaimed = []
+                    for generation in generation_status.get("generations", []):
+                        generation_id = generation.get("generation_id")
+                        if not generation_id:
+                            continue
+                        # Each capability owns and physically reclaims its own generation payload.
+                        for capability in ("documents", "knowledge", "vector"):
+                            result = await internal.request(
+                                "POST",
+                                f"/api/v1/{capability}/generations/{generation_id}/sources/reclaim",
+                                json={"source_id": source_id},
+                            )
+                            generation_reclaimed.append(result.get("reclaimed", 0))
+                    reclaimed = []
+                    for capability in ("documents", "knowledge", "vector"):
+                        result = await internal.request(
+                            "POST", f"/api/v1/{capability}/sources/reclaim",
+                            json={"source_id": source_id},
+                        )
+                        reclaimed.append(result.get("reclaimed", 0))
+                    if any(count > 500 for count in [*generation_reclaimed, *reclaimed]):
+                        await internal.request(
+                            "POST", "/api/v1/index/reclamation/jobs/retry",
+                            json={"source_id": source_id, "reason": "additional reclamation pages remain"},
+                        )
+                    else:
+                        # Index marks the source purged only after every capability has finished.
+                        await internal.request(
+                            "POST", "/api/v1/index/sources/purge",
+                            json={"source_id": source_id},
+                        )
+                        await internal.request(
+                            "POST", "/api/v1/index/reclamation/jobs/complete",
+                            json={"source_id": source_id},
+                        )
+                        await internal.request(
+                            "POST", "/api/v1/index/reclamation/audit",
+                            json={
+                                "source_id": source_id, "event": "completed",
+                                "actor": actor, "reason": reason,
+                                "details": {
+                                    "purged": True,
+                                    "erasure_required": job.get("erasure_required", False),
+                                },
+                            },
+                        )
             except Exception as exc:
-                await active_reclamation_store.retry(source_id, f"{type(exc).__name__}: {exc}")
+                await internal.request(
+                    "POST", "/api/v1/index/reclamation/jobs/retry",
+                    json={"source_id": source_id, "reason": f"{type(exc).__name__}: {exc}"},
+                )
+                await internal.request(
+                    "POST", "/api/v1/index/reclamation/audit",
+                    json={
+                        "source_id": source_id, "event": "retry_scheduled",
+                        "actor": actor, "reason": reason,
+                        "details": {
+                            "error_type": type(exc).__name__,
+                            "erasure_required": job.get("erasure_required", False),
+                        },
+                    },
+                )
         return len(jobs)
 
     async def reclamation_worker() -> None:
@@ -261,6 +475,175 @@ def create_app(
                 # A transient queue/database failure must not permanently stop
                 # reclamation for this application process.
                 await asyncio.sleep(15)
+
+
+    def _internal_worker_scope(partition_id: str) -> RequestScope:
+        raw = os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip()
+        if not raw:
+            return RequestScope(partition_id=partition_id)
+        token = os.getenv("ENSEMBLE_INTERNAL_BEARER_TOKEN", "").strip()
+        if not token:
+            raise RuntimeError("scheduled ingestion requires ENSEMBLE_INTERNAL_BEARER_TOKEN")
+        token_map = json.loads(raw)
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        principal = token_map.get(digest)
+        if not isinstance(principal, dict) or partition_id not in principal.get("partitions", []):
+            raise RuntimeError("internal worker token is not authorized for this partition")
+        return RequestScope(
+            principal_id=principal["subject"], partition_id=partition_id,
+            authorization=f"Bearer {token}",
+        )
+
+    async def heartbeat_crawl_job(job_id: str) -> None:
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await active_crawl_store.heartbeat(job_id)
+            except Exception:
+                # A transient heartbeat failure must not crash the worker. The
+                # lease expires only if the job cannot be renewed for five minutes.
+                pass
+
+    async def crawl_worker() -> None:
+        while True:
+            processed = False
+            try:
+                partitions = _configured_worker_partitions()
+                for partition_id in partitions:
+                    scope_token = set_request_scope(RequestScope(partition_id=partition_id))
+                    heartbeat_task = None
+                    try:
+                        job = await active_crawl_store.claim_next()
+                        if job is None:
+                            continue
+                        processed = True
+                        heartbeat_task = asyncio.create_task(heartbeat_crawl_job(job["job_id"]))
+                        trace_id = uuid4().hex
+                        trace_started = time.perf_counter()
+                        trace_created = False
+                        try:
+                            await active_execution_trace_store.create({
+                                "trace_id": trace_id,
+                                "request_id": job["job_id"],
+                                "operation": "crawl_job",
+                                "status": "running",
+                                "started_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                                "completed_at": None,
+                                "duration_ms": None,
+                                "attributes": {
+                                    "uri_key": hashlib.sha256(job["uri"].encode("utf-8")).hexdigest(),
+                                    "max_pages": job["max_pages"],
+                                    "max_depth": job["max_depth"],
+                                    "schedule_id": job.get("schedule_id"),
+                                },
+                                "stages": [],
+                                "error_category": None,
+                            })
+                            trace_created = True
+                        except Exception:
+                            pass
+
+                        async def record_crawl_stage(stage: dict[str, Any]) -> None:
+                            if not trace_created:
+                                return
+                            try:
+                                await active_execution_trace_store.record_stage(trace_id, stage)
+                            except Exception:
+                                pass
+
+                        try:
+                            crawl_started = time.perf_counter()
+                            result = await crawl_uri(
+                                job["uri"], max_pages=job["max_pages"],
+                                max_depth=job["max_depth"], trace=record_crawl_stage,
+                            )
+                            await record_crawl_stage({
+                                "name": "crawl_job_execution", "status": "completed",
+                                "duration_ms": round((time.perf_counter() - crawl_started) * 1000, 3),
+                                "page_count": result.get("page_count", 0),
+                                "attempted_pages": result.get("attempted_pages", 0),
+                                "failure_count": len(result.get("failures", [])),
+                            })
+                            if trace_created:
+                                result["execution_trace_id"] = trace_id
+                            await active_crawl_store.complete(job["job_id"], result)
+                            ingestion_result = None
+                            if job.get("auto_ingest"):
+                                worker_scope = _internal_worker_scope(partition_id)
+                                worker_token = set_request_scope(worker_scope)
+                                ingestion_started = time.perf_counter()
+                                try:
+                                    ingestion_result = await ingest_crawl_job(job["job_id"], None)
+                                    await record_crawl_stage({
+                                        "name": "automatic_ingestion", "status": "completed" if ingestion_result.get("ok") else "degraded",
+                                        "duration_ms": round((time.perf_counter() - ingestion_started) * 1000, 3),
+                                        "page_count": len((ingestion_result.get("ingestion") or {}).get("pages", [])),
+                                    })
+                                except Exception as exc:
+                                    await record_crawl_stage({
+                                        "name": "automatic_ingestion", "status": "failed",
+                                        "duration_ms": round((time.perf_counter() - ingestion_started) * 1000, 3),
+                                        "error_category": type(exc).__name__,
+                                    })
+                                    raise
+                                finally:
+                                    reset_request_scope(worker_token)
+                            if trace_created:
+                                degraded = bool(result.get("failures") or result.get("skipped_count") or result.get("truncated"))
+                                if ingestion_result is not None and not ingestion_result.get("ok"):
+                                    degraded = True
+                                await active_execution_trace_store.finish(
+                                    trace_id, "degraded" if degraded else "completed",
+                                    (time.perf_counter() - trace_started) * 1000,
+                                )
+                        except Exception as exc:
+                            if trace_created:
+                                try:
+                                    await record_crawl_stage({
+                                        "name": "crawl_job_execution", "status": "failed",
+                                        "duration_ms": round((time.perf_counter() - trace_started) * 1000, 3),
+                                        "error_category": type(exc).__name__,
+                                    })
+                                    await active_execution_trace_store.finish(
+                                        trace_id, "failed",
+                                        (time.perf_counter() - trace_started) * 1000,
+                                        type(exc).__name__,
+                                    )
+                                except Exception:
+                                    pass
+                            await active_crawl_store.fail(
+                                job["job_id"], f"{type(exc).__name__}: {str(exc)}",
+                            )
+                    finally:
+                        if heartbeat_task is not None:
+                            heartbeat_task.cancel()
+                            try:
+                                await heartbeat_task
+                            except asyncio.CancelledError:
+                                pass
+                        reset_request_scope(scope_token)
+                await asyncio.sleep(0.5 if processed else 1)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await asyncio.sleep(5)
+
+    async def source_schedule_worker() -> None:
+        while True:
+            processed = False
+            try:
+                partitions = _configured_worker_partitions()
+                for partition_id in partitions:
+                    scope_token = set_request_scope(RequestScope(partition_id=partition_id))
+                    try:
+                        processed = bool(await active_source_schedule_store.dispatch_due(10)) or processed
+                    finally:
+                        reset_request_scope(scope_token)
+                await asyncio.sleep(0.5 if processed else 1)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await asyncio.sleep(5)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -279,17 +662,42 @@ def create_app(
             await active_thompson_store.initialize()
             await active_learning_store.initialize()
             await active_transcript_store.initialize()
-            await active_transcript_store.recover_interrupted()
             await active_reclamation_store.initialize()
-            worker_task = asyncio.create_task(reclamation_worker())
+            await active_crawl_store.initialize()
+            # Both transcript and crawl recovery are lease-expiry based. A
+            # replica may recover only operations whose renewable owner lease
+            # has expired; live work in another instance remains untouched.
+            for partition_id in _configured_worker_partitions():
+                recovery_scope = set_request_scope(RequestScope(partition_id=partition_id))
+                try:
+                    await active_transcript_store.recover_interrupted()
+                    await active_crawl_store.recover_interrupted()
+                finally:
+                    reset_request_scope(recovery_scope)
+            await active_source_schedule_store.initialize()
+            await active_execution_trace_store.initialize()
+            await active_collaboration_store.initialize()
+            worker_task = asyncio.create_task(reclamation_worker()) if run_reclamation_worker else None
+            crawl_worker_task = asyncio.create_task(crawl_worker())
+            schedule_worker_task = asyncio.create_task(source_schedule_worker())
             try:
                 yield
             finally:
-                worker_task.cancel()
-                try:
-                    await worker_task
-                except asyncio.CancelledError:
-                    pass
+                if worker_task is not None:
+                    worker_task.cancel()
+                crawl_worker_task.cancel()
+                schedule_worker_task.cancel()
+                for task in (worker_task, crawl_worker_task, schedule_worker_task):
+                    if task is None:
+                        continue
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                await active_collaboration_store.close()
+                await active_execution_trace_store.close()
+                await active_source_schedule_store.close()
+                await active_crawl_store.close()
                 await active_reclamation_store.close()
                 await active_transcript_store.close()
         finally:
@@ -310,6 +718,17 @@ def create_app(
         lifespan=lifespan,
     )
     app.middleware("http")(partition_scope_middleware)
+    app.include_router(create_collaboration_router(active_collaboration_store, synthesis_strategy))
+    app.state.execution_trace_store = active_execution_trace_store
+    # Keep the durable maintenance runner addressable for in-process operations and tests.
+    app.state.reclamation_runner = reclaim_due_sources
+    app.state.reclamation_store = active_reclamation_store
+    app.state.index_store = active_index_store
+    app.state.context_tokenizer = {
+        "id": context_token_counter.tokenizer_id,
+        "exact": context_token_counter.exact,
+        "description": context_token_counter.description,
+    }
 
     def openapi_with_partition_auth():
         if app.openapi_schema:
@@ -331,14 +750,25 @@ def create_app(
     app.openapi = openapi_with_partition_auth
     documents = DocumentService(
         document_store, Chunker(), embeddings, active_vector_store, active_index_store,
+        internal_client=InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+        }),
     )
     search = SearchService(
         document_store, embeddings, active_reranker, active_vector_store, active_index_store,
+        active_thompson_store,
+        internal_client=InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+            "thompson": os.getenv("ENSEMBLE_THOMPSON_REST_URL"),
+        }),
     )
     ranking_provider = configured_ranking_provider(active_reranker)
 
     async def active_generation_id() -> str | None:
-        status = await active_index_store.generation_status()
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        status = await internal.request("GET", "/api/v1/index/generations")
         generation_id = status.get("active_generation_id")
         active = next((item for item in status.get("generations", [])
                        if item.get("generation_id") == generation_id), None)
@@ -420,8 +850,46 @@ def create_app(
     async def ingest_indexed_document(
         document: DocumentIn, *, embed: bool = True, vector_collection: str | None = None,
         origin: str = "document", locator: str | None = None,
-        request: Request | None = None,
+        request: Request | None = None, acknowledge_generation: bool = True,
     ):
+        trace_id = uuid4().hex
+        request_id = _execution_request_id(request, trace_id)
+        trace_started = time.perf_counter()
+        trace_created = False
+
+        async def trace_stage(name: str, status: str, started: float, **details: Any) -> None:
+            if not trace_created:
+                return
+            try:
+                await active_execution_trace_store.record_stage(trace_id, {
+                    "name": name, "status": status,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    **details,
+                })
+            except Exception:
+                # Observability must never become an ingestion dependency.
+                pass
+
+        try:
+            await active_execution_trace_store.create({
+                "trace_id": trace_id, "request_id": request_id,
+                "operation": "document_ingestion", "status": "running",
+                "started_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                "completed_at": None, "duration_ms": None,
+                "attributes": {
+                    "source_key": hashlib.sha256(document.source_id.encode("utf-8")).hexdigest(),
+                    "revision": document.revision, "content_characters": len(document.content),
+                    "chunk_profile": document.chunk_profile, "media_type": document.media_type,
+                    "embedding_requested": bool(embed), "vector_collection": vector_collection,
+                    "origin": origin,
+                },
+                "stages": [], "error_category": None,
+            })
+            trace_created = True
+        except Exception:
+            # Trace storage is deliberately best-effort.
+            trace_created = False
+
         internal = InternalRestClient(app, {
             "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
             "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
@@ -430,43 +898,115 @@ def create_app(
         })
         revision_id = hashlib.sha256(document.content.encode("utf-8")).hexdigest()
         profiles = {"chunking": document.chunk_profile, "media_type": document.media_type}
-        decision = await internal.request(
-            "POST", "/api/v1/index/revisions", request=request,
-            json={
-                "source_id": document.source_id,
-                "revision_sequence": document.revision,
-                "revision_id": revision_id,
-                "profiles": profiles,
-            },
-        )
-        if decision["decision"] not in {"accepted", "duplicate"}:
-            raise HTTPException(
-                status_code=409,
-                detail="source revision rejected: " + decision["decision"],
+        stage_started = time.perf_counter()
+        try:
+            decision = await internal.request(
+                "POST", "/api/v1/index/revisions", request=request,
+                json={
+                    "source_id": document.source_id,
+                    "revision_sequence": document.revision,
+                    "revision_id": revision_id,
+                    "profiles": profiles,
+                },
             )
-        result = await internal.request(
-            "POST", "/api/v1/documents/records", request=request,
-            json={
-                "document": document.model_dump(mode="json"),
-                "embed": embed,
-                "vector_collection": vector_collection,
-            },
-        )
-        result = DocumentOut.model_validate(result)
+            if decision["decision"] not in {"accepted", "duplicate"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail="source revision rejected: " + decision["decision"],
+                )
+            await trace_stage("index_revision", "completed", stage_started, decision=decision["decision"])
+        except Exception as exc:
+            await trace_stage("index_revision", "failed", stage_started, error_category=type(exc).__name__)
+            try:
+                await active_execution_trace_store.finish(
+                    trace_id, "failed", (time.perf_counter() - trace_started) * 1000, type(exc).__name__,
+                ) if trace_created else None
+            except Exception:
+                pass
+            raise
+
+        stage_started = time.perf_counter()
+        try:
+            result = await internal.request(
+                "POST", "/api/v1/documents/records", request=request,
+                json={
+                    "document": document.model_dump(mode="json"),
+                    "embed": embed,
+                    "vector_collection": vector_collection,
+                    "execution_trace_id": trace_id if trace_created else None,
+                },
+            )
+            result = DocumentOut.model_validate(result)
+            await trace_stage(
+                "document_materialization", "completed", stage_started,
+                chunk_count=result.chunk_count, embedded=bool(result.embedded),
+                vector_indexed=bool(result.vector_indexed),
+            )
+        except Exception as exc:
+            await trace_stage("document_materialization", "failed", stage_started, error_category=type(exc).__name__)
+            try:
+                if trace_created:
+                    await active_execution_trace_store.finish(
+                        trace_id, "failed", (time.perf_counter() - trace_started) * 1000, type(exc).__name__,
+                    )
+            except Exception:
+                pass
+            raise
+
+        stage_started = time.perf_counter()
         try:
             linked = await index_document_entities(
                 document.source_id, document.revision, document.content,
                 origin=origin, locator=locator or document.source_id, request=request,
             )
             result.metadata = {**result.metadata, "graph_entities_indexed": linked}
-        except Exception:
+            await trace_stage("graph_entity_linking", "completed", stage_started, entities_linked=linked)
+            trace_status = "completed"
+        except Exception as exc:
             result.metadata = {**result.metadata, "graph_entities_indexed": 0, "graph_degraded": True}
-        await active_index_store.acknowledge_generation_change(
-            document.source_id, document.revision, False,
-        )
+            await trace_stage("graph_entity_linking", "degraded", stage_started, error_category=type(exc).__name__)
+            trace_status = "degraded"
+
+        if acknowledge_generation:
+            stage_started = time.perf_counter()
+            try:
+                await internal.request(
+                    "POST", "/api/v1/index/generation-changes/acknowledgements",
+                    request=request,
+                    json={
+                        "source_id": document.source_id,
+                        "revision_sequence": document.revision,
+                        "tombstoned": False,
+                    },
+                )
+                await trace_stage("generation_acknowledgement", "completed", stage_started)
+            except Exception as exc:
+                await trace_stage("generation_acknowledgement", "failed", stage_started, error_category=type(exc).__name__)
+                try:
+                    if trace_created:
+                        await active_execution_trace_store.finish(
+                            trace_id, "failed", (time.perf_counter() - trace_started) * 1000, type(exc).__name__,
+                        )
+                except Exception:
+                    pass
+                raise
+
+        try:
+            if trace_created:
+                await active_execution_trace_store.finish(
+                    trace_id, trace_status, (time.perf_counter() - trace_started) * 1000,
+                )
+        except Exception:
+            pass
+        if trace_created:
+            result.metadata = {**result.metadata, "execution_trace_id": trace_id}
         return result, decision["decision"]
 
-    async def expand_graph_results(query: str, entities: list[dict[str, Any]], results: list[SearchHit], limit: int, internal: InternalRestClient, request: Request):
+    async def expand_graph_results(
+        query: str, entities: list[dict[str, Any]], results: list[SearchHit],
+        limit: int, internal: InternalRestClient, request: Request,
+        fusion: dict[str, Any] | None = None,
+    ):
         graph_sources: dict[str, int] = {}
         graph_matches = []
         try:
@@ -502,7 +1042,9 @@ def create_app(
                         graph_sources[source_id] = max(graph_sources.get(source_id, 0), revision)
 
             if not graph_sources:
-                return results, {"matched_entities": graph_matches, "candidate_sources": 0}
+                return results[:limit], {
+                    "matched_entities": graph_matches, "candidate_sources": 0,
+                }
 
             source_ids = sorted(graph_sources)
             source_states: dict[str, dict[str, Any]] = {}
@@ -520,47 +1062,112 @@ def create_app(
                 source_states.update(source_state_response.get("sources", {}))
                 for chunk in chunk_response.get("chunks", []):
                     by_source.setdefault(chunk["source_id"], []).append(chunk)
-            existing = {
-                (hit.source_id, str(hit.chunk_id)): index
-                for index, hit in enumerate(results)
+
+            by_id: dict[str, SearchHit] = {
+                str(hit.chunk_id): hit for hit in results
             }
-            expanded = list(results)
-            for source_rank, source_id in enumerate(source_ids, start=1):
+            graph_ranked: list[dict[str, str]] = []
+            for source_id in source_ids:
                 state = source_states.get(source_id)
-                if state is None or state.get("tombstoned") or state.get("high_sequence") != graph_sources[source_id]:
+                if (
+                    state is None or state.get("tombstoned") or state.get("purged")
+                    or state.get("high_sequence") != graph_sources[source_id]
+                ):
                     continue
-                contribution = 1.0 / (60 + source_rank)
-                for item in by_source.get(source_id, []):
-                    key = (source_id, str(item["chunk_id"]))
-                    if key in existing:
-                        position = existing[key]
-                        hit = expanded[position]
-                        expanded[position] = hit.model_copy(update={
-                            "graph_score": hit.graph_score + contribution,
-                            "fusion_score": hit.fusion_score + contribution,
-                        })
-                        continue
-                    expanded.append(SearchHit(
-                        document_id=item["document_id"], source_id=source_id,
-                        revision=item["revision"], title=item["title"],
-                        chunk_id=item["chunk_id"], chunk_ordinal=item["chunk_ordinal"],
-                        text=item["text"], lexical_score=0.0, vector_score=0.0,
-                        graph_score=contribution, fusion_score=contribution,
-                        chunk_profile=item["chunk_profile"], chunk_start=item["chunk_start"],
-                        chunk_end=item["chunk_end"], chunk_header=item["chunk_header"],
-                        session_id=item.get("session_id"), project=item.get("project"),
-                        role=item.get("role"), kind=item.get("kind"),
-                        is_subagent=item.get("is_subagent"), text_sha=item["text_sha"],
-                    ))
-            expanded.sort(
-                key=lambda hit: (hit.fusion_score, hit.lexical_score, hit.graph_score, str(hit.chunk_id)),
-                reverse=True,
+                chunks = sorted(
+                    by_source.get(source_id, []),
+                    key=lambda item: (item.get("chunk_ordinal", 0), str(item.get("chunk_id", ""))),
+                )
+                for item in chunks:
+                    identity = str(item["chunk_id"])
+                    if identity not in by_id:
+                        by_id[identity] = SearchHit(
+                            document_id=item["document_id"], source_id=source_id,
+                            revision=item["revision"], title=item["title"],
+                            chunk_id=item["chunk_id"], chunk_ordinal=item["chunk_ordinal"],
+                            text=item["text"], lexical_score=0.0, vector_score=0.0,
+                            graph_score=0.0, fusion_score=0.0,
+                            chunk_profile=item["chunk_profile"], chunk_start=item["chunk_start"],
+                            chunk_end=item["chunk_end"], chunk_header=item["chunk_header"],
+                            session_id=item.get("session_id"), project=item.get("project"),
+                            role=item.get("role"), kind=item.get("kind"),
+                            is_subagent=item.get("is_subagent"), text_sha=item["text_sha"],
+                        )
+                    graph_ranked.append({"chunk_id": identity})
+
+            fusion = fusion or {}
+            prior_results = {
+                str(item.get("chunk_id")): item
+                for item in fusion.get("results", [])
+                if isinstance(item, dict) and item.get("chunk_id") is not None
+            }
+            lexical = sorted(
+                (
+                    (item.get("lexical_rank"), identity)
+                    for identity, item in prior_results.items()
+                    if item.get("lexical_rank") is not None and identity in by_id
+                ),
+                key=lambda value: (value[0], value[1]),
             )
+            vector = sorted(
+                (
+                    (item.get("vector_rank"), identity)
+                    for identity, item in prior_results.items()
+                    if item.get("vector_rank") is not None and identity in by_id
+                ),
+                key=lambda value: (value[0], value[1]),
+            )
+            channels = {
+                "lexical": [{"chunk_id": identity} for _, identity in lexical],
+                "vector": [{"chunk_id": identity} for _, identity in vector],
+                "graph": graph_ranked,
+            }
+            weights = fusion.get("weights") or {}
+            fused = reciprocal_rank_fusion(
+                channels, k=fusion.get("k", 60), weights=weights,
+            )
+            fusion_by_id = {item.candidate_id: item for item in fused}
+            expanded = []
+            for item in fused:
+                hit = by_id[item.candidate_id]
+                graph_contribution = item.contributions.get("graph", 0.0)
+                expanded.append(hit.model_copy(update={
+                    "graph_score": graph_contribution,
+                    "fusion_score": item.score,
+                }))
+
+            fusion["channels"] = {
+                **(fusion.get("channels") or {}),
+                "graph": {"candidate_count": len(graph_ranked)},
+            }
+            fusion["algorithm"] = (
+                "weighted_rrf"
+                if any(value != 1.0 for value in weights.values())
+                or fusion.get("weight_strategy") == "thompson"
+                else "rrf"
+            )
+            fusion["results"] = [
+                {
+                    "chunk_id": item.candidate_id,
+                    "ranks": dict(item.ranks),
+                    "lexical_rank": item.ranks.get("lexical"),
+                    "vector_rank": item.ranks.get("vector"),
+                    "graph_rank": item.ranks.get("graph"),
+                    "contributions": {
+                        channel: round(value, 8)
+                        for channel, value in item.contributions.items()
+                    },
+                    "score": round(item.score, 8),
+                }
+                for item in fused[:limit]
+            ]
             return expanded[:limit], {
-                "matched_entities": graph_matches, "candidate_sources": len(graph_sources),
+                "matched_entities": graph_matches,
+                "candidate_sources": len(graph_sources),
+                "candidate_chunks": len(graph_ranked),
             }
         except Exception:
-            return results, {
+            return results[:limit], {
                 "matched_entities": graph_matches, "candidate_sources": 0, "degraded": True,
             }
 
@@ -619,21 +1226,27 @@ def create_app(
                     "target": "vector:" + name, "error": type(exc).__name__,
                 })
         if not cleanup["failed"]:
-            active_generation = await active_generation_id()
-            source = await active_index_store.get_source(source_id)
-            if active_generation is not None and source is not None:
-                try:
-                    await document_store.tombstone_generation_source(active_generation, source_id)
-                    await active_knowledge_store.tombstone_generation_source(active_generation, source_id)
-                    await active_vector_store.tombstone_generation_source(active_generation, source_id)
-                    await active_index_store.acknowledge_generation_change(
-                        source_id, source["high_sequence"], True,
+            try:
+                source_response = await internal.request(
+                    "POST", "/api/v1/index/sources/query", request=request,
+                    json={"source_ids": [source_id]},
+                )
+                source = (source_response.get("sources") or {}).get(source_id) or {}
+                if await active_generation_id() is not None and source:
+                    await internal.request(
+                        "POST", "/api/v1/index/generation-changes/acknowledgements",
+                        request=request,
+                        json={
+                            "source_id": source_id,
+                            "revision_sequence": source["high_sequence"],
+                            "tombstoned": True,
+                        },
                     )
                     cleanup["completed"].append("active_generation")
-                except Exception as exc:
-                    cleanup["failed"].append({
-                        "target": "active_generation", "error": type(exc).__name__,
-                    })
+            except Exception as exc:
+                cleanup["failed"].append({
+                    "target": "active_generation", "error": type(exc).__name__,
+                })
         if cleanup["failed"]:
             cleanup["status"] = "partial"
             cleanup["retryable"] = True
@@ -651,6 +1264,8 @@ def create_app(
     app.state.thompson_store = active_thompson_store
     app.state.learning_store = active_learning_store
     app.state.transcript_store = active_transcript_store
+    app.state.crawl_store = active_crawl_store
+    app.state.source_schedule_store = active_source_schedule_store
     app.state.settings = settings_from_env(database_url)
 
     @app.exception_handler(HTTPException)
@@ -684,13 +1299,15 @@ def create_app(
         try:
             await document_store.check_ready()
             await active_memory_store.check_ready()
+            await active_crawl_store.check_ready()
+            await active_source_schedule_store.check_ready()
         except Exception as exc:
             raise HTTPException(status_code=503, detail="persistence unavailable") from exc
         return {
             "status": "ready",
             "persistence": "durable",
             "embeddings": embeddings.available,
-            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning"],
+            "capabilities": ["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning", "crawl_jobs", "source_schedules", "collaboration"],
         }
 
     @app.get("/api/v1/embeddings/health", tags=["embeddings"])
@@ -738,10 +1355,11 @@ def create_app(
         return {"ok": True, "service": "knowledge"}
 
     @app.get("/api/v1/knowledge/ready", tags=["knowledge"])
-    async def knowledge_ready():
+    async def knowledge_ready(request: Request):
         try:
             await active_knowledge_store.get("__readiness_probe__")
-            await active_index_store.list_sources(1)
+            internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+            await internal.request("GET", "/api/v1/index/ready", request=request)
         except Exception as exc:
             raise HTTPException(status_code=503, detail="knowledge or index persistence unavailable") from exc
         return {"ok": True, "ready": True, "index": "available"}
@@ -772,7 +1390,17 @@ def create_app(
             raise HTTPException(status_code=400, detail="provenance must include string origin and locator")
         if not isinstance(profiles, dict) or not profiles:
             raise HTTPException(status_code=400, detail="profiles must be a non-empty object")
-        decision = await active_index_store.record_revision(source_id, sequence, revision_id, profiles)
+        internal = InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
+        })
+        decision = await internal.request(
+            "POST", "/api/v1/index/revisions", request=request,
+            json={
+                "source_id": source_id, "revision_sequence": sequence,
+                "revision_id": revision_id, "profiles": profiles,
+            },
+        )
         if decision["decision"] not in {"accepted", "duplicate"}:
             return {"ok": True, "decision": decision["decision"], "source_id": source_id, "stored": False}
         chunk_profile = profiles.get("chunking", "window-v1")
@@ -788,9 +1416,15 @@ def create_app(
             },
         )
         try:
-            indexed = await documents.ingest(
-                document, vector_collection="knowledge_chunks"
+            indexed_payload = await internal.request(
+                "POST", "/api/v1/documents/records", request=request,
+                json={
+                    "document": document.model_dump(mode="json"),
+                    "embed": True,
+                    "vector_collection": "knowledge_chunks",
+                },
             )
+            indexed = DocumentOut.model_validate(indexed_payload)
             digest = await active_knowledge_store.put({
                 "source_id": source_id,
                 "revision_sequence": sequence,
@@ -807,7 +1441,15 @@ def create_app(
                 if knowledge_record is None:
                     raise RuntimeError("Knowledge record was not readable after publication")
                 await active_knowledge_store.upsert_generation(active_generation, knowledge_record)
-            await active_index_store.acknowledge_generation_change(source_id, sequence, False)
+            await internal.request(
+                "POST", "/api/v1/index/generation-changes/acknowledgements",
+                request=request,
+                json={
+                    "source_id": source_id,
+                    "revision_sequence": sequence,
+                    "tombstoned": False,
+                },
+            )
         except ChunkingError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
@@ -834,15 +1476,121 @@ def create_app(
             raise HTTPException(status_code=404, detail="unknown record")
         return {"ok": True, "record": record}
 
+    @app.post("/api/v1/knowledge/records/materialize", tags=["knowledge"])
+    async def knowledge_record_materialize(payload: dict[str, Any], request: Request):
+        record = payload.get("record")
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=400, detail="record must be an object")
+        source_id = record.get("source_id")
+        revision_sequence = record.get("revision_sequence")
+        revision_id = record.get("revision_id")
+        content = record.get("content")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="record.source_id must be a non-empty string")
+        if isinstance(revision_sequence, bool) or not isinstance(revision_sequence, int) or revision_sequence < 1:
+            raise HTTPException(status_code=400, detail="record.revision_sequence must be a positive integer")
+        if not isinstance(revision_id, str) or not revision_id or len(revision_id) > 512:
+            raise HTTPException(status_code=400, detail="record.revision_id must be a non-empty string")
+        if not isinstance(content, str) or not content or len(content) > 4_000_000:
+            raise HTTPException(status_code=400, detail="record.content must contain 1-4000000 characters")
+        if not isinstance(record.get("title"), str) or not record["title"]:
+            raise HTTPException(status_code=400, detail="record.title must be a non-empty string")
+        if not isinstance(record.get("origin"), str) or not isinstance(record.get("locator"), str):
+            raise HTTPException(status_code=400, detail="record origin and locator are required")
+        if not isinstance(record.get("profiles"), dict) or not record["profiles"]:
+            raise HTTPException(status_code=400, detail="record.profiles must be a non-empty object")
+        expected_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if revision_id != expected_digest:
+            raise HTTPException(status_code=400, detail="record.revision_id must match the content SHA-256")
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        source_response = await internal.request(
+            "POST", "/api/v1/index/sources/query", request=request,
+            json={"source_ids": [source_id]},
+        )
+        source = (source_response.get("sources") or {}).get(source_id)
+        if (
+            source is None or source.get("tombstoned") or source.get("purged")
+            or source.get("high_sequence") != revision_sequence
+            or source.get("revision_id") != revision_id
+        ):
+            raise HTTPException(status_code=409, detail="Knowledge materialization requires a matching current Index revision")
+        digest = await active_knowledge_store.put(record)
+        status = await internal.request("GET", "/api/v1/index/generations", request=request)
+        generation_id = status.get("active_generation_id")
+        if generation_id:
+            await internal.request(
+                "POST", f"/api/v1/knowledge/generations/{generation_id}/records",
+                request=request,
+                json={"source_id": source_id, "record": await active_knowledge_store.get(source_id)},
+            )
+        return {"ok": True, "source_id": source_id, "content_sha256": digest}
+
+    @app.post("/api/v1/knowledge/records/query", tags=["knowledge"])
+    async def knowledge_records_query(payload: dict[str, Any]):
+        source_ids = payload.get("source_ids")
+        if (not isinstance(source_ids, list) or not source_ids or len(source_ids) > 200
+                or any(not isinstance(value, str) or not value or len(value) > 2048 for value in source_ids)):
+            raise HTTPException(status_code=400, detail="source_ids must contain 1-200 non-empty identifiers")
+        records = {}
+        for source_id in dict.fromkeys(source_ids):
+            record = await active_knowledge_store.get(source_id)
+            if record is not None:
+                records[source_id] = record
+        return {"records": records}
+
+    @app.post("/api/v1/knowledge/generations/{generation_id}/records", tags=["knowledge"])
+    async def knowledge_generation_record_put(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        if payload.get("tombstoned") is True:
+            await active_knowledge_store.tombstone_generation_source(generation_id, source_id)
+            return {"ok": True, "tombstoned": True}
+        record = payload.get("record")
+        if not isinstance(record, dict) or record.get("source_id") != source_id:
+            raise HTTPException(status_code=400, detail="record must match source_id")
+        result = await active_knowledge_store.upsert_generation(generation_id, record)
+        return {"ok": True, "tombstoned": False, "record_id": result}
+
+    @app.post("/api/v1/knowledge/sources/reclaim", tags=["knowledge"])
+    async def knowledge_source_reclaim(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await active_knowledge_store.reclaim_source(source_id)}
+
+    @app.post("/api/v1/knowledge/generations/{generation_id}/sources/reclaim", tags=["knowledge"])
+    async def knowledge_generation_source_reclaim(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await active_knowledge_store.reclaim_generation_source(generation_id, source_id)}
+
+    @app.post("/api/v1/knowledge/sources/restore", tags=["knowledge"])
+    async def knowledge_source_restore(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        generation_id = payload.get("generation_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        await active_knowledge_store.restore(source_id)
+        if isinstance(generation_id, str) and generation_id:
+            await active_knowledge_store.restore_generation_source(generation_id, source_id)
+        return {"ok": True, "source_id": source_id}
+
     @app.post("/api/v1/knowledge/sources/tombstone", tags=["knowledge"])
-    async def knowledge_source_tombstone(payload: dict[str, Any]):
+    async def knowledge_source_tombstone(payload: dict[str, Any], request: Request):
         source_id = payload.get("source_id")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
-        try:
-            await active_index_store.assert_generation_writes_open()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        await internal.request("GET", "/api/v1/index/generation-writes/ready", request=request)
+        source_response = await internal.request(
+            "POST", "/api/v1/index/sources/query", request=request,
+            json={"source_ids": [source_id]},
+        )
+        source = (source_response.get("sources") or {}).get(source_id)
+        if source is None or source.get("tombstoned") is not True:
+            raise HTTPException(status_code=409, detail="source must be tombstoned through the Index lifecycle first")
         await active_knowledge_store.tombstone(source_id)
         active_generation = await active_generation_id()
         if active_generation is not None:
@@ -862,15 +1610,45 @@ def create_app(
             json={"source_id": source_id, "revision_sequence": sequence},
         )
 
+    @app.post("/api/v1/documents/sources/reclaim", tags=["documents"])
+    async def documents_source_reclaim(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await document_store.reclaim_source(source_id)}
+
+    @app.post("/api/v1/documents/generations/{generation_id}/sources/reclaim", tags=["documents"])
+    async def documents_generation_source_reclaim(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await document_store.reclaim_generation_source(generation_id, source_id)}
+
+    @app.post("/api/v1/documents/sources/restore", tags=["documents"])
+    async def documents_source_restore(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        generation_id = payload.get("generation_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        await document_store.restore_source(source_id)
+        if isinstance(generation_id, str) and generation_id:
+            await document_store.restore_generation_source(generation_id, source_id)
+        return {"ok": True, "source_id": source_id}
+
     @app.post("/api/v1/documents/sources/tombstone", tags=["documents"])
-    async def documents_source_tombstone(payload: dict[str, Any]):
+    async def documents_source_tombstone(payload: dict[str, Any], request: Request):
         source_id = payload.get("source_id")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
-        try:
-            await active_index_store.assert_generation_writes_open()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        await internal.request("GET", "/api/v1/index/generation-writes/ready", request=request)
+        source_response = await internal.request(
+            "POST", "/api/v1/index/sources/query", request=request,
+            json={"source_ids": [source_id]},
+        )
+        source = (source_response.get("sources") or {}).get(source_id)
+        if source is None or source.get("tombstoned") is not True:
+            raise HTTPException(status_code=409, detail="source must be tombstoned through the Index lifecycle first")
         await document_store.tombstone_source(source_id)
         active_generation = await active_generation_id()
         if active_generation is not None:
@@ -878,13 +1656,38 @@ def create_app(
         return {"ok": True, "source_id": source_id}
 
     @app.post("/api/v1/documents/records", tags=["documents"])
-    async def documents_ingest(payload: dict[str, Any]):
+    async def documents_ingest(payload: dict[str, Any], request: Request):
         try:
             document = DocumentIn.model_validate(payload.get("document", {}))
+            internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+            source_response = await internal.request(
+                "POST", "/api/v1/index/sources/query", request=request,
+                json={"source_ids": [document.source_id]},
+            )
+            source = (source_response.get("sources") or {}).get(document.source_id)
+            if (
+                source is None or source.get("tombstoned") or source.get("purged")
+                or source.get("high_sequence") != document.revision
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="document writes require a matching current Index revision",
+                )
+            trace_id = payload.get("execution_trace_id")
+            trace_callback = None
+            if isinstance(trace_id, str) and re.fullmatch(r"[0-9a-f]{32}", trace_id):
+                async def trace_callback(stage: dict[str, Any]) -> None:
+                    try:
+                        await active_execution_trace_store.record_stage(trace_id, stage)
+                    except Exception:
+                        # Trace storage is best-effort; it cannot block ingestion.
+                        pass
             result = await documents.ingest(
                 document,
                 embed=payload.get("embed", True),
                 vector_collection=payload.get("vector_collection"),
+                trace=trace_callback,
+                request_context=request,
             )
             return result
         except ChunkingError as exc:
@@ -895,6 +1698,13 @@ def create_app(
     generation_builder = IndexGenerationBuilder(
         active_index_store, document_store, active_vector_store,
         active_knowledge_store, active_memory_store,
+        internal_client=InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+            "memory": os.getenv("ENSEMBLE_MEMORY_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+        }),
     )
 
     @app.post("/api/v1/index/generations", tags=["index"])
@@ -903,7 +1713,8 @@ def create_app(
         if not isinstance(generation_id, str) or not generation_id or len(generation_id) > 64:
             raise HTTPException(status_code=400, detail="generation_id must contain 1-64 characters")
         try:
-            generation = await active_index_store.create_generation(generation_id)
+            async with generation_lifecycle_lock:
+                generation = await active_index_store.create_generation(generation_id)
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "generation": generation}
@@ -933,100 +1744,210 @@ def create_app(
             },
         }
 
+    @app.get("/api/v1/index/generations/{generation_id}/source-upper-bound", tags=["index"])
+    async def index_generation_source_upper_bound(generation_id: str):
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id and item["state"] == "building" for item in status["generations"]):
+            raise HTTPException(status_code=409, detail="generation is not in building state")
+        return {"upper_bound": await active_index_store.source_key_upper_bound()}
+
+    @app.post("/api/v1/index/generations/{generation_id}/sources/page", tags=["index"])
+    async def index_generation_sources_page(generation_id: str, payload: dict[str, Any]):
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id and item["state"] == "building" for item in status["generations"]):
+            raise HTTPException(status_code=409, detail="generation is not in building state")
+        limit = payload.get("limit", 500)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 10000")
+        try:
+            sources = await active_index_store.list_sources_after(
+                payload.get("cursor"), payload.get("upper_bound"), limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"sources": sources}
+
+    @app.post("/api/v1/index/generations/{generation_id}/sources/page", tags=["index"])
+    async def index_generation_target_sources_page(generation_id: str, payload: dict[str, Any]):
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id and item["state"] == "building" for item in status["generations"]):
+            raise HTTPException(status_code=409, detail="generation is not in building state")
+        limit = payload.get("limit", 500)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 10000")
+        sources = await active_index_store.list_generation_sources_after(
+            generation_id, payload.get("cursor"), payload.get("upper_bound"), limit,
+        )
+        return {"sources": sources}
+
+    @app.put("/api/v1/index/generations/{generation_id}/sources", tags=["index"])
+    async def index_generation_source_put(generation_id: str, payload: dict[str, Any]):
+        try:
+            result = await active_index_store.put_generation_source(generation_id, payload.get("source"))
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, **result}
+
+    @app.post("/api/v1/index/generations/{generation_id}/sources/query", tags=["index"])
+    async def index_generation_sources_query(generation_id: str, payload: dict[str, Any]):
+        source_ids = payload.get("source_ids")
+        if (not isinstance(source_ids, list) or not source_ids or len(source_ids) > 200
+                or any(not isinstance(value, str) or not value or len(value) > 2048 for value in source_ids)):
+            raise HTTPException(status_code=400, detail="source_ids must contain 1-200 non-empty identifiers")
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id for item in status["generations"]):
+            raise HTTPException(status_code=404, detail="unknown generation")
+        sources = {}
+        for source_id in dict.fromkeys(source_ids):
+            source = await active_index_store.get_generation_source(generation_id, source_id)
+            if source is not None:
+                sources[source_id] = source
+        return {"sources": sources}
+
+    @app.get("/api/v1/index/generations/{generation_id}/changes/high-watermark", tags=["index"])
+    async def index_generation_changes_high_watermark(generation_id: str):
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id for item in status["generations"]):
+            raise HTTPException(status_code=404, detail="unknown generation")
+        return {"high_watermark": await active_index_store.generation_change_high_watermark(generation_id)}
+
+    @app.post("/api/v1/index/generations/{generation_id}/changes/page", tags=["index"])
+    async def index_generation_changes_page(generation_id: str, payload: dict[str, Any]):
+        status = await active_index_store.generation_status()
+        if not any(item["generation_id"] == generation_id for item in status["generations"]):
+            raise HTTPException(status_code=404, detail="unknown generation")
+        after_change_id = payload.get("after_change_id", 0)
+        limit = payload.get("limit", 500)
+        if isinstance(after_change_id, bool) or not isinstance(after_change_id, int) or after_change_id < 0:
+            raise HTTPException(status_code=400, detail="after_change_id must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 10000")
+        return {"changes": await active_index_store.list_generation_changes_after(
+            generation_id, after_change_id, limit,
+        )}
+
+    @app.post("/api/v1/index/generations/{generation_id}/write-fence/acquire", tags=["index"])
+    async def index_generation_write_fence_acquire(generation_id: str, payload: dict[str, Any]):
+        through = payload.get("through_change_id")
+        if isinstance(through, bool) or not isinstance(through, int) or through < 0:
+            raise HTTPException(status_code=400, detail="through_change_id must be a non-negative integer")
+        try:
+            return {"ok": True, **await active_index_store.acquire_generation_write_fence(
+                generation_id, through_change_id=through,
+            )}
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/v1/index/generations/{generation_id}/write-fence/release", tags=["index"])
+    async def index_generation_write_fence_release(generation_id: str):
+        await active_index_store.release_generation_write_fence(generation_id)
+        return {"ok": True}
+
+    @app.post("/api/v1/index/generations/{generation_id}/checkpoints", tags=["index"])
+    async def index_generation_checkpoint_record(generation_id: str, payload: dict[str, Any]):
+        try:
+            result = await active_index_store.record_generation_checkpoint(
+                generation_id, payload.get("capability"), payload.get("checkpoint"),
+                sealed=payload.get("sealed", False),
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "generation": result}
+
     @app.post("/api/v1/index/generations/{generation_id}/copy/index", tags=["index"])
-    async def index_generation_copy_index(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_copy_index(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.copy_index_sources(
-                generation_id, page_size=payload.get("page_size", 500),
+                generation_id, page_size=payload.get("page_size", 500), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/copy/documents", tags=["index"])
-    async def index_generation_copy_documents(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_copy_documents(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.copy_documents_page(
-                generation_id, page_size=payload.get("page_size", 500),
+                generation_id, page_size=payload.get("page_size", 500), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/copy/vectors", tags=["index"])
-    async def index_generation_copy_vectors(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_copy_vectors(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.copy_vectors_page(
-                generation_id, page_size=payload.get("page_size", 500),
+                generation_id, page_size=payload.get("page_size", 500), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/copy/memory", tags=["index"])
-    async def index_generation_copy_memory(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_copy_memory(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.copy_memory_page(
-                generation_id, page_size=payload.get("page_size", 500),
+                generation_id, page_size=payload.get("page_size", 500), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/copy/knowledge", tags=["index"])
-    async def index_generation_copy_knowledge(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_copy_knowledge(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.copy_knowledge_page(
-                generation_id, page_size=payload.get("page_size", 500),
+                generation_id, page_size=payload.get("page_size", 500), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/reconcile/index", tags=["index"])
-    async def index_generation_reconcile_index(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_reconcile_index(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.reconcile_index_changes_page(
-                generation_id, page_size=payload.get("page_size", 250),
+                generation_id, page_size=payload.get("page_size", 250), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/reconcile/documents", tags=["index"])
-    async def index_generation_reconcile_documents(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_reconcile_documents(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.reconcile_document_changes_page(
-                generation_id, page_size=payload.get("page_size", 250),
+                generation_id, page_size=payload.get("page_size", 250), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/reconcile/vectors", tags=["index"])
-    async def index_generation_reconcile_vectors(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_reconcile_vectors(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.reconcile_vector_changes_page(
-                generation_id, page_size=payload.get("page_size", 250),
+                generation_id, page_size=payload.get("page_size", 250), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/reconcile/memory", tags=["index"])
-    async def index_generation_reconcile_memory(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_reconcile_memory(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.reconcile_memory_changes_page(
-                generation_id, page_size=payload.get("page_size", 250),
+                generation_id, page_size=payload.get("page_size", 250), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/reconcile/knowledge", tags=["index"])
-    async def index_generation_reconcile_knowledge(generation_id: str, payload: dict[str, Any]):
+    async def index_generation_reconcile_knowledge(generation_id: str, payload: dict[str, Any], request: Request):
         try:
             return {"ok": True, **await generation_builder.reconcile_knowledge_changes_page(
-                generation_id, page_size=payload.get("page_size", 250),
+                generation_id, page_size=payload.get("page_size", 250), request=request,
             )}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/index/generations/{generation_id}/fence", tags=["index"])
-    async def index_generation_fence(generation_id: str):
+    async def index_generation_fence(generation_id: str, request: Request):
         try:
-            return {"ok": True, **await generation_builder.fence_reconciled_generation(generation_id)}
+            return {"ok": True, **await generation_builder.fence_reconciled_generation(generation_id, request=request)}
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -1079,6 +2000,40 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "generation": result}
 
+    @app.get("/api/v1/index/generation-writes/ready", tags=["index"])
+    async def index_generation_writes_ready():
+        try:
+            await active_index_store.assert_generation_writes_open()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "ready": True}
+
+    @app.get("/api/v1/index/vector-writes/ready", tags=["index"])
+    async def index_vector_writes_ready():
+        try:
+            await active_index_store.assert_generation_writes_open()
+            await active_index_store.assert_standalone_vector_writes_open()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "ready": True}
+
+    @app.post("/api/v1/index/generation-changes/acknowledgements", tags=["index"])
+    async def index_generation_change_acknowledge(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        sequence = payload.get("revision_sequence")
+        tombstoned = payload.get("tombstoned", False)
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
+        if not isinstance(tombstoned, bool):
+            raise HTTPException(status_code=400, detail="tombstoned must be a boolean")
+        try:
+            await active_index_store.acknowledge_generation_change(source_id, sequence, tombstoned)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "source_id": source_id, "revision_sequence": sequence, "tombstoned": tombstoned}
+
     @app.get("/api/v1/index/health", tags=["index"])
     async def index_health():
         return {"ok": True, "service": "index"}
@@ -1116,12 +2071,241 @@ def create_app(
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
+        actor = payload.get("actor")
+        scope = current_request_scope()
+        if scope.authorization and actor is not None and actor != scope.principal_id:
+            raise HTTPException(status_code=403, detail="actor must match the authenticated principal")
+        if actor is None:
+            actor = scope.principal_id
+        reason = payload.get("reason")
+        erasure_required = payload.get("erasure_required", False)
+        if not isinstance(erasure_required, bool):
+            raise HTTPException(status_code=400, detail="erasure_required must be a boolean")
+        if erasure_required and (not isinstance(reason, str) or not reason.strip()):
+            raise HTTPException(status_code=400, detail="reason is required when erasure_required is true")
+        retain_until_value = payload.get("retain_until")
+        if actor is not None and (not isinstance(actor, str) or not actor.strip() or len(actor) > 256):
+            raise HTTPException(status_code=400, detail="actor must be a non-empty string of at most 256 characters")
+        if reason is not None and (not isinstance(reason, str) or len(reason) > 4000):
+            raise HTTPException(status_code=400, detail="reason must be a string of at most 4000 characters")
+        retain_until = None
+        if retain_until_value is not None:
+            if not isinstance(retain_until_value, str):
+                raise HTTPException(status_code=400, detail="retain_until must be an ISO-8601 timestamp")
+            try:
+                retain_until = datetime.fromisoformat(retain_until_value.replace("Z", "+00:00"))
+                if retain_until.tzinfo is None:
+                    raise ValueError("timezone required")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="retain_until must be a timezone-aware ISO-8601 timestamp") from exc
         result = await active_index_store.record_tombstone(source_id, sequence)
         if result["decision"] == "tombstoned":
-            cleanup = await tombstone_indexed_source(source_id, request)
+            try:
+                cleanup = await tombstone_indexed_source(source_id, request)
+            except Exception as exc:
+                cleanup = {
+                    "status": "partial", "retryable": True,
+                    "completed": [], "failed": [{
+                        "target": "logical_cleanup", "error": type(exc).__name__,
+                    }],
+                }
+            try:
+                deletion_result = await active_deletion_strategy.execute(
+                    DeletionContext(
+                        source_id=source_id, actor=actor.strip() if actor else None,
+                        reason=reason, requested_at=datetime.now(timezone.utc),
+                        retain_until=retain_until, erasure_required=erasure_required,
+                    )
+                )
+                reclamation = deletion_result.value
+            except Exception as exc:
+                cleanup["status"] = "partial"
+                cleanup["retryable"] = True
+                cleanup["failed"].append({
+                    "target": "reclamation_queue", "error": type(exc).__name__,
+                })
+                reclamation = None
         else:
             cleanup = {"status": "not_required", "retryable": False, "completed": [], "failed": []}
-        return {"ok": True, **result, "cleanup": cleanup}
+            reclamation = None
+        return {"ok": True, **result, "cleanup": cleanup, "reclamation": reclamation}
+
+    @app.post("/api/v1/index/restorations", tags=["index"])
+    async def index_restore(payload: dict[str, Any], request: Request):
+        source_id = payload.get("source_id")
+        sequence = payload.get("revision_sequence")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise HTTPException(status_code=400, detail="revision_sequence must be a positive integer")
+        source = await active_index_store.get_source(source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="unknown source")
+        if source.get("purged"):
+            raise HTTPException(status_code=409, detail="permanently purged sources cannot be restored")
+        if not source.get("tombstoned"):
+            raise HTTPException(status_code=409, detail="source is not soft-deleted")
+        if sequence <= source.get("high_sequence", 0):
+            raise HTTPException(status_code=400, detail="restore sequence must exceed the current source sequence")
+
+        internal = InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "documents": os.getenv("ENSEMBLE_DOCUMENTS_REST_URL"),
+            "vector": os.getenv("ENSEMBLE_VECTOR_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+        })
+        reclamation_job = (await internal.request(
+            "POST", "/api/v1/index/reclamation/jobs/query", request=request,
+            json={"source_id": source_id},
+        )).get("job")
+        if reclamation_job and reclamation_job.get("erasure_required"):
+            raise HTTPException(status_code=409, detail="legally required erasure cannot be restored")
+        try:
+            await active_index_store.assert_generation_writes_open()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        cancelled = await internal.request(
+            "POST", "/api/v1/index/reclamation/jobs/cancel", request=request,
+            json={"source_id": source_id},
+        )
+        if not cancelled.get("cancelled"):
+            raise HTTPException(status_code=409, detail="physical reclamation has already started or completed")
+        try:
+            generation_status = await active_index_store.generation_status()
+            generation_id = generation_status.get("active_generation_id")
+            capability_payload = {"source_id": source_id, "generation_id": generation_id}
+            await internal.request(
+                "POST", "/api/v1/documents/sources/restore", request=request,
+                json=capability_payload,
+            )
+            await internal.request(
+                "POST", "/api/v1/knowledge/sources/restore", request=request,
+                json=capability_payload,
+            )
+            await internal.request(
+                "POST", "/api/v1/vector/sources/restore", request=request,
+                json=capability_payload,
+            )
+            restored = await active_index_store.restore_source(source_id, sequence)
+            if generation_id:
+                await internal.request(
+                    "POST", "/api/v1/index/generation-changes/acknowledgements",
+                    request=request,
+                    json={"source_id": source_id, "revision_sequence": sequence, "tombstoned": False},
+                )
+            await internal.request(
+                "POST", "/api/v1/index/reclamation/audit", request=request,
+                json={
+                    "source_id": source_id, "event": "restored",
+                    "actor": current_request_scope().principal_id,
+                    "reason": "source restored before physical reclamation",
+                    "details": {"revision_sequence": sequence},
+                },
+            )
+        except HTTPException:
+            raise
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="source restoration is incomplete; source remains tombstoned") from exc
+        return {"ok": True, "source": restored, "reclamation": "cancelled"}
+
+    @app.post("/api/v1/index/reclamation/jobs/query", tags=["index"])
+    async def index_reclamation_job_query(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"job": await active_reclamation_store.get_job(source_id)}
+
+    @app.post("/api/v1/index/reclamation/jobs/cancel", tags=["index"])
+    async def index_reclamation_job_cancel(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"cancelled": await active_reclamation_store.cancel(source_id)}
+
+    @app.post("/api/v1/index/reclamation/audit", tags=["index"])
+    async def index_reclamation_audit(payload: dict[str, Any]):
+        source_id, event = payload.get("source_id"), payload.get("event")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        if not isinstance(event, str) or not event or len(event) > 64:
+            raise HTTPException(status_code=400, detail="event must be a non-empty string")
+        actor, reason, details = payload.get("actor"), payload.get("reason"), payload.get("details", {})
+        if actor is not None and (not isinstance(actor, str) or len(actor) > 256):
+            raise HTTPException(status_code=400, detail="actor must be a string of at most 256 characters")
+        if reason is not None and not isinstance(reason, str):
+            raise HTTPException(status_code=400, detail="reason must be a string")
+        if not isinstance(details, dict):
+            raise HTTPException(status_code=400, detail="details must be an object")
+        await active_reclamation_store.record_audit(
+            source_id, event, actor=actor, reason=reason, details=details,
+        )
+        return {"ok": True}
+
+    @app.post("/api/v1/index/reclamation/jobs/claim", tags=["index"])
+    async def index_reclamation_jobs_claim(payload: dict[str, Any]):
+        limit = payload.get("limit", 100)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+        return {"jobs": await active_reclamation_store.claim_due(limit)}
+
+    @app.post("/api/v1/index/reclamation/jobs/retry", tags=["index"])
+    async def index_reclamation_jobs_retry(payload: dict[str, Any]):
+        source_id, reason = payload.get("source_id"), payload.get("reason")
+        delay = payload.get("delay_seconds")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        if not isinstance(reason, str) or not reason:
+            raise HTTPException(status_code=400, detail="reason must be a non-empty string")
+        try:
+            await active_reclamation_store.retry(source_id, reason, delay_seconds=delay)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/api/v1/index/reclamation/jobs/complete", tags=["index"])
+    async def index_reclamation_jobs_complete(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        await active_reclamation_store.complete(source_id)
+        return {"ok": True}
+
+    @app.get("/api/v1/index/reclamation", tags=["index"])
+    async def index_reclamation_status():
+        return {"ok": True, "jobs": await active_reclamation_store.status()}
+
+    @app.get("/api/v1/index/sources/{source_id}/deletion-audit", tags=["index"])
+    async def index_source_deletion_audit(source_id: str, limit: int = 100):
+        source = await active_index_store.get_source(source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="unknown source")
+        if not 1 <= limit <= 500:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+        return {
+            "ok": True, "source_id": source_id,
+            "events": await active_reclamation_store.audit_events(source_id, limit),
+        }
+
+    @app.post("/api/v1/index/reclamation/run", tags=["index"])
+    async def index_reclamation_run():
+        processed = await reclaim_due_sources()
+        return {
+            "ok": True, "processed": processed,
+            "jobs": await active_reclamation_store.status(),
+        }
+
+    @app.post("/api/v1/index/sources/purge", tags=["index"])
+    async def index_source_mark_purged(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        try:
+            await active_index_store.mark_purged(source_id)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "source_id": source_id, "purged": True}
 
     @app.get("/api/v1/index/sources/{source_id}", tags=["index"])
     async def index_source(source_id: str):
@@ -1186,6 +2370,88 @@ def create_app(
             })
         return {"ok": True, "chunks": chunks}
 
+    @app.post("/api/v1/documents/generations/{generation_id}/sources", tags=["documents"])
+    async def documents_generation_source(generation_id: str, payload: dict[str, Any]):
+        source = payload.get("source")
+        if not isinstance(source, dict) or not isinstance(source.get("source_id"), str):
+            raise HTTPException(status_code=400, detail="source must include source_id")
+        source_id = source["source_id"]
+        if source.get("tombstoned") is True:
+            await document_store.tombstone_generation_source(generation_id, source_id)
+            return {"ok": True, "document_count": 0, "chunk_count": 0, "tombstoned": True}
+        grouped: dict[str, list[Any]] = {}
+        for item in await document_store.all_chunks():
+            if item.document.source_id == source_id:
+                grouped.setdefault(str(item.document.id), []).append(item)
+        if payload.get("require_documents") is True:
+            source_chunks = [item for items in grouped.values() for item in items]
+            if not source_chunks:
+                raise HTTPException(status_code=409, detail="acknowledged source has no active document chunks")
+            revisions = {item.document.revision for item in source_chunks}
+            if revisions != {source.get("high_sequence")}:
+                raise HTTPException(status_code=409, detail="active document revision does not match the reconciled Index source")
+        document_count = 0
+        chunk_count = 0
+        for items in grouped.values():
+            document = items[0].document
+            chunks = [item.chunk for item in items]
+            await document_store.upsert_generation(generation_id, document, chunks)
+            document_count += 1
+            chunk_count += len(chunks)
+        return {"ok": True, "document_count": document_count, "chunk_count": chunk_count, "tombstoned": False}
+
+    @app.post("/api/v1/vector/sources/reclaim", tags=["vector"])
+    async def vector_source_reclaim(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await active_vector_store.reclaim_source(source_id)}
+
+    @app.post("/api/v1/vector/generations/{generation_id}/sources/reclaim", tags=["vector"])
+    async def vector_generation_source_reclaim(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await active_vector_store.delete_generation_source(generation_id, source_id)}
+
+    @app.post("/api/v1/vector/sources/restore", tags=["vector"])
+    async def vector_source_restore(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        generation_id = payload.get("generation_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        await active_vector_store.restore_source(source_id)
+        if isinstance(generation_id, str) and generation_id:
+            await active_vector_store.restore_generation_source(generation_id, source_id)
+        return {"ok": True, "source_id": source_id}
+
+    @app.post("/api/v1/vector/generations/{generation_id}/sources/reconcile", tags=["vector"])
+    async def vector_generation_source_reconcile(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        tombstoned = payload.get("tombstoned", False)
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        if not isinstance(tombstoned, bool):
+            raise HTTPException(status_code=400, detail="tombstoned must be a boolean")
+        copied = 0
+        for collection in await active_vector_store.list_collections():
+            name = collection["name"]
+            records = [] if tombstoned else await active_vector_store.list_records_for_source(name, source_id)
+            await active_vector_store.delete_generation_source(generation_id, source_id, name=name)
+            if records:
+                copied += await active_vector_store.upsert_generation(
+                    generation_id, name, collection["model"], collection["dimensions"], records,
+                )
+        return {"ok": True, "copied": copied, "tombstoned": tombstoned}
+
+    @app.post("/api/v1/vector/generations/{generation_id}/sources/tombstone", tags=["vector"])
+    async def vector_generation_source_tombstone(generation_id: str, payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        deleted = await active_vector_store.tombstone_generation_source(generation_id, source_id)
+        return {"ok": True, "deleted": deleted}
+
     @app.get("/api/v1/vector/health", tags=["vector"])
     async def vector_health():
         try:
@@ -1194,9 +2460,52 @@ def create_app(
             raise HTTPException(status_code=503, detail="vector storage unavailable") from exc
         return {"ok": True, "service": "vector", "backend": "sqlite"}
 
+    @app.get("/api/v1/vector/ready", tags=["vector"])
+    async def vector_ready():
+        try:
+            await active_vector_store.list_collections()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="vector persistence unavailable") from exc
+        return {"ok": True, "ready": True, "backend": "sqlite"}
+
     @app.get("/api/v1/vector/collections", tags=["vector"])
     async def vector_collections():
         return {"ok": True, "collections": await active_vector_store.list_collections()}
+
+    @app.get("/api/v1/vector/generations/collections", tags=["vector"])
+    async def vector_generation_collections():
+        collections = []
+        for collection in await active_vector_store.list_collections():
+            collections.append({
+                "name": collection["name"], "model": collection["model"],
+                "dimensions": collection["dimensions"],
+                "upper_bound": await active_vector_store.record_key_upper_bound(collection["name"]),
+            })
+        return {"collections": collections}
+
+    @app.post("/api/v1/vector/generations/{generation_id}/collections/{name}/records/page", tags=["vector"])
+    async def vector_generation_records_page(generation_id: str, name: str, payload: dict[str, Any]):
+        _validate_vector_collection_name(name)
+        limit = payload.get("limit", 500)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 10000")
+        records = await active_vector_store.list_records_after(
+            name, payload.get("cursor"), payload.get("upper_bound"), limit,
+        )
+        return {"records": records}
+
+    @app.post("/api/v1/vector/generations/{generation_id}/collections/{name}/records", tags=["vector"])
+    async def vector_generation_records_put(generation_id: str, name: str, payload: dict[str, Any]):
+        _validate_vector_collection_name(name)
+        model, dimensions, records = payload.get("model"), payload.get("dimensions"), payload.get("records")
+        if not isinstance(model, str) or not model or isinstance(dimensions, bool) or not isinstance(dimensions, int):
+            raise HTTPException(status_code=400, detail="model and dimensions are required")
+        if not isinstance(records, list) or not records:
+            raise HTTPException(status_code=400, detail="records must be a non-empty list")
+        result = await active_vector_store.upsert_generation(
+            generation_id, name, model, dimensions, records,
+        )
+        return {"ok": True, "upserted": result}
 
     @app.post("/api/v1/vector/collections/{name}/records/lookup", tags=["vector"])
     async def vector_existing(name: str, payload: dict[str, Any]):
@@ -1209,7 +2518,7 @@ def create_app(
         return {"ok": True, "found": await active_vector_store.existing(name, ids)}
 
     @app.put("/api/v1/vector/collections/{name}/records", tags=["vector"])
-    async def vector_upsert(name: str, payload: dict[str, Any]):
+    async def vector_upsert(name: str, payload: dict[str, Any], request: Request):
         _validate_vector_collection_name(name)
         ids, vectors = payload.get("ids"), payload.get("embeddings")
         documents_payload, metadatas = payload.get("documents"), payload.get("metadatas")
@@ -1249,7 +2558,8 @@ def create_app(
                 raise HTTPException(status_code=400, detail="embedding values must be finite")
             items.append({"id": record_id, "embedding": vector, "document": document, "metadata": metadata})
         try:
-            await active_index_store.assert_generation_writes_open()
+            internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+            await internal.request("GET", "/api/v1/index/vector-writes/ready", request=request)
             count = await active_vector_store.upsert(name, model, dimensions, items)
             active_generation = await active_generation_id()
             if active_generation is not None:
@@ -1261,7 +2571,7 @@ def create_app(
         return {"ok": True, "upserted": count}
 
     @app.patch("/api/v1/vector/collections/{name}/records/metadata", tags=["vector"])
-    async def vector_metadata(name: str, payload: dict[str, Any]):
+    async def vector_metadata(name: str, payload: dict[str, Any], request: Request):
         _validate_vector_collection_name(name)
         ids, metadatas = payload.get("ids"), payload.get("metadatas")
         if not isinstance(ids, list) or not isinstance(metadatas, list) or not ids or len(ids) != len(metadatas) or len(ids) > 256:
@@ -1272,10 +2582,8 @@ def create_app(
             {"id": record_id, "metadata": metadata}
             for record_id, metadata in zip(ids, metadatas)
         ]
-        try:
-            await active_index_store.assert_generation_writes_open()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        await internal.request("GET", "/api/v1/index/vector-writes/ready", request=request)
         updated = await active_vector_store.update_metadata(name, changes)
         active_generation = await active_generation_id()
         if active_generation is not None:
@@ -1285,17 +2593,15 @@ def create_app(
         return {"ok": True, "updated": updated}
 
     @app.post("/api/v1/vector/collections/{name}/records/prune", tags=["vector"])
-    async def vector_delete_superseded(name: str, payload: dict[str, Any]):
+    async def vector_delete_superseded(name: str, payload: dict[str, Any], request: Request):
         _validate_vector_collection_name(name)
         url, digest = payload.get("url"), payload.get("keep_sha256")
         if not isinstance(url, str) or not url or len(url) > 2048:
             raise HTTPException(status_code=400, detail="url must be a non-empty string of at most 2048 characters")
         if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             raise HTTPException(status_code=400, detail="keep_sha256 must be a lowercase hex SHA-256")
-        try:
-            await active_index_store.assert_generation_writes_open()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        await internal.request("GET", "/api/v1/index/vector-writes/ready", request=request)
         deleted = await active_vector_store.delete_superseded(name, url, digest)
         active_generation = await active_generation_id()
         if active_generation is not None:
@@ -1316,15 +2622,20 @@ def create_app(
         return {"ok": True, "deleted": deleted}
 
     @app.post("/api/v1/vector/collections/{name}/sources/tombstone", tags=["vector"])
-    async def vector_source_tombstone(name: str, payload: dict[str, Any]):
+    async def vector_source_tombstone(name: str, payload: dict[str, Any], request: Request):
         _validate_vector_collection_name(name)
         source_id = payload.get("source_id")
         if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
             raise HTTPException(status_code=400, detail="source_id must be a non-empty string of at most 512 characters")
-        try:
-            await active_index_store.assert_generation_writes_open()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
+        source_response = await internal.request(
+            "POST", "/api/v1/index/sources/query", request=request,
+            json={"source_ids": [source_id]},
+        )
+        source = (source_response.get("sources") or {}).get(source_id)
+        if source is None or source.get("tombstoned") is not True:
+            raise HTTPException(status_code=409, detail="source must be tombstoned through the Index lifecycle first")
+        await internal.request("GET", "/api/v1/index/generation-writes/ready", request=request)
         deleted = await active_vector_store.delete_superseded(name, source_id, "")
         active_generation = await active_generation_id()
         if active_generation is not None:
@@ -1336,19 +2647,50 @@ def create_app(
     @app.post("/api/v1/vector/collections/{name}/query", tags=["vector"])
     async def vector_query(name: str, payload: dict[str, Any]):
         _validate_vector_collection_name(name)
-        vector, top_k = payload.get("embedding"), payload.get("top_k", 10)
-        if not isinstance(top_k, int) or isinstance(top_k, bool) or not 1 <= top_k <= 200:
-            raise HTTPException(status_code=400, detail="top_k must be an integer from 1 to 200")
-        if not isinstance(vector, list):
-            raise HTTPException(status_code=400, detail="embedding must be a list")
+        vector = payload.get("embedding")
+        top_k = payload.get("top_k", payload.get("limit", 10))
+        max_top_k = 1000 if "limit" in payload and "top_k" not in payload else 200
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= max_top_k:
+            raise HTTPException(
+                status_code=400,
+                detail=f"top_k must be an integer from 1 to {max_top_k}",
+            )
+        if not isinstance(vector, list) or not vector or len(vector) > 8192:
+            raise HTTPException(
+                status_code=400,
+                detail="embedding must be a non-empty vector of at most 8192 values",
+            )
+
         status = embeddings.status()
-        dimensions = payload.get("dimensions") or status.get("dimensions")
-        if not isinstance(dimensions, int) or isinstance(dimensions, bool) or len(vector) != dimensions:
-            # Existing collections define the authoritative dimension when no provider is configured.
-            collection = next((item for item in await active_vector_store.list_collections() if item["name"] == name), None)
-            dimensions = collection["dimensions"] if collection else dimensions
-        if not isinstance(dimensions, int) or len(vector) != dimensions:
+        requested_model = payload.get("model") if "model" in payload else status.get("model")
+        if requested_model is not None and (
+            not isinstance(requested_model, str) or not requested_model or len(requested_model) > 512
+        ):
+            raise HTTPException(status_code=400, detail="model must be a non-empty string of at most 512 characters")
+
+        collection = next(
+            (item for item in await active_vector_store.list_collections() if item["name"] == name),
+            None,
+        )
+        if collection is not None and requested_model is not None and requested_model != collection["model"]:
+            raise HTTPException(status_code=409, detail="query embedding model does not match vector collection model")
+
+        requested_dimensions = payload.get("dimensions")
+        if requested_dimensions is not None and (
+            isinstance(requested_dimensions, bool)
+            or not isinstance(requested_dimensions, int)
+            or not 1 <= requested_dimensions <= 8192
+        ):
+            raise HTTPException(status_code=400, detail="dimensions must be an integer from 1 to 8192")
+        dimensions = (
+            requested_dimensions
+            if requested_dimensions is not None
+            else collection["dimensions"] if collection is not None
+            else status.get("dimensions")
+        )
+        if isinstance(dimensions, bool) or not isinstance(dimensions, int) or len(vector) != dimensions:
             raise HTTPException(status_code=400, detail="embedding dimension does not match collection")
+
         try:
             vector = [float(value) for value in vector]
         except (TypeError, ValueError) as exc:
@@ -1356,8 +2698,11 @@ def create_app(
         import math
         if any(not math.isfinite(value) for value in vector):
             raise HTTPException(status_code=400, detail="embedding values must be finite")
+
         requested_generation = payload.get("generation_id")
         if requested_generation is not None:
+            if not isinstance(requested_generation, str) or not requested_generation:
+                raise HTTPException(status_code=400, detail="generation_id must be a non-empty string")
             active_generation = await active_generation_id()
             if requested_generation != active_generation:
                 raise HTTPException(status_code=409, detail="generation_id is not the active verified generation")
@@ -1575,6 +2920,35 @@ def create_app(
         return {"ok": True, "results": results}
 
 
+    @app.post("/api/v1/ranking/fuse", tags=["ranking"])
+    async def fuse_ranked_candidates(payload: dict[str, Any]):
+        """Provider-neutral weighted RRF over caller-supplied ranked candidate lists."""
+        try:
+            results = reciprocal_rank_fusion(
+                payload.get("channels"),
+                k=payload.get("k", 60),
+                weights=payload.get("weights"),
+                identity_key=payload.get("identity_key", "chunk_id"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "ok": True,
+            "algorithm": "weighted_rrf" if payload.get("weights") else "rrf",
+            "k": payload.get("k", 60),
+            "results": [
+                {
+                    "candidate_id": item.candidate_id,
+                    "candidate": dict(item.candidate),
+                    "score": item.score,
+                    "ranks": dict(item.ranks),
+                    "contributions": dict(item.contributions),
+                }
+                for item in results
+            ],
+        }
+
+
 
 
     async def process_learning_outcome(payload: dict[str, Any]):
@@ -1603,16 +2977,20 @@ def create_app(
                 },
                 event_id=task_id,
             )
+            if memory_result.get("status") not in {"stored", "duplicate"}:
+                raise RuntimeError("Learning outcome Memory event was not acknowledged")
             await active_thompson_store.record_outcome_once(
                 event_id=task_id, model=outcome["model"],
                 success=outcome["rating"] >= 3, cost=outcome["cost"], tokens=outcome["tokens"],
             )
             thompson_state = await active_thompson_store.get_state()
-            await active_memory_store.append(
+            snapshot_result = await active_memory_store.append(
                 "thompson-state",
                 {"event_type": "thompson.state", "source": "learning-service", "task_id": task_id, "state": thompson_state},
                 event_id="thompson-state-" + hashlib.sha256(task_id.encode("utf-8")).hexdigest(),
             )
+            if snapshot_result.get("status") not in {"stored", "duplicate"}:
+                raise RuntimeError("Thompson state Memory snapshot was not acknowledged")
             await active_learning_store.complete_outcome(task_id, True, True)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1637,6 +3015,8 @@ def create_app(
                 {"event_type": "learning.artifact", "source": "learning-service", "artifact": artifact},
                 event_id="learning-artifact-" + hashlib.sha256(f"{artifact_type}:{run_id}".encode("utf-8")).hexdigest(),
             )
+            if memory_result.get("status") not in {"stored", "duplicate"}:
+                raise RuntimeError("Learning artifact Memory event was not acknowledged")
         except (KeyError, TypeError) as exc:
             raise HTTPException(status_code=400, detail="artifact must contain artifact_type and payload.run_id") from exc
         except OverflowError as exc:
@@ -1740,12 +3120,20 @@ def create_app(
         max_cost = payload.get("max_cost", float("inf"))
         if "request_id" in payload and (not isinstance(payload["request_id"], str) or len(payload["request_id"]) > 256):
             raise HTTPException(status_code=400, detail="request_id must be a string of at most 256 characters")
+        request_id = payload.get("request_id") or str(uuid4())
+        selection_id = str(uuid4())
         try:
             state = await active_thompson_store.get_state()
             model = thompson_select_model(state, task_type, required_capability, max_cost, thompson_rng)
+            await active_thompson_store.record_selection(
+                selection_id=selection_id, selected_model=model, task_type=task_type,
+                required_capability=required_capability,
+                max_cost=float(max_cost) if math.isfinite(float(max_cost)) else None,
+                request_id=request_id,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "model": model, "request_id": payload.get("request_id") or str(uuid4())}
+        return {"ok": True, "model": model, "selection_id": selection_id, "request_id": request_id}
 
     async def thompson_record(payload: dict[str, Any]):
         task_type = payload.get("task_type", "unknown")
@@ -1797,6 +3185,37 @@ def create_app(
     @app.post("/api/v1/thompson/select", tags=["thompson"])
     async def thompson_select_route(payload: dict[str, Any]):
         return await thompson_select(payload)
+
+    @app.get("/api/v1/thompson/selections", tags=["thompson"])
+    async def thompson_selections(limit: int = 50):
+        try:
+            selections = await active_thompson_store.recent_selections(limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "selections": selections}
+
+    @app.post("/api/v1/search/feedback", tags=["search"])
+    async def search_feedback(payload: dict[str, Any]):
+        channel = payload.get("channel")
+        event_id = payload.get("event_id")
+        if not isinstance(channel, str) or not channel.strip() or len(channel) > 128:
+            raise HTTPException(status_code=400, detail="channel must be a non-empty string of at most 128 characters")
+        if not isinstance(event_id, str) or not event_id.strip():
+            raise HTTPException(status_code=400, detail="event_id is required for idempotent retrieval feedback")
+        try:
+            recorded = await active_thompson_store.record_outcome_once(
+                event_id=event_id,
+                model=f"retrieval:{channel}",
+                success=payload.get("success"),
+                cost=payload.get("cost", 0.0),
+                tokens=payload.get("tokens", 0),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "ok": True, "recorded": recorded, "channel": channel,
+            "request_id": payload.get("request_id") or str(uuid4()),
+        }
 
     @app.post("/api/v1/thompson/outcomes", tags=["thompson"])
     async def thompson_outcome_route(payload: dict[str, Any]):
@@ -1910,6 +3329,20 @@ def create_app(
             raise HTTPException(status_code=404, detail="GA run not found")
         return {"ok": True, "run": run}
 
+    @app.post("/api/v1/ga/runs/{run_id}/artifact", tags=["ga"])
+    async def ga_record_learning_artifact(run_id: str):
+        run = await active_ga_store.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="GA run not found")
+        if run["status"] != "completed" or not run.get("result"):
+            raise HTTPException(status_code=409, detail="only completed GA runs can create learning artifacts")
+        try:
+            artifact = build_ga_learning_artifact(run)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=f"GA result cannot be represented as a learning artifact: {exc}") from exc
+        return await record_learning_artifact({"artifact": artifact})
+
+
     @app.post("/api/v1/ga/runs/{run_id}/promote", tags=["ga"])
     async def ga_promote_candidate(run_id: str, payload: dict[str, Any]):
         if payload.get("approved") is not True:
@@ -1949,7 +3382,7 @@ def create_app(
     @app.post("/api/v1/memory/search/semantic", tags=["memory"])
     async def memory_search_semantic(payload: dict[str, Any]):
         try:
-            top_k = payload.get("top_k", payload.get("limit", 10))
+            top_k = payload.get("limit", payload.get("top_k", 10))
             result = await active_memory_store.search_semantic(
                 payload.get("query", ""), top_k, payload.get("source")
             )
@@ -1960,7 +3393,7 @@ def create_app(
     @app.post("/api/v1/memory/search/hybrid", tags=["memory"])
     async def memory_search_hybrid(payload: dict[str, Any]):
         try:
-            top_k = payload.get("top_k", payload.get("limit", 10))
+            top_k = payload.get("limit", payload.get("top_k", 10))
             result = await active_memory_store.search_hybrid(payload.get("query", ""), top_k)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2155,7 +3588,7 @@ def create_app(
 
         candidates.sort(key=lambda item: -float(item.get("score", 0.0)))
         try:
-            assembled = _assemble_context(candidates, query, max_tokens)
+            assembled = _assemble_context(candidates, query, max_tokens, context_token_counter)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
@@ -2163,6 +3596,10 @@ def create_app(
             "intent": intent_result, "entities": entity_result,
             "degraded": sorted(set(degraded)),
         }
+
+    @app.get("/api/v1/context/tokenizer", tags=["context"])
+    async def context_tokenizer_status():
+        return {"ok": True, **app.state.context_tokenizer}
 
     @app.get("/api/v1/memory/health", tags=["memory"])
     async def memory_health():
@@ -2175,6 +3612,74 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=503, detail="memory persistence unavailable") from exc
         return {"ok": True, "ready": True, "backend": "sqlite"}
+
+    @app.get("/api/v1/memory/generations/source-upper-bound", tags=["memory"])
+    async def memory_generation_source_upper_bound():
+        return {"upper_bound": await active_memory_store.memory_generation_upper_bound()}
+
+    @app.post("/api/v1/memory/generations/sources/page", tags=["memory"])
+    async def memory_generation_sources_page(payload: dict[str, Any]):
+        limit = payload.get("limit", 500)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 10000")
+        try:
+            names = await active_memory_store.list_memory_names_after(
+                payload.get("cursor"), payload.get("upper_bound"), limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"names": names}
+
+    @app.post("/api/v1/memory/generations/snapshots/query", tags=["memory"])
+    async def memory_generation_snapshots_query(payload: dict[str, Any]):
+        names = payload.get("names")
+        if not isinstance(names, list) or not names or len(names) > 200 or any(not isinstance(name, str) for name in names):
+            raise HTTPException(status_code=400, detail="names must contain 1-200 memory names")
+        snapshots = {}
+        for name in names:
+            try:
+                snapshot = await active_memory_store.get_memory_snapshot(name)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if snapshot is not None:
+                snapshots[name] = snapshot
+        return {"snapshots": snapshots}
+
+    @app.put("/api/v1/memory/generations/{generation_id}/snapshots/{name}", tags=["memory"])
+    async def memory_generation_snapshot_put(generation_id: str, name: str, payload: dict[str, Any]):
+        try:
+            await active_memory_store.put_memory_generation_snapshot(
+                generation_id, name, payload.get("snapshot"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/api/v1/memory/generations/{generation_id}/changes/page", tags=["memory"])
+    async def memory_generation_changes_page(generation_id: str, payload: dict[str, Any]):
+        try:
+            changes = await active_memory_store.list_memory_generation_changes_after(
+                generation_id, payload.get("after_change_id", 0), payload.get("limit", 500),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"changes": changes}
+
+    @app.get("/api/v1/memory/generations/{generation_id}/changes/high-watermark", tags=["memory"])
+    async def memory_generation_changes_high_watermark(generation_id: str):
+        return {"high_watermark": await active_memory_store.memory_generation_change_high_watermark(generation_id)}
+
+    @app.post("/api/v1/memory/generations/{generation_id}/changes/acknowledgements", tags=["memory"])
+    async def memory_generation_changes_acknowledge(generation_id: str, payload: dict[str, Any]):
+        through = payload.get("through_change_id")
+        if isinstance(through, bool) or not isinstance(through, int) or through < 0:
+            raise HTTPException(status_code=400, detail="through_change_id must be a non-negative integer")
+        count = await active_memory_store.acknowledge_memory_generation_changes(generation_id, through)
+        return {"ok": True, "acknowledged": count}
+
+    @app.get("/api/v1/memory/generations/{generation_id}/changes/pending", tags=["memory"])
+    async def memory_generation_changes_pending(generation_id: str):
+        return {"pending": await active_memory_store.pending_memory_generation_changes(generation_id)}
 
     @app.get("/api/v1/memory/memories", tags=["memory"])
     async def memory_list():
@@ -2233,12 +3738,15 @@ def create_app(
         return {"ok": True, **result}
 
     @app.get("/api/v1/memory/memories/{name}/entries", tags=["memory"])
-    async def memory_entries(name: str, limit: int = 1000):
+    async def memory_entries(name: str, limit: int = 1000, offset: int = 0):
         try:
-            result = await active_memory_store.read_entries(name, limit)
+            result = await active_memory_store.read_entries(name, limit, offset)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "entries": result}
+        return {
+            "ok": True, "entries": result, "limit": limit, "offset": offset,
+            "next_offset": offset + len(result) if len(result) == limit else None,
+        }
 
     @app.post("/api/v1/memory/recall", tags=["memory"])
     async def memory_recall(payload: dict[str, Any]):
@@ -2271,7 +3779,7 @@ def create_app(
                     })
                 response["context"] = _assemble_context(
                     candidates, payload.get("context", {}).get("objective", ""),
-                    payload["max_tokens"],
+                    payload["max_tokens"], context_token_counter,
                 )
             return response
         except ValueError as exc:
@@ -2315,9 +3823,31 @@ def create_app(
             "index_error": None,
         }
 
+    @app.post("/api/v1/graph/sources/reclaim", tags=["graph"])
+    async def graph_source_reclaim(payload: dict[str, Any]):
+        source_id = payload.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise HTTPException(status_code=400, detail="source_id must be a non-empty string")
+        return {"reclaimed": await active_graph_store.reclaim_source(source_id)}
+
     @app.get("/api/v1/graph/health", tags=["graph"])
     async def graph_health():
         return {"ok": True, "service": "graph", "backend": "sqlite"}
+
+    @app.get("/api/v1/graph/ready", tags=["graph"])
+    async def graph_ready():
+        try:
+            await active_graph_store.query_nodes(None, {})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="graph persistence unavailable") from exc
+        return {"ok": True, "ready": True, "backend": "sqlite"}
+
+    @app.get("/api/v1/graph/stats", tags=["graph"])
+    async def graph_stats():
+        try:
+            return {"ok": True, **await active_graph_store.stats()}
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="graph statistics unavailable") from exc
 
     @app.post("/api/v1/graph/nodes", tags=["graph"])
     async def graph_add_node(payload: dict[str, Any]):
@@ -2427,12 +3957,237 @@ def create_app(
         except ScrapeError as exc:
             raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
 
+    @app.post("/api/v1/ingest/urls/crawl-preview", tags=["ingestion"])
+    async def scrape_crawl_preview(payload: dict[str, Any]):
+        try:
+            return await crawl_uri(
+                payload.get("uri"),
+                max_pages=payload.get("max_pages", 10),
+                max_depth=payload.get("max_depth", 1),
+            )
+        except ScrapeError as exc:
+            raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+    @app.post("/api/v1/ingest/urls/crawl-jobs", status_code=202, tags=["ingestion"])
+    async def create_crawl_job(payload: dict[str, Any]):
+        try:
+            uri = _validate_public_uri(payload.get("uri"))
+            max_pages = payload.get("max_pages", 10)
+            max_depth = payload.get("max_depth", 1)
+            if isinstance(max_pages, bool) or not isinstance(max_pages, int) or not 1 <= max_pages <= 20:
+                raise ValueError("max_pages must be an integer between 1 and 20")
+            if isinstance(max_depth, bool) or not isinstance(max_depth, int) or not 0 <= max_depth <= 3:
+                raise ValueError("max_depth must be an integer between 0 and 3")
+            job = await active_crawl_store.enqueue(uri, max_pages, max_depth)
+            return {"ok": True, "job": job}
+        except ScrapeError as exc:
+            raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/ingest/urls/crawl-jobs", tags=["ingestion"])
+    async def list_crawl_jobs(limit: int = 50):
+        try:
+            return {"ok": True, "jobs": await active_crawl_store.list(limit)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/ingest/urls/crawl-jobs/{job_id}", tags=["ingestion"])
+    async def get_crawl_job(job_id: str):
+        job = await active_crawl_store.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="crawl job not found")
+        return {"ok": True, "job": job}
+
+
+    @app.post("/api/v1/ingest/urls/schedules", status_code=201, tags=["ingestion"])
+    async def create_source_schedule(payload: dict[str, Any], request: Request):
+        try:
+            uri = _validate_public_uri(payload.get("uri"))
+            interval_seconds = payload.get("interval_seconds", 86400)
+            max_pages = payload.get("max_pages", 10)
+            max_depth = payload.get("max_depth", 1)
+            run_immediately = payload.get("run_immediately", True)
+            if not isinstance(run_immediately, bool):
+                raise ValueError("run_immediately must be a boolean")
+            _internal_worker_scope(current_request_scope().partition_id)
+            schedule = await active_source_schedule_store.create(
+                uri, interval_seconds, max_pages, max_depth, run_immediately,
+            )
+            return {"ok": True, "schedule": schedule}
+        except ScrapeError as exc:
+            raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/ingest/urls/schedules", tags=["ingestion"])
+    async def list_source_schedules(limit: int = 50):
+        try:
+            return {"ok": True, "schedules": await active_source_schedule_store.list(limit)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/ingest/urls/schedules/{schedule_id}/pause", tags=["ingestion"])
+    async def pause_source_schedule(schedule_id: str):
+        try:
+            return {"ok": True, "schedule": await active_source_schedule_store.set_enabled(schedule_id, False)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="source schedule not found") from exc
+
+    @app.post("/api/v1/ingest/urls/schedules/{schedule_id}/resume", tags=["ingestion"])
+    async def resume_source_schedule(schedule_id: str):
+        try:
+            _internal_worker_scope(current_request_scope().partition_id)
+            return {"ok": True, "schedule": await active_source_schedule_store.set_enabled(schedule_id, True)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="source schedule not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.delete("/api/v1/ingest/urls/schedules/{schedule_id}", tags=["ingestion"])
+    async def delete_source_schedule(schedule_id: str):
+        deleted = await active_source_schedule_store.delete(schedule_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="source schedule not found")
+        return {"ok": True, "deleted": True}
+
+    @app.post("/api/v1/ingest/urls/crawl-jobs/{job_id}/retry", tags=["ingestion"])
+    async def retry_crawl_job(job_id: str):
+        try:
+            return {"ok": True, "job": await active_crawl_store.retry(job_id)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="crawl job not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+    @app.post("/api/v1/ingest/urls/crawl-jobs/{job_id}/ingest", tags=["ingestion"])
+    async def ingest_crawl_job(job_id: str, request: Request = None):
+        internal = InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+        })
+        job = await active_crawl_store.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="crawl job not found")
+        if job["status"] != "completed" or not isinstance(job.get("result"), dict):
+            raise HTTPException(status_code=409, detail="crawl job must complete before ingestion")
+        previews = job["result"].get("pages")
+        if not isinstance(previews, list):
+            raise HTTPException(status_code=409, detail="crawl job has no persisted page results")
+
+        ingestion = job.get("ingestion") or {"status": "pending", "pages": []}
+        page_states = {
+            item["source_id"]: item for item in ingestion.get("pages", [])
+            if isinstance(item, dict) and isinstance(item.get("source_id"), str)
+        }
+        for preview in previews:
+            if not isinstance(preview, dict):
+                continue
+            source_id = preview.get("final_uri")
+            content = preview.get("text")
+            if not isinstance(source_id, str) or not isinstance(content, str) or not content.strip():
+                continue
+            state = page_states.get(source_id)
+            if state and state.get("status") == "completed":
+                continue
+            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            if state is None:
+                source_response = await internal.request(
+                    "POST", "/api/v1/index/sources/query", request=request,
+                    json={"source_ids": [source_id]},
+                )
+                current = (source_response.get("sources") or {}).get(source_id)
+                revision = (current["high_sequence"] + 1) if current else 1
+                state = {
+                    "source_id": source_id, "revision": revision, "content_sha256": digest,
+                    "status": "running", "decision": None, "document": None, "last_error": None,
+                }
+                page_states[source_id] = state
+                ingestion["pages"] = list(page_states.values())
+                ingestion["status"] = "running"
+                await active_crawl_store.update_ingestion(job_id, ingestion)
+            else:
+                if state.get("content_sha256") != digest:
+                    state.update(status="failed", last_error="persisted crawl content changed; refusing to reuse its revision")
+                    ingestion["pages"] = list(page_states.values())
+                    ingestion["status"] = "partial"
+                    await active_crawl_store.update_ingestion(job_id, ingestion)
+                    continue
+                state.update(status="running", last_error=None)
+                ingestion["pages"] = list(page_states.values())
+                ingestion["status"] = "running"
+                await active_crawl_store.update_ingestion(job_id, ingestion)
+
+            try:
+                profiles = {"chunking": "window-v1", "media_type": "text/plain"}
+                document = DocumentIn(
+                    source_id=source_id, revision=state["revision"],
+                    title=preview.get("title") or source_id, content=content,
+                    chunk_profile="window-v1",
+                    metadata={"origin": "web", "locator": source_id},
+                )
+                result, decision = await ingest_indexed_document(
+                    document, origin="web", locator=source_id, request=request,
+                    acknowledge_generation=False,
+                )
+                await internal.request(
+                    "POST", "/api/v1/knowledge/records/materialize", request=request,
+                    json={"record": {
+                        "source_id": source_id, "revision_sequence": state["revision"],
+                        "revision_id": digest, "title": preview.get("title") or source_id,
+                        "content": content, "origin": "web", "locator": source_id,
+                        "profiles": profiles,
+                    }},
+                )
+                await internal.request(
+                    "POST", "/api/v1/index/generation-changes/acknowledgements",
+                    request=request,
+                    json={"source_id": source_id, "revision_sequence": state["revision"], "tombstoned": False},
+                )
+                trace_id = result.metadata.get("execution_trace_id")
+                if isinstance(trace_id, str):
+                    await active_execution_trace_store.record_stage(trace_id, {
+                        "name": "generation_acknowledgement", "status": "completed", "duration_ms": 0,
+                    })
+                state.update(
+                    status="completed", decision=decision,
+                    document=result.model_dump(mode="json"), last_error=None,
+                )
+            except Exception as exc:
+                state.update(status="failed", last_error=f"{type(exc).__name__}: {str(exc)}"[:2000])
+            ingestion["pages"] = list(page_states.values())
+            ingestion["status"] = (
+                "completed" if all(item.get("status") == "completed" for item in page_states.values())
+                else "partial"
+            )
+            await active_crawl_store.update_ingestion(job_id, ingestion)
+
+        ingestion["pages"] = list(page_states.values())
+        ingestion["status"] = (
+            "completed" if page_states and all(item.get("status") == "completed" for item in page_states.values())
+            else "partial" if page_states else "empty"
+        )
+        updated = await active_crawl_store.update_ingestion(job_id, ingestion)
+        return {"ok": ingestion["status"] == "completed", "job_id": job_id, "ingestion": updated["ingestion"]}
+
     @app.post("/api/v1/ingest/urls", status_code=201, tags=["ingestion"])
     async def scrape_and_ingest(payload: dict[str, Any], request: Request):
+        internal = InternalRestClient(app, {
+            "index": os.getenv("ENSEMBLE_INDEX_REST_URL"),
+            "knowledge": os.getenv("ENSEMBLE_KNOWLEDGE_REST_URL"),
+        })
         try:
             preview = await preview_uri(payload.get("uri"))
             source_id = preview["final_uri"]
-            current = await active_index_store.get_source(source_id)
+            source_response = await internal.request(
+                "POST", "/api/v1/index/sources/query", request=request,
+                json={"source_ids": [source_id]},
+            )
+            current = (source_response.get("sources") or {}).get(source_id)
             revision = payload.get("revision")
             if revision is None:
                 revision = (current["high_sequence"] + 1) if current else 1
@@ -2444,13 +4199,27 @@ def create_app(
                 metadata={"origin": "web", "locator": source_id},
             )
             result, decision = await ingest_indexed_document(
-                document, origin="web", locator=source_id, request=request
+                document, origin="web", locator=source_id, request=request,
+                acknowledge_generation=False,
             )
-            await active_knowledge_store.put({
-                "source_id": source_id, "revision_sequence": revision, "revision_id": digest,
-                "title": preview["title"], "content": preview["text"], "origin": "web",
-                "locator": source_id, "profiles": profiles,
-            })
+            await internal.request(
+                "POST", "/api/v1/knowledge/records/materialize", request=request,
+                json={"record": {
+                    "source_id": source_id, "revision_sequence": revision, "revision_id": digest,
+                    "title": preview["title"], "content": preview["text"], "origin": "web",
+                    "locator": source_id, "profiles": profiles,
+                }},
+            )
+            await internal.request(
+                "POST", "/api/v1/index/generation-changes/acknowledgements",
+                request=request,
+                json={"source_id": source_id, "revision_sequence": revision, "tombstoned": False},
+            )
+            trace_id = result.metadata.get("execution_trace_id")
+            if isinstance(trace_id, str):
+                await active_execution_trace_store.record_stage(trace_id, {
+                    "name": "generation_acknowledgement", "status": "completed", "duration_ms": 0,
+                })
             return {"ok": True, "decision": decision, "source": preview, "document": result}
         except ScrapeError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
@@ -2492,9 +4261,11 @@ def create_app(
             raise HTTPException(status_code=502, detail="lexical document ingestion failed") from exc
 
     @app.post("/api/v1/search/lexical", tags=["search"])
-    async def lexical_search(request: SearchIn):
+    async def lexical_search(search_request: SearchIn, http_request: Request):
         try:
-            results = await search.lexical_search(request.query, request.limit)
+            results = await search.lexical_search(
+                search_request.query, search_request.limit, request=http_request,
+            )
             return {"ok": True, "results": results, "retrieval": "lexical"}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2523,15 +4294,76 @@ def create_app(
         }
 
     @app.post("/api/v1/search/retrieve", tags=["search"])
-    async def search_retrieve(search_request: SearchIn):
-        """Execute the Search capability's lexical/vector retrieval contract."""
+    async def search_retrieve(search_request: SearchIn, request: Request):
+        """Execute lexical/vector retrieval and capture its real execution trace."""
+        trace_id = uuid4().hex
+        started = time.perf_counter()
+        created = False
         try:
-            return await search.search_with_status(
-                search_request.query, search_request.limit, rerank=search_request.rerank
+            await active_execution_trace_store.create({
+                "trace_id": trace_id,
+                "request_id": _execution_request_id(request, trace_id),
+                "operation": "retrieval",
+                "status": "running",
+                "started_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                "completed_at": None,
+                "duration_ms": None,
+                "attributes": {
+                    "query_key": hashlib.sha256(search_request.query.encode("utf-8")).hexdigest(),
+                    "limit": search_request.limit,
+                    "rerank_requested": search_request.rerank,
+                },
+                "stages": [],
+                "error_category": None,
+            })
+            created = True
+        except Exception:
+            pass
+        try:
+            async def record_retrieval_stage(stage: dict[str, Any]) -> None:
+                if not created:
+                    return
+                try:
+                    await active_execution_trace_store.record_stage(trace_id, stage)
+                except Exception:
+                    pass
+
+            result = await search.search_with_status(
+                search_request.query, search_request.limit,
+                rerank=search_request.rerank, trace=record_retrieval_stage,
+                request=request,
             )
+            fusion = result.get("fusion") or {}
+            channels = fusion.get("channels") or {}
+            if created:
+                try:
+                    await active_execution_trace_store.finish(
+                        trace_id,
+                        "degraded" if result.get("degraded") else "completed",
+                        (time.perf_counter() - started) * 1000,
+                    )
+                except Exception:
+                    pass
+            if created:
+                result["execution_trace_id"] = trace_id
+            return result
         except ValueError as exc:
+            if created:
+                try:
+                    await active_execution_trace_store.finish(
+                        trace_id, "failed", (time.perf_counter() - started) * 1000, type(exc).__name__,
+                    )
+                except Exception:
+                    pass
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
+            if created:
+                try:
+                    await active_execution_trace_store.finish(
+                        trace_id, "failed", (time.perf_counter() - started) * 1000, type(exc).__name__,
+                    )
+                except Exception:
+                    pass
             raise HTTPException(status_code=502, detail="search retrieval failed") from exc
 
     @app.post("/api/v1/search/hybrid", tags=["search"])
@@ -2547,9 +4379,16 @@ def create_app(
         try:
             # All capability composition crosses the versioned REST contracts.
             # Search owns its retrieval algorithm and persistence implementation.
+            retrieval_payload = search_request.model_dump(mode="json")
+            # Hybrid owns the final rerank after Graph expansion. Disable the
+            # inner retrieval rerank to avoid scoring the same candidates twice.
+            retrieval_payload["rerank"] = False
+            retrieval_payload["limit"] = min(
+                200, max(search_request.limit, search_request.limit * 4),
+            )
             result = await internal.request(
                 "POST", "/api/v1/search/retrieve", request=request,
-                json=search_request.model_dump(mode="json"),
+                json=retrieval_payload,
             )
             # HTTP JSON decoding returns dictionaries; restore the typed
             # SearchHit contract before Hybrid applies graph/rerank/ledger logic.
@@ -2590,7 +4429,7 @@ def create_app(
                 result["results"], graph_expansion = await asyncio.wait_for(
                     expand_graph_results(
                         search_request.query, entities, result["results"],
-                        search_request.limit, internal, request,
+                        search_request.limit, internal, request, result.get("fusion"),
                     ),
                     timeout=graph_timeout,
                 )
@@ -2602,6 +4441,8 @@ def create_app(
             graph_expansion["duration_ms"] = round(
                 (time.perf_counter() - graph_started) * 1000, 3
             )
+            if isinstance(result.get("fusion"), dict):
+                result["fusion"]["results"] = result["fusion"].get("results", [])[:search_request.limit]
             result["graph_expansion"] = graph_expansion
             if graph_expansion.get("timed_out"):
                 result["degraded"].append("graph_timeout")
@@ -2637,7 +4478,17 @@ def create_app(
                         reranked_hits, key=lambda hit: hit.rerank_score, reverse=True
                     ) + result["results"][len(candidates):]
                     result["reranked"] = True
+                    result["ranking"] = {
+                        "status": "reranked",
+                        "provider": reranked.get("provider"),
+                        "candidate_count": len(candidates),
+                    }
                 except Exception:
+                    result["ranking"] = {
+                        "status": "fallback", "provider": None,
+                        "candidate_count": len(candidates),
+                        "reason": "provider_error",
+                    }
                     result["degraded"].append("reranking")
 
             related = []
@@ -2764,7 +4615,7 @@ def create_app(
                     continue
                 source = states.get(source_id)
                 if (
-                    source is None or source.get("tombstoned")
+                    source is None or source.get("tombstoned") or source.get("purged")
                     or source.get("high_sequence") != revision
                 ):
                     continue
@@ -2804,9 +4655,10 @@ def create_app(
         job_id = hashlib.sha256(
             f"{source_id}\\0{revision_id}\\0{offset}\\0{payload_digest}".encode("utf-8")
         ).hexdigest()
+        owner_id = uuid4().hex
         try:
             job_state = await active_transcript_store.start_job(
-                job_id, source_id, revision_id, project, file_path, offset, payload_digest,
+                job_id, source_id, revision_id, project, file_path, offset, payload_digest, owner_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2826,6 +4678,8 @@ def create_app(
                 status_code=409,
                 detail={"message": "transcript slice is already being processed", "job_id": job_id},
             )
+        if not await active_transcript_store.heartbeat_job(job_id, owner_id):
+            raise HTTPException(status_code=409, detail="transcript worker lease was lost")
         checkpoint = await active_transcript_store.get(source_id, revision_id)
         if checkpoint is not None and offset != checkpoint["byte_offset"]:
             if (
@@ -2839,14 +4693,14 @@ def create_app(
                 replay_result["inserted"] = 0
                 replay_result["already_present"] = replayed_count
                 job = await active_transcript_store.complete_job(
-                    job_id, checkpoint["byte_offset"], replay_result,
+                    job_id, checkpoint["byte_offset"], replay_result, owner_id,
                 )
                 return {
                     **replay_result, "replayed": True, "checkpoint": checkpoint,
                     "job_id": job_id, "job": job,
                 }
             await active_transcript_store.fail_job(
-                job_id, f"checkpoint mismatch; expected byte offset {checkpoint['byte_offset']}",
+                job_id, f"checkpoint mismatch; expected byte offset {checkpoint['byte_offset']}", owner_id,
             )
             raise HTTPException(
                 status_code=409,
@@ -2855,10 +4709,10 @@ def create_app(
         try:
             parsed = parse_jsonl(raw_content, session_id=session_id, offset=offset)
         except OverflowError as exc:
-            await active_transcript_store.fail_job(job_id, str(exc))
+            await active_transcript_store.fail_job(job_id, str(exc), owner_id)
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except ValueError as exc:
-            await active_transcript_store.fail_job(job_id, str(exc))
+            await active_transcript_store.fail_job(job_id, str(exc), owner_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not parsed["messages"]:
             result = {
@@ -2881,9 +4735,12 @@ def create_app(
                 "messages": parsed["messages"],
             }
             try:
-                result = await ingest_session(session_payload, request)
+                result = await _ingest_session(
+                    session_payload, request,
+                    heartbeat=lambda: active_transcript_store.heartbeat_job(job_id, owner_id),
+                )
             except Exception as exc:
-                await active_transcript_store.fail_job(job_id, f"{type(exc).__name__}: {exc}")
+                await active_transcript_store.fail_job(job_id, f"{type(exc).__name__}: {exc}", owner_id)
                 raise
             result.update({
                 "bytes_consumed": parsed["bytes_consumed"],
@@ -2891,20 +4748,22 @@ def create_app(
                 "incomplete_tail": parsed["incomplete_tail"],
                 "touches_detected": len(parsed["touches"]),
             })
+        if not await active_transcript_store.heartbeat_job(job_id, owner_id):
+            raise HTTPException(status_code=409, detail="transcript worker lease was lost")
         try:
             committed = await active_transcript_store.commit(
                 source_id, revision_id, project, file_path, offset, parsed["end_offset"],
                 payload_digest, result,
             )
         except ValueError as exc:
-            await active_transcript_store.fail_job(job_id, str(exc))
+            await active_transcript_store.fail_job(job_id, str(exc), owner_id)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
-            await active_transcript_store.fail_job(job_id, f"{type(exc).__name__}: {exc}")
+            await active_transcript_store.fail_job(job_id, f"{type(exc).__name__}: {exc}", owner_id)
             raise HTTPException(status_code=503, detail="transcript checkpoint persistence unavailable") from exc
         if committed["replayed"]:
             result = committed["result"]
-        job = await active_transcript_store.complete_job(job_id, parsed["end_offset"], result)
+        job = await active_transcript_store.complete_job(job_id, parsed["end_offset"], result, owner_id)
         return {
             **result, "replayed": committed["replayed"], "source_id": source_id,
             "revision_id": revision_id, "checkpoint": committed["checkpoint"],
@@ -2941,8 +4800,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="transcript checkpoint not found")
         return {"ok": True, "checkpoint": checkpoint}
 
-    @app.post("/api/v1/ingest/sessions", tags=["ingestion"])
-    async def ingest_session(payload: dict[str, Any], request: Request):
+    async def _ingest_session(payload: dict[str, Any], request: Request, heartbeat=None):
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > 8 * 1_048_576:
             raise HTTPException(status_code=413, detail="request body exceeds 8 MiB")
@@ -3001,6 +4859,8 @@ def create_app(
             inserted = duplicates = 0
             degraded = []
             for message in messages:
+                if heartbeat is not None and not await heartbeat():
+                    raise HTTPException(status_code=409, detail="transcript worker lease was lost")
                 kind = message.get("kind", "text")
                 content_revision = hashlib.sha256(message["text"].encode("utf-8")).hexdigest()
                 event_id = hashlib.sha256(
@@ -3082,10 +4942,32 @@ def create_app(
                 "messages_received": len(messages),
                 "degraded": sorted(set(degraded)),
             }
+        except HTTPException:
+            raise
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=503, detail="session ingestion dependency unavailable") from exc
+
+    @app.post("/api/v1/ingest/sessions", tags=["ingestion"])
+    async def ingest_session(payload: dict[str, Any], request: Request):
+        return await _ingest_session(payload, request)
+
+    @app.get("/api/v1/execution-traces", tags=["operations"])
+    async def list_execution_traces(limit: int = 50):
+        try:
+            return {"ok": True, "traces": await active_execution_trace_store.list(limit)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/execution-traces/{trace_id}", tags=["operations"])
+    async def get_execution_trace(trace_id: str):
+        if not re.fullmatch(r"[0-9a-f]{32}", trace_id or ""):
+            raise HTTPException(status_code=400, detail="trace_id must be a lowercase UUID hex string")
+        trace = await active_execution_trace_store.get(trace_id)
+        if trace is None:
+            raise HTTPException(status_code=404, detail="execution trace not found")
+        return {"ok": True, "trace": trace}
 
     @app.post("/api/v1/ingest/documents", response_model=DocumentOut, status_code=201, tags=["ingestion"])
     async def ingest_document(document: DocumentIn, http_request: Request):
@@ -3102,9 +4984,11 @@ def create_app(
             raise HTTPException(status_code=502, detail="document ingestion failed") from exc
 
     @app.post("/api/v1/search", response_model=list[SearchHit], tags=["search"])
-    async def search_documents(request: SearchIn):
+    async def search_documents(search_request: SearchIn, http_request: Request):
         try:
-            return await search.search(request.query, request.limit)
+            return await search.search(
+                search_request.query, search_request.limit, request=http_request,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:

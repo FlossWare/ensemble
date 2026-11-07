@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
 import os
 import re
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -18,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
 
 from .partitioning import PartitionedAsyncEngine
+from .ranking import fuse as rrf_fuse
 
 
 MEMORY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -220,6 +224,46 @@ def _chunk_markdown(content: str, max_chunk_size: int = 2000) -> list[dict[str, 
     return chunks
 
 
+
+def _memory_rrf_constant() -> int:
+    try:
+        value = int(os.getenv("ENSEMBLE_RRF_K", "60"))
+    except (TypeError, ValueError):
+        return 60
+    return value if 1 <= value <= 10_000 else 60
+
+
+def _fuse_memory_results(keyword_results, semantic_results, top_k, k=None):
+    """Fuse Memory's lexical and semantic rankings without comparing raw scores."""
+    k = _memory_rrf_constant() if k is None else k
+    ranked = {"keyword": [], "semantic": []}
+    identities, raw, ranks = {}, {}, {}
+    for channel, results in (("keyword", keyword_results), ("semantic", semantic_results)):
+        for rank, item in enumerate(results, 1):
+            name, section = item["file"], item.get("section", "full")
+            key = json.dumps([name, section], ensure_ascii=False, separators=(",", ":"))
+            identities[key] = (name, section)
+            raw.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
+            raw[key][channel + "_score"] = float(item["score"])
+            ranks.setdefault(key, {})[channel] = rank
+            ranked[channel].append({"key": key, "rank": rank})
+    if not ranked["keyword"] and not ranked["semantic"]:
+        return []
+    fused = rrf_fuse(ranked, top_k=top_k, k=k)
+    return [{
+        "file": identities[item["key"]][0],
+        "section": identities[item["key"]][1],
+        "score": item["score"],
+        "keyword_score": raw[item["key"]]["keyword_score"],
+        "semantic_score": raw[item["key"]]["semantic_score"],
+        "fusion": {
+            "algorithm": "rrf", "k": k,
+            "ranks": ranks[item["key"]],
+            "contributions": item["contributions"],
+        },
+    } for item in fused]
+
+
 def _keyword_search(documents: list[tuple[str, str]], active_knowledge: set[str], keywords: list[str], limit: int) -> list[dict[str, Any]]:
     keyword_set = {word.casefold() for word in keywords if isinstance(word, str) and word.strip()}
     if not keyword_set:
@@ -253,6 +297,84 @@ def _keyword_search(documents: list[tuple[str, str]], active_knowledge: set[str]
     return sorted(results, key=lambda item: (-item["score"], item["file"], item["section"]))[:limit]
 
 
+class _MemorySearchIndex:
+    """Bounded process-local cache of chunks and vectors for Memory documents."""
+
+    def __init__(
+        self, max_bytes: int = 32 * 1024 * 1024,
+        max_document_bytes: int = 2 * 1024 * 1024, max_entries: int = 512,
+    ):
+        if max_bytes < 0 or max_document_bytes < 0 or max_entries < 1:
+            raise ValueError("Memory search cache limits must be non-negative and max_entries positive")
+        self.max_bytes = max_bytes
+        self.max_document_bytes = max_document_bytes
+        self.max_entries = max_entries
+        self._lock = threading.Lock()
+        self._cache: OrderedDict[tuple[str, str], tuple[int, tuple[dict[str, Any], ...]]] = OrderedDict()
+        self._locks: dict[tuple[str, str], threading.Lock] = {}
+        self._cached_bytes = 0
+
+    def _build(self, content: str) -> tuple[dict[str, Any], ...]:
+        chunks = _chunk_markdown(content) or [{"header": "full", "content": content}]
+        indexed = []
+        for chunk in chunks:
+            value = chunk["content"]
+            vector = _vectorize_text(value)
+            indexed.append({
+                "header": chunk["header"],
+                "size_bytes": len(value.encode("utf-8")),
+                "folded": value.casefold(),
+                "vector": vector,
+                "magnitude": math.sqrt(sum(weight * weight for weight in vector.values())),
+            })
+        return tuple(indexed)
+
+    def get(self, name: str, content: str) -> tuple[dict[str, Any], ...]:
+        size = len(content.encode("utf-8"))
+        if size > self.max_document_bytes or self.max_bytes <= 0:
+            return self._build(content)
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        key = (name, digest)
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None:
+                self._cache.move_to_end(key)
+                return cached[1]
+            build_lock = self._locks.setdefault(key, threading.Lock())
+        with build_lock:
+            with self._lock:
+                cached = self._cache.get(key)
+                if cached is not None:
+                    self._cache.move_to_end(key)
+                    return cached[1]
+            indexed = self._build(content)
+            with self._lock:
+                previous = self._cache.pop(key, None)
+                if previous is not None:
+                    self._cached_bytes -= previous[0]
+                while self._cache and (
+                    self._cached_bytes + size > self.max_bytes
+                    or len(self._cache) >= self.max_entries
+                ):
+                    _, (evicted_size, _) = self._cache.popitem(last=False)
+                    self._cached_bytes -= evicted_size
+                if size <= self.max_bytes:
+                    self._cache[key] = (size, indexed)
+                    self._cached_bytes += size
+                if self._locks.get(key) is build_lock:
+                    self._locks.pop(key, None)
+            return indexed
+
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+            self._locks.clear()
+            self._cached_bytes = 0
+
+
+_memory_search_index = _MemorySearchIndex()
+
+
 def _semantic_search(documents: list[tuple[str, str]], active_knowledge: set[str], query: str, top_k: int, source: str | None) -> list[dict[str, Any]]:
     if not isinstance(query, str) or not query.strip():
         return []
@@ -283,15 +405,15 @@ def _semantic_search(documents: list[tuple[str, str]], active_knowledge: set[str
             continue
         if source == "memory" and is_knowledge:
             continue
-        for chunk in _chunk_markdown(content) or [{"header": "full", "content": content}]:
-            exact = bool(pattern.search(chunk["content"].casefold())) if identifier else normalized in chunk["content"].casefold()
+        for chunk in _memory_search_index.get(name, content):
+            exact = bool(pattern.search(chunk["folded"])) if identifier else normalized in chunk["folded"]
             if identifier and not exact:
                 continue
-            score = 1.0 if exact else _cosine(query_vector, _vectorize_text(chunk["content"]))
+            score = 1.0 if exact else _cosine(query_vector, chunk["vector"])
             if exact or score > 0.1:
                 result = {
                     "file": name, "section": chunk["header"], "score": score,
-                    "size_bytes": len(chunk["content"].encode("utf-8")), "content": content,
+                    "size_bytes": chunk["size_bytes"], "content": content,
                 }
                 if is_knowledge:
                     result["source"] = "claude-code"
@@ -308,7 +430,7 @@ class MemoryStore(Protocol):
     async def delete(self, name: str) -> dict[str, Any]: ...
     async def append(self, name: str, payload: dict[str, Any], event_id: str | None = None) -> dict[str, str]: ...
     async def list_names(self) -> list[str]: ...
-    async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]: ...
+    async def read_entries(self, name: str, limit: int = MAX_ENTRIES, offset: int = 0) -> list[dict[str, Any]]: ...
     async def search(self, keywords: list[str], limit: int = 50) -> list[dict[str, Any]]: ...
     async def search_semantic(self, query: str, top_k: int = 10, source: str | None = None) -> list[dict[str, Any]]: ...
     async def search_hybrid(self, query: str, top_k: int = 10) -> list[dict[str, Any]]: ...
@@ -505,7 +627,11 @@ class SqliteMemoryStore:
     async def check_ready(self) -> None:
         async with self.engine.connect() as connection:
             await connection.execute(select(1))
-            await connection.execute(select(memories.c.name).limit(1))
+            for table in (
+                memories, entries, memory_sources,
+                memory_generation_records, memory_generation_changes,
+            ):
+                await connection.execute(select(table).limit(1))
 
     async def read(self, name: str) -> str | None:
         validate_memory_name(name)
@@ -568,9 +694,24 @@ class SqliteMemoryStore:
             if {"payload_sha256", "captured_at"}.intersection(record):
                 raise ValueError("entry contains reserved Memory metadata fields")
             record["event_id"] = event_id
-            digest_record = {key: value for key, value in record.items() if key != "timestamp"}
-            canonical, _ = _canonical_payload(digest_record)
+            # A caller-supplied timestamp is part of ordinary event identity.
+            # Transcript ingestion is the deliberate exception: its stable ID is
+            # based on session/message/content, so a corrected source timestamp
+            # must not duplicate or conflict with the same transcript message.
+            identity_record = (
+                {key: value for key, value in record.items() if key != "timestamp"}
+                if name == "session-events" else record
+            )
+            # The generated fallback timestamp is added only after hashing.
+            canonical, _ = _canonical_payload(identity_record)
             digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            # Match the POC ledger envelope without including service metadata
+            # in the caller-payload digest.
+            envelope = (
+                {"schema_version": 1, "producer": "claude-code", "kind": "session_end"}
+                if name == "session_events" else {}
+            )
+            record = {**envelope, **record}
         _canonical_payload(record)
         now = datetime.now(timezone.utc)
         record.setdefault("timestamp", now.isoformat().replace("+00:00", "Z"))
@@ -601,15 +742,29 @@ class SqliteMemoryStore:
                 raise ValueError("event_id already exists with different payload")
             return {"status": "duplicate", "event_id": event_id}
 
-    async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]:
+    async def read_entries(self, name: str, limit: int = MAX_ENTRIES, offset: int = 0) -> list[dict[str, Any]]:
         validate_memory_name(name)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_ENTRIES:
             raise ValueError(f"limit must be an integer between 1 and {MAX_ENTRIES}")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
         async with self.engine.connect() as connection:
             rows = (await connection.execute(
-                select(entries.c.payload).where(entries.c.name == name).order_by(entries.c.id.desc()).limit(limit)
+                select(entries.c.payload, entries.c.event_id, entries.c.payload_sha256, entries.c.created_at)
+                .where(entries.c.name == name).order_by(entries.c.id.desc()).limit(limit).offset(offset)
             )).all()
-        return [row[0] for row in reversed(rows)]
+        records = []
+        for row in reversed(rows):
+            record = dict(row.payload)
+            if row.event_id is not None:
+                captured_at = row.created_at
+                if captured_at.tzinfo is None:
+                    captured_at = captured_at.replace(tzinfo=timezone.utc)
+                record.setdefault("event_id", row.event_id)
+                record["payload_sha256"] = row.payload_sha256
+                record["captured_at"] = captured_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            records.append(record)
+        return records
 
     async def list_names(self) -> list[str]:
         async with self.engine.connect() as connection:
@@ -641,24 +796,11 @@ class SqliteMemoryStore:
     async def search_hybrid(self, query: str, top_k: int = 10) -> list[dict[str, Any]]:
         if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 100:
             raise ValueError("top_k must be an integer between 1 and 100")
-        keywords = query.casefold().split() if isinstance(query, str) else []
-        keyword_results = await self.search(keywords, limit=100)
-        semantic_results = await self.search_semantic(query, top_k=top_k)
-        merged: dict[tuple[str, str], dict[str, float]] = {}
-        for item in keyword_results:
-            key = (item["file"], item.get("section", "full"))
-            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
-            merged[key]["keyword_score"] = item["score"]
-        for item in semantic_results:
-            key = (item["file"], item.get("section", "full"))
-            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
-            merged[key]["semantic_score"] = item["score"]
-        results = [{
-            "file": name, "section": section,
-            "score": 0.4 * scores["keyword_score"] + 0.6 * scores["semantic_score"],
-            "keyword_score": scores["keyword_score"], "semantic_score": scores["semantic_score"],
-        } for (name, section), scores in merged.items()]
-        return sorted(results, key=lambda item: (-item["score"], item["file"], item["section"]))[:top_k]
+        if not isinstance(query, str) or not query.strip():
+            return []
+        keyword_results = await self.search(query.casefold().split(), limit=100)
+        semantic_results = await self.search_semantic(query, top_k=100)
+        return _fuse_memory_results(keyword_results, semantic_results, top_k)
 
     async def ingest_claude_markdown(self, source_path: str, content: str, sha256: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         scope, meta = _validate_ingest(source_path, content, sha256, metadata)
@@ -732,7 +874,19 @@ class SqliteMemoryStore:
         current_lineage = context.get("lineage", [])
         if not isinstance(current_lineage, (list, tuple)) or any(not isinstance(item, str) for item in current_lineage):
             raise ValueError("context.lineage must be a list of strings")
-        records = await self.read_entries(name)
+        pages = []
+        offset = 0
+        while True:
+            page = await self.read_entries(name, limit=MAX_ENTRIES, offset=offset)
+            if not page:
+                break
+            pages.append(page)
+            if len(page) < MAX_ENTRIES:
+                break
+            offset += len(page)
+        # Pages are fetched newest-first; restore chronological order so
+        # relationship tie-breaking matches the append-only POC ledger.
+        records = [record for page in reversed(pages) for record in page]
         matches = []
         for index, record in enumerate(records):
             if _entry_is_expired(record):
@@ -784,8 +938,11 @@ class InMemoryMemoryStore:
     def __init__(self):
         self._memories: dict[str, str] = {}
         self._entries: dict[str, list[dict[str, Any]]] = {}
+        self._entry_metadata: dict[str, list[dict[str, Any]]] = {}
         self._events: dict[tuple[str, str], str] = {}
         self.sources: dict[str, dict[str, Any]] = {}
+        self._generation_snapshots: dict[str, dict[str, dict[str, Any]]] = {}
+        self._generation_changes: dict[str, list[dict[str, Any]]] = {}
 
     async def initialize(self) -> None:
         return None
@@ -811,6 +968,7 @@ class InMemoryMemoryStore:
         validate_memory_name(name)
         memory_deleted = name in self._memories
         entries_deleted = len(self._entries.pop(name, []))
+        self._entry_metadata.pop(name, None)
         self._memories.pop(name, None)
         for key in [key for key in self._events if key[0] == name]:
             self._events.pop(key, None)
@@ -843,27 +1001,59 @@ class InMemoryMemoryStore:
             if {"payload_sha256", "captured_at"}.intersection(record):
                 raise ValueError("entry contains reserved Memory metadata fields")
             record["event_id"] = event_id
-            digest_record = {key: value for key, value in record.items() if key != "timestamp"}
-            canonical, _ = _canonical_payload(digest_record)
+            # A caller-supplied timestamp is part of ordinary event identity.
+            # Transcript ingestion is the deliberate exception: its stable ID is
+            # based on session/message/content, so a corrected source timestamp
+            # must not duplicate or conflict with the same transcript message.
+            identity_record = (
+                {key: value for key, value in record.items() if key != "timestamp"}
+                if name == "session-events" else record
+            )
+            # The generated fallback timestamp is added only after hashing.
+            canonical, _ = _canonical_payload(identity_record)
             digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            # Match the POC ledger envelope without including service metadata
+            # in the caller-payload digest.
+            envelope = (
+                {"schema_version": 1, "producer": "claude-code", "kind": "session_end"}
+                if name == "session_events" else {}
+            )
+            record = {**envelope, **record}
             existing = self._events.get((name, event_id))
             if existing is not None:
                 if existing != digest:
                     raise ValueError("event_id already exists with different payload")
                 return {"status": "duplicate", "event_id": event_id}
         _canonical_payload(record)
-        record.setdefault("timestamp", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+        now = datetime.now(timezone.utc)
+        record.setdefault("timestamp", now.isoformat().replace("+00:00", "Z"))
         self._memories.setdefault(name, "")
         self._entries.setdefault(name, []).append(record)
+        metadata = {}
         if event_id is not None:
+            metadata = {"payload_sha256": digest, "captured_at": now.isoformat().replace("+00:00", "Z")}
             self._events[(name, event_id)] = digest
+        self._entry_metadata.setdefault(name, []).append(metadata)
         return {"status": "stored", **({"event_id": event_id} if event_id else {})}
 
-    async def read_entries(self, name: str, limit: int = MAX_ENTRIES) -> list[dict[str, Any]]:
+    async def read_entries(self, name: str, limit: int = MAX_ENTRIES, offset: int = 0) -> list[dict[str, Any]]:
         validate_memory_name(name)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_ENTRIES:
             raise ValueError(f"limit must be an integer between 1 and {MAX_ENTRIES}")
-        return list(self._entries.get(name, [])[-limit:])
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
+        stored_records = self._entries.get(name, [])
+        stored_metadata = self._entry_metadata.get(name, [])
+        end = max(len(stored_records) - offset, 0)
+        start = max(end - limit, 0)
+        records = stored_records[start:end]
+        metadata = stored_metadata[start:end]
+        result = []
+        for record, envelope in zip(records, metadata):
+            item = dict(record)
+            item.update(envelope)
+            result.append(item)
+        return result
 
     async def list_names(self) -> list[str]:
         return sorted(set(self._memories) | set(self._entries))
@@ -883,23 +1073,11 @@ class InMemoryMemoryStore:
     async def search_hybrid(self, query: str, top_k: int = 10) -> list[dict[str, Any]]:
         if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 100:
             raise ValueError("top_k must be an integer between 1 and 100")
-        keyword_results = await self.search(query.casefold().split() if isinstance(query, str) else [], limit=100)
-        semantic_results = await self.search_semantic(query, top_k=top_k)
-        merged: dict[tuple[str, str], dict[str, float]] = {}
-        for item in keyword_results:
-            key = (item["file"], item.get("section", "full"))
-            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
-            merged[key]["keyword_score"] = item["score"]
-        for item in semantic_results:
-            key = (item["file"], item.get("section", "full"))
-            merged.setdefault(key, {"keyword_score": 0.0, "semantic_score": 0.0})
-            merged[key]["semantic_score"] = item["score"]
-        results = [{
-            "file": name, "section": section,
-            "score": 0.4 * scores["keyword_score"] + 0.6 * scores["semantic_score"],
-            "keyword_score": scores["keyword_score"], "semantic_score": scores["semantic_score"],
-        } for (name, section), scores in merged.items()]
-        return sorted(results, key=lambda item: (-item["score"], item["file"], item["section"]))[:top_k]
+        if not isinstance(query, str) or not query.strip():
+            return []
+        keyword_results = await self.search(query.casefold().split(), limit=100)
+        semantic_results = await self.search_semantic(query, top_k=100)
+        return _fuse_memory_results(keyword_results, semantic_results, top_k)
 
     async def ingest_claude_markdown(self, source_path: str, content: str, sha256: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         scope, meta = _validate_ingest(source_path, content, sha256, metadata)
@@ -979,3 +1157,78 @@ class InMemoryMemoryStore:
         if isinstance(size, bool) or not isinstance(size, int) or not 1 <= size <= 10000:
             raise ValueError("size must be an integer between 1 and 10000")
         return _chunk_markdown(content, size)
+
+    async def memory_generation_upper_bound(self) -> str | None:
+        return max(self._memories, default=None)
+
+    async def list_memory_names_after(
+        self, cursor: str | None, upper_bound: str | None, limit: int,
+    ) -> list[str]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        if upper_bound is None:
+            return []
+        names = sorted(name for name in self._memories if name <= upper_bound and (cursor is None or name > cursor))
+        return names[:limit]
+
+    async def get_memory_snapshot(self, name: str) -> dict[str, Any] | None:
+        name = validate_memory_name(name)
+        content = self._memories.get(name)
+        if content is None:
+            return None
+        return {
+            "name": name, "content": content,
+            "entries": copy.deepcopy(self._entries.get(name, [])),
+            "source": next(
+                (copy.deepcopy(value) for value in self.sources.values() if value.get("document_name") == name),
+                None,
+            ),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def put_memory_generation_snapshot(
+        self, generation_id: str, name: str, snapshot: dict[str, Any] | None,
+    ) -> None:
+        name = validate_memory_name(name)
+        target = self._generation_snapshots.setdefault(generation_id, {})
+        if snapshot is None:
+            target.pop(name, None)
+        else:
+            target[name] = copy.deepcopy(snapshot)
+
+    async def get_memory_generation_snapshot(
+        self, generation_id: str, name: str,
+    ) -> dict[str, Any] | None:
+        return copy.deepcopy(self._generation_snapshots.get(generation_id, {}).get(validate_memory_name(name)))
+
+    async def list_memory_generation_changes_after(
+        self, generation_id: str, after_change_id: int, limit: int,
+    ) -> list[dict[str, Any]]:
+        if isinstance(after_change_id, bool) or not isinstance(after_change_id, int) or after_change_id < 0:
+            raise ValueError("after_change_id must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError("limit must be between 1 and 10000")
+        return [
+            copy.deepcopy(change) for change in self._generation_changes.get(generation_id, [])
+            if change["change_id"] > after_change_id
+        ][:limit]
+
+    async def memory_generation_change_high_watermark(self, generation_id: str) -> int:
+        changes = self._generation_changes.get(generation_id, [])
+        return max((change["change_id"] for change in changes), default=0)
+
+    async def acknowledge_memory_generation_changes(self, generation_id: str, through_change_id: int) -> int:
+        if isinstance(through_change_id, bool) or not isinstance(through_change_id, int) or through_change_id < 0:
+            raise ValueError("through_change_id must be a non-negative integer")
+        count = 0
+        for change in self._generation_changes.get(generation_id, []):
+            if change["change_id"] <= through_change_id and not change.get("acknowledged", False):
+                change["acknowledged"] = True
+                count += 1
+        return count
+
+    async def pending_memory_generation_changes(self, generation_id: str) -> int:
+        return sum(
+            1 for change in self._generation_changes.get(generation_id, [])
+            if not change.get("acknowledged", False)
+        )

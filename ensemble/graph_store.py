@@ -5,7 +5,7 @@ import json
 import os
 from typing import Any, Protocol
 
-from sqlalchemy import Column, ForeignKey, JSON, MetaData, String, Table, select
+from sqlalchemy import Column, ForeignKey, JSON, MetaData, String, Table, delete, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -44,6 +44,8 @@ class GraphStore(Protocol):
     async def add_node(self, node_type: str, properties: dict[str, Any], node_id: str | None = None) -> dict[str, Any]: ...
     async def add_edge(self, source: str, target: str, edge_type: str, properties: dict[str, Any], edge_id: str | None = None) -> dict[str, Any]: ...
     async def get_node(self, node_id: str) -> dict[str, Any] | None: ...
+    async def reclaim_source(self, source_id: str) -> int: ...
+    async def stats(self) -> dict[str, Any]: ...
     async def query_nodes(self, node_type: str | None, properties: dict[str, Any]) -> list[dict[str, Any]]: ...
     async def query_edges(self, from_type: str | None = None, to_type: str | None = None, relationship: str | None = None) -> list[dict[str, Any]]: ...
     async def traverse(self, start: str, direction: str = "out", max_depth: int = 1, edge_type: str | None = None) -> list[dict[str, Any]]: ...
@@ -106,10 +108,46 @@ class SqliteGraphStore:
             await connection.execute(edges.insert().values(id=identifier, source_id=source, target_id=target, edge_type=edge_type, properties=properties))
         return record
 
+    async def reclaim_source(self, source_id: str) -> int:
+        """Remove source-owned graph edges and source nodes, retaining shared entities."""
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        source_node_ids = select(nodes.c.id).where(
+            nodes.c.node_type == "source",
+            func.json_extract(nodes.c.properties, "$.source_id") == source_id,
+        )
+        async with self.engine.begin() as connection:
+            edge_result = await connection.execute(delete(edges).where(or_(
+                edges.c.source_id.in_(source_node_ids),
+                edges.c.target_id.in_(source_node_ids),
+                func.json_extract(edges.c.properties, "$.source_id") == source_id,
+            )))
+            node_result = await connection.execute(delete(nodes).where(
+                nodes.c.id.in_(source_node_ids),
+            ))
+        return int(edge_result.rowcount or 0) + int(node_result.rowcount or 0)
+
     async def get_node(self, node_id: str) -> dict[str, Any] | None:
         async with self.engine.connect() as connection:
             row = (await connection.execute(select(nodes).where(nodes.c.id == node_id))).mappings().first()
         return {"id": row["id"], "type": row["node_type"], "properties": row["properties"]} if row else None
+
+    async def stats(self) -> dict[str, Any]:
+        async with self.engine.connect() as connection:
+            node_rows = (await connection.execute(
+                select(nodes.c.node_type, func.count()).group_by(nodes.c.node_type).order_by(nodes.c.node_type)
+            )).all()
+            edge_rows = (await connection.execute(
+                select(edges.c.edge_type, func.count()).group_by(edges.c.edge_type).order_by(edges.c.edge_type)
+            )).all()
+        nodes_by_type = {name: int(count) for name, count in node_rows}
+        edges_by_relationship = {name: int(count) for name, count in edge_rows}
+        return {
+            "node_count": sum(nodes_by_type.values()),
+            "edge_count": sum(edges_by_relationship.values()),
+            "nodes_by_type": nodes_by_type,
+            "edges_by_relationship": edges_by_relationship,
+        }
 
     async def query_nodes(self, node_type: str | None, properties: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(properties, dict):

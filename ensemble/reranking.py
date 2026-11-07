@@ -8,6 +8,7 @@ import math
 import json
 import httpx
 import threading
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -229,7 +230,24 @@ class RerankingDecorator:
             call_kwargs = dict(kwargs)
             call_kwargs["rerank"] = False
             result = await retrieve(query, *args, **call_kwargs)
-            return await self.apply(query, result, enabled=enabled)
+            rerank_started = time.perf_counter()
+            result = await self.apply(query, result, enabled=enabled)
+            trace = kwargs.get("trace")
+            if callable(trace):
+                ranking = result.get("ranking") or {}
+                try:
+                    await trace({
+                        "name": "reranking",
+                        "status": ranking.get("status", "unknown"),
+                        "duration_ms": round((time.perf_counter() - rerank_started) * 1000, 3),
+                        "candidate_count": ranking.get("candidate_count", 0),
+                        "provider": ranking.get("provider"),
+                        "reranked": bool(result.get("reranked")),
+                    })
+                except Exception:
+                    # Trace persistence must never change retrieval behavior.
+                    pass
+            return result
 
         return decorated
 

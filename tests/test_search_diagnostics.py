@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from ensemble.api import create_app
 from ensemble.store import InMemoryDocumentStore
 from ensemble.vector_memory import InMemoryVectorStore
+from ensemble.thompson_store import InMemoryThompsonStore
 
 
 class UnavailableEmbeddings:
@@ -109,3 +110,99 @@ def test_hybrid_reports_collection_failure_without_discarding_document_vectors()
         assert body["channels"]["vector"]["collection_candidate_count"] == 0
         assert "vector_collection" in body["degraded"]
         assert body["results"]
+
+
+def test_hybrid_exposes_deterministic_rrf_contributions_and_configured_k(monkeypatch):
+    monkeypatch.setenv("ENSEMBLE_RRF_K", "20")
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        embedding_provider=FixedEmbeddings(),
+        vector_store=InMemoryVectorStore(),
+    )
+    with TestClient(app) as client:
+        _ingest(client)
+        response = client.post("/api/v1/search/hybrid", json={
+            "query": "independent lexical retrieval",
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["fusion"]["algorithm"] == "rrf"
+        assert body["fusion"]["k"] == 20
+        assert body["fusion"]["channels"]["lexical"]["candidate_count"] > 0
+        assert body["fusion"]["channels"]["vector"]["candidate_count"] > 0
+        fusion = body["fusion"]
+        diagnostics = fusion["results"]
+        assert diagnostics
+        first = diagnostics[0]
+        assert first["lexical_rank"] == 1
+        assert first["vector_rank"] == 1
+        assert first["contributions"]["lexical"] == round(1 / 21, 8)
+        assert first["contributions"]["vector"] == round(1 / 21, 8)
+        assert first["score"] == round(2 / 21, 8)
+        lexical_candidates = fusion["channels"]["lexical"]["candidates"]
+        vector_candidates = fusion["channels"]["vector"]["candidates"]
+        assert lexical_candidates[0]["rank"] == 1
+        assert vector_candidates[0]["rank"] == 1
+        assert lexical_candidates[0]["source_id"] == "diagnostic-source"
+        assert lexical_candidates[0]["chunk_id"] == vector_candidates[0]["chunk_id"]
+        assert lexical_candidates[0]["revision"] == 1
+        assert lexical_candidates[0]["score"] > 0
+        assert len(lexical_candidates) <= 100
+
+
+def test_hybrid_rrf_uses_stable_identifier_ties():
+    from ensemble.services import _rank
+
+    assert _rank({"chunk-b": 1.0, "chunk-a": 1.0}) == {
+        "chunk-a": 1,
+        "chunk-b": 2,
+    }
+
+
+def test_hybrid_supports_static_weighted_rrf(monkeypatch):
+    monkeypatch.setenv("ENSEMBLE_RRF_WEIGHTS", '{"lexical": 2.0, "vector": 0.5}')
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        embedding_provider=FixedEmbeddings(),
+        vector_store=InMemoryVectorStore(),
+    )
+    with TestClient(app) as client:
+        _ingest(client)
+        response = client.post("/api/v1/search/hybrid", json={
+            "query": "independent lexical retrieval",
+        })
+        assert response.status_code == 200
+        fusion = response.json()["fusion"]
+        assert fusion["weight_strategy"] == "static"
+        assert fusion["weights"] == {"lexical": 2.0, "vector": 0.5, "graph": 1.0}
+        assert fusion["algorithm"] == "weighted_rrf"
+
+
+def test_hybrid_uses_persisted_thompson_channel_feedback(monkeypatch):
+    monkeypatch.setenv("ENSEMBLE_RRF_WEIGHT_STRATEGY", "thompson")
+    thompson = InMemoryThompsonStore()
+    app = create_app(
+        store=InMemoryDocumentStore(),
+        embedding_provider=FixedEmbeddings(),
+        vector_store=InMemoryVectorStore(),
+        thompson_store=thompson,
+    )
+    with TestClient(app) as client:
+        _ingest(client)
+        for _ in range(8):
+            assert client.post("/api/v1/search/feedback", json={
+                "event_id": f"lexical-{_}", "channel": "lexical", "success": True,
+            }).status_code == 200
+        for _ in range(8):
+            assert client.post("/api/v1/search/feedback", json={
+                "event_id": f"vector-{_}", "channel": "vector", "success": False,
+            }).status_code == 200
+        response = client.post("/api/v1/search/hybrid", json={
+            "query": "independent lexical retrieval",
+        })
+        assert response.status_code == 200
+        fusion = response.json()["fusion"]
+        assert fusion["weight_strategy"] == "thompson"
+        assert fusion["algorithm"] == "weighted_rrf"
+        assert fusion["weights"]["lexical"] > 0
+        assert fusion["weights"]["vector"] > 0

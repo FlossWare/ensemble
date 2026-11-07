@@ -75,6 +75,13 @@ def test_learning_reset_requires_confirmation_and_preserves_thompson_state():
             "/api/v1/learning/outcomes",
             json={"task_id": "reset-1", "task_type": "test", "model": "haiku", "rating": 5, "tokens": 10, "cost": 0},
         )
+        artifact = {
+            "schema": "learning-artifact", "version": "0.1",
+            "artifact_type": "test.parameters", "source": "tests",
+            "created_at": "2026-11-05T00:00:00+00:00", "provenance": {},
+            "payload": {"run_id": "preserve-on-reset"},
+        }
+        assert http.post("/api/v1/learning/artifacts", json={"artifact": artifact}).status_code == 200
         denied = http.post("/api/v1/learning/reset", json={"confirm": False})
         reset = http.post("/api/v1/learning/reset", json={"confirm": True})
         assert denied.status_code == 400
@@ -82,6 +89,7 @@ def test_learning_reset_requires_confirmation_and_preserves_thompson_state():
         assert reset.json()["thompson_state_preserved"] is True
         assert http.get("/api/v1/learning/report").json()["total_outcomes"] == 0
         assert http.get("/api/v1/thompson/state").json()["state"]["models"]["haiku"]["calls"] == 1
+        assert len(http.get("/api/v1/learning/artifacts").json()["artifacts"]) == 1
 
 
 def test_learning_poc_action_contract_is_retained():
@@ -95,3 +103,87 @@ def test_learning_poc_action_contract_is_retained():
         )
         assert result.status_code == 200
         assert result.json()["checkpoint_advanced"] is True
+
+
+
+def test_learning_outcome_does_not_advance_when_memory_returns_unacknowledged_status():
+    from ensemble.memory_store import InMemoryMemoryStore
+
+    class StatusFailureMemoryStore(InMemoryMemoryStore):
+        def __init__(self):
+            super().__init__()
+            self.fail_snapshot = True
+
+        async def append(self, name, payload, event_id=None):
+            if name == "thompson-state" and self.fail_snapshot:
+                return {"status": "failed"}
+            return await super().append(name, payload, event_id)
+
+    memory = StatusFailureMemoryStore()
+    with TestClient(create_app(store=InMemoryDocumentStore(), memory_store=memory)) as http:
+        payload = {
+            "task_id": "snapshot-status-retry", "task_type": "testing",
+            "model": "sonnet", "rating": 5, "tokens": 100, "cost": 0.01,
+        }
+        failed = http.post("/api/v1/learning/outcomes", json=payload)
+        assert failed.status_code == 503
+        pending = http.get("/api/v1/learning/outcomes/snapshot-status-retry").json()["outcome"]
+        assert pending["status"] == "pending"
+        assert pending["thompson_recorded"] is False
+        assert http.get("/api/v1/thompson/state").json()["state"]["models"]["sonnet"]["calls"] == 1
+
+        memory.fail_snapshot = False
+        retried = http.post("/api/v1/learning/outcomes", json=payload)
+        assert retried.status_code == 200
+        assert retried.json()["checkpoint_advanced"] is True
+        assert http.get("/api/v1/thompson/state").json()["state"]["models"]["sonnet"]["calls"] == 1
+        snapshots = http.get("/api/v1/memory/memories/thompson-state/entries").json()["entries"]
+        assert len(snapshots) == 1
+
+
+def test_learning_artifact_does_not_acknowledge_unstored_memory_status():
+    from ensemble.learning_store import InMemoryLearningStore
+    from ensemble.memory_store import InMemoryMemoryStore
+
+    class StatusFailureMemoryStore(InMemoryMemoryStore):
+        async def append(self, name, payload, event_id=None):
+            if name == "learning-artifacts":
+                return {"status": "failed"}
+            return await super().append(name, payload, event_id)
+
+    artifact = {
+        "schema": "learning-artifact", "version": "0.1",
+        "artifact_type": "test.artifact", "source": "tests",
+        "created_at": "2026-11-05T00:00:00+00:00", "provenance": {},
+        "payload": {"run_id": "status-failure-1"},
+    }
+    with TestClient(create_app(
+        store=InMemoryDocumentStore(), memory_store=StatusFailureMemoryStore(),
+        learning_store=InMemoryLearningStore(),
+    )) as http:
+        failed = http.post("/api/v1/learning/artifacts", json={"artifact": artifact})
+        assert failed.status_code == 503
+        assert len(http.get("/api/v1/learning/artifacts").json()["artifacts"]) == 1
+
+
+
+def test_in_memory_learning_artifacts_are_newest_first_like_sqlite():
+    import asyncio
+    from ensemble.learning_store import InMemoryLearningStore
+
+    async def exercise():
+        store = InMemoryLearningStore()
+        base = {
+            "schema": "learning-artifact", "version": "0.1",
+            "artifact_type": "ga-parameters", "source": "tests",
+            "created_at": "2026-11-05T00:00:00+00:00", "provenance": {},
+            "payload": {"run_id": "run-1"},
+        }
+        await store.record_artifact(base)
+        await store.record_artifact({**base, "payload": {"run_id": "run-2"}})
+        artifacts = await store.list_artifacts(2)
+        assert [item["artifact_key"] for item in artifacts] == [
+            "ga-parameters:run-2", "ga-parameters:run-1",
+        ]
+
+    asyncio.run(exercise())

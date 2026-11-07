@@ -33,6 +33,14 @@ def test_thompson_rest_actions_record_state_reset_and_ping():
         )
         assert selected.status_code == 200
         assert selected.json()["model"] == "haiku"
+        assert selected.json()["selection_id"]
+        history = http.get("/api/v1/thompson/selections").json()["selections"]
+        assert len(history) == 1
+        assert history[0]["selection_id"] == selected.json()["selection_id"]
+        assert history[0]["selected_model"] == "haiku"
+        assert history[0]["task_type"] == "code_review"
+        assert history[0]["required_capability"] == 0.7
+        assert history[0]["max_cost"] is None
 
         recorded = http.post(
             "/api/v1/thompson/outcomes",
@@ -48,6 +56,7 @@ def test_thompson_rest_actions_record_state_reset_and_ping():
         assert reset.status_code == 200
         assert reset.json()["ok"] is True
         assert http.get("/api/v1/thompson/state").json()["state"]["models"]["haiku"]["calls"] == 0
+        assert len(http.get("/api/v1/thompson/selections").json()["selections"]) == 1
 
 
 def test_thompson_poc_action_contract_is_retained():
@@ -70,6 +79,7 @@ def test_thompson_state_survives_store_restart(tmp_path):
             await connection.run_sync(thompson_metadata.create_all)
         await store.record_outcome("sonnet", True, 0.04, 1200)
         await store.record_outcome("sonnet", False, 0.02, 500)
+        await store.record_selection("selection-0001", "sonnet", "code-review", 0.8, 0.05, "request-0001")
         await store.close()
 
         reopened = SqliteThompsonStore(url)
@@ -80,6 +90,20 @@ def test_thompson_state_survives_store_restart(tmp_path):
         assert stats["calls"] == 2
         assert stats["total_cost"] == 0.06
         assert stats["total_tokens"] == 1700
+        history = await reopened.recent_selections(10)
+        assert len(history) == 1
+        assert history[0]["selection_id"] == "selection-0001"
+        assert history[0]["selected_model"] == "sonnet"
+        assert history[0]["max_cost"] == 0.05
         await reopened.close()
 
     asyncio.run(exercise())
+
+
+
+def test_thompson_selection_history_limit_validation():
+    with TestClient(create_app(store=InMemoryDocumentStore())) as http:
+        assert http.get("/api/v1/thompson/selections?limit=0").status_code == 400
+        selected = http.post("/api/v1/thompson/select", json={"task_type": "testing"})
+        assert selected.status_code == 200
+        assert len(http.get("/api/v1/thompson/selections?limit=1").json()["selections"]) == 1

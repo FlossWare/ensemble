@@ -334,4 +334,4 @@ class InMemoryLearningStore:
     async def list_artifacts(self, limit: int = 50) -> list[dict[str, Any]]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
-        return list(self.artifacts.values())[-limit:]
+        return list(reversed(list(self.artifacts.values())[-limit:]))

@@ -546,6 +546,14 @@ def test_knowledge_publication_enters_hybrid_search_and_graph(tmp_path):
         assert result.status_code == 200
         hit = next(item for item in result.json()["results"] if item["source_id"] == "rfc-entity")
         assert hit["graph_score"] > 0
+        fusion = result.json()["fusion"]
+        assert fusion["channels"]["graph"]["candidate_count"] > 0
+        graph_diagnostic = next(
+            item for item in fusion["results"]
+            if item["chunk_id"] == hit["chunk_id"]
+        )
+        assert graph_diagnostic["graph_rank"] is not None
+        assert graph_diagnostic["contributions"]["graph"] > 0
         assert result.json()["graph_expansion"]["candidate_sources"] == 1
         assert result.json()["graph_expansion"]["duration_ms"] >= 0
         assert result.json()["channels"]["lexical"]["duration_ms"] >= 0
@@ -581,6 +589,22 @@ def test_search_retrieve_rest_contract_owns_lexical_vector_retrieval(tmp_path):
         assert body["results"][0]["source_id"] == "search-retrieve-source"
         assert body["retrieval"] == "lexical"
         assert body["reranked"] is False
+        trace_id = body["execution_trace_id"]
+        trace_response = client.get(f"/api/v1/execution-traces/{trace_id}")
+        assert trace_response.status_code == 200
+        trace = trace_response.json()["trace"]
+        assert trace["operation"] == "retrieval"
+        assert trace["status"] in {"completed", "degraded"}
+        stage_names = [stage["name"] for stage in trace["stages"]]
+        assert stage_names == [
+            "lexical_retrieval", "query_embedding", "rrf_fusion",
+            "generation_filter_and_final_order", "retrieval_response", "reranking",
+        ]
+        assert all(stage["duration_ms"] >= 0 for stage in trace["stages"])
+        assert next(stage for stage in trace["stages"] if stage["name"] == "rrf_fusion")["algorithm"] == "rrf"
+        assert next(stage for stage in trace["stages"] if stage["name"] == "reranking")["status"] in {
+            "fallback", "not_requested",
+        }
 
 
 def test_graph_expansion_source_reads_have_document_and_index_rest_contracts(tmp_path):
@@ -1338,3 +1362,76 @@ def test_context_assembly_works_without_search_or_memory_dependencies(tmp_path):
         assert result["sources"] == []
         assert result["intent"] is not None
         assert result["degraded"] == []
+
+
+
+def test_ranking_fuse_endpoint_supports_weighted_multi_channel_rrf():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        response = client.post("/api/v1/ranking/fuse", json={
+            "k": 10,
+            "weights": {"lexical": 2.0, "vector": 0.5, "graph": 1.0},
+            "channels": {
+                "lexical": [{"chunk_id": "a"}, {"chunk_id": "b"}],
+                "vector": [{"chunk_id": "b"}, {"chunk_id": "c"}],
+                "graph": [{"chunk_id": "c"}, {"chunk_id": "a"}],
+            },
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["algorithm"] == "weighted_rrf"
+        assert body["results"][0]["candidate_id"] == "a"
+        assert body["results"][0]["ranks"] == {"lexical": 1, "graph": 2}
+        assert body["results"][0]["contributions"] == {
+            "lexical": 2 / 11, "graph": 1 / 12,
+        }
+
+
+def test_ranking_fuse_endpoint_rejects_invalid_channel_weights():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        response = client.post("/api/v1/ranking/fuse", json={
+            "channels": {"lexical": [{"chunk_id": "a"}]},
+            "weights": {"lexical": -1},
+        })
+        assert response.status_code == 400
+
+
+def test_search_feedback_is_idempotent_and_updates_thompson_channel_state():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        payload = {
+            "event_id": "retrieval-feedback-001",
+            "channel": "graph",
+            "success": True,
+        }
+        first = client.post("/api/v1/search/feedback", json=payload)
+        duplicate = client.post("/api/v1/search/feedback", json=payload)
+        assert first.status_code == 200
+        assert first.json()["recorded"] is True
+        assert duplicate.status_code == 200
+        assert duplicate.json()["recorded"] is False
+        state = client.get("/api/v1/thompson/state").json()["state"]
+        assert state["models"]["retrieval:graph"]["successes"] == 1
+        assert state["models"]["retrieval:graph"]["calls"] == 1
+
+
+def test_search_feedback_rejects_conflicting_event_reuse():
+    app = create_app(store=InMemoryDocumentStore())
+    with TestClient(app) as client:
+        payload = {
+            "event_id": "retrieval-feedback-conflict",
+            "channel": "lexical",
+            "success": True,
+        }
+        assert client.post("/api/v1/search/feedback", json=payload).status_code == 200
+        payload["success"] = False
+        assert client.post("/api/v1/search/feedback", json=payload).status_code == 400
+
+
+def test_vector_readiness_checks_persistent_store():
+    app = create_app(store=InMemoryDocumentStore(), vector_store=InMemoryVectorStore())
+    with TestClient(app) as client:
+        response = client.get("/api/v1/vector/ready")
+        assert response.status_code == 200
+        assert response.json()["ready"] is True

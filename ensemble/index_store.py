@@ -115,6 +115,7 @@ class IndexStore(Protocol):
     async def release_generation_write_fence(self, generation_id: str) -> bool: ...
     async def recover_generation_write_fence(self) -> dict[str, Any]: ...
     async def assert_generation_writes_open(self) -> None: ...
+    async def assert_standalone_vector_writes_open(self) -> None: ...
     async def acknowledge_generation_change(self, source_id: str, sequence: int, tombstoned: bool) -> int: ...
 
 
@@ -312,7 +313,7 @@ class SqliteIndexStore:
                 generations.c.generation_id == generation_id,
                 generations.c.state == "building",
             ).values(
-                state="failed", verification={"failure": reason},
+                state="aborted", verification={"aborted": reason},
                 updated_at=datetime.now(timezone.utc),
             ))
             if changed.rowcount != 1:
@@ -527,6 +528,16 @@ class SqliteIndexStore:
                 ))
         return {"generation_id": generation_id, "through_change_id": high, "acquired_at": now.isoformat()}
 
+    async def assert_standalone_vector_writes_open(self) -> None:
+        async with self.engine.connect() as connection:
+            building = await connection.scalar(select(generations.c.generation_id).where(
+                generations.c.state == "building"
+            ).limit(1))
+        if building is not None:
+            raise RuntimeError(
+                "standalone vector mutations are paused during generation rebuild; use indexed ingestion"
+            )
+
     async def assert_generation_writes_open(self) -> None:
         async with self.engine.connect() as connection:
             fence = (await connection.execute(select(generation_write_fence).where(
@@ -551,9 +562,16 @@ class SqliteIndexStore:
             generation = (await connection.execute(select(generations).where(
                 generations.c.generation_id == fence["generation_id"]
             ))).mappings().first()
-            if generation is not None and generation["state"] == "active":
-                raise RuntimeError("active generation unexpectedly retains a write fence")
-            if generation is not None and generation["state"] == "building":
+            if generation is None:
+                raise RuntimeError(
+                    "write fence references a missing generation; refusing unsafe recovery"
+                )
+            if generation["state"] != "building":
+                raise RuntimeError(
+                    f"write fence references generation in {generation['state']} state; "
+                    "refusing unsafe recovery"
+                )
+            if generation["state"] == "building":
                 checkpoints = dict(generation["checkpoints"] or {})
                 for capability in (
                     "index_reconciliation", "documents_reconciliation",
@@ -717,6 +735,11 @@ class SqliteIndexStore:
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise ValueError("sequence must be a positive integer")
         async with self.engine.begin() as connection:
+            fence = (await connection.execute(select(generation_write_fence).where(
+                generation_write_fence.c.singleton_id == 1
+            ))).mappings().first()
+            if fence is not None:
+                raise RuntimeError("writes are fenced during generation cutover")
             row = (await connection.execute(select(sources).where(sources.c.source_id == source_id))).mappings().first()
             if row is None:
                 raise KeyError("unknown source")
@@ -726,23 +749,59 @@ class SqliteIndexStore:
                 raise RuntimeError("source is not soft-deleted")
             if sequence <= row["high_sequence"]:
                 raise ValueError("restore sequence must exceed the current source sequence")
+            now = datetime.now(timezone.utc)
             await connection.execute(update(sources).where(
                 sources.c.source_id == source_id
-            ).values(high_sequence=sequence, tombstoned=False, updated_at=datetime.now(timezone.utc)))
+            ).values(high_sequence=sequence, tombstoned=False, updated_at=now))
             updated = (await connection.execute(select(sources).where(
                 sources.c.source_id == source_id
             ))).mappings().one()
+            generation_rows = (await connection.execute(select(
+                generations.c.generation_id, generations.c.state,
+            ).where(generations.c.state.in_(("active", "building"))))).all()
+            for target_generation_id, state in generation_rows:
+                values = {
+                    "high_sequence": sequence,
+                    "revision_id": updated["revision_id"],
+                    "profiles": updated["profiles"],
+                    "tombstoned": False,
+                    "updated_at": now,
+                }
+                existing_generation_source = (await connection.execute(select(generation_sources).where(
+                    generation_sources.c.generation_id == target_generation_id,
+                    generation_sources.c.source_id == source_id,
+                ))).mappings().first()
+                if existing_generation_source is None:
+                    await connection.execute(generation_sources.insert().values(
+                        generation_id=target_generation_id, source_id=source_id, **values,
+                    ))
+                else:
+                    await connection.execute(generation_sources.update().where(
+                        generation_sources.c.generation_id == target_generation_id,
+                        generation_sources.c.source_id == source_id,
+                    ).values(**values))
+                await connection.execute(generation_changes.insert().values(
+                    generation_id=target_generation_id, source_id=source_id,
+                    high_sequence=sequence, revision_id=updated["revision_id"],
+                    profiles=updated["profiles"], tombstoned=False,
+                    acknowledged=False, created_at=now,
+                ))
         return _as_source(updated)
 
     async def mark_purged(self, source_id: str) -> None:
         async with self.engine.begin() as connection:
-            changed = await connection.execute(update(sources).where(
+            current = (await connection.execute(select(
+                sources.c.tombstoned, sources.c.purged,
+            ).where(sources.c.source_id == source_id))).first()
+            if current is None or not current.tombstoned:
+                raise RuntimeError("only a soft-deleted source can be permanently purged")
+            if current.purged:
+                return
+            await connection.execute(update(sources).where(
                 sources.c.source_id == source_id,
                 sources.c.tombstoned.is_(True),
                 sources.c.purged.is_(False),
             ).values(purged=True, updated_at=datetime.now(timezone.utc)))
-            if changed.rowcount != 1:
-                raise RuntimeError("only a soft-deleted source can be permanently purged")
 
     async def get_sources(self, source_ids: list[str]) -> dict[str, dict[str, Any]]:
         if not source_ids:

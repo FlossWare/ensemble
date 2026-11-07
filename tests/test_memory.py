@@ -225,6 +225,12 @@ def test_memory_knowledge_ingest_is_idempotent_and_reconcile_marks_stale():
         )
         assert hybrid.status_code == 200
         assert hybrid.json()["results"]
+        fused = hybrid.json()["results"][0]
+        assert fused["fusion"]["algorithm"] == "rrf"
+        assert fused["fusion"]["k"] == 60
+        assert fused["fusion"]["ranks"]
+        assert fused["fusion"]["contributions"]
+        assert fused["score"] > 0
 
         reconciled = http.post(
             "/api/v1/memory/sources/reconcile",
@@ -373,3 +379,405 @@ def test_memory_delete_removes_content_and_event_ledger():
         assert http.get("/api/v1/memory/memories/notes").status_code == 404
         assert "notes" not in http.get("/api/v1/memory/memories").json()["memories"]
         assert http.delete("/api/v1/memory/memories/notes").status_code == 404
+
+
+def test_context_assembly_uses_an_exact_configured_token_counter():
+    from ensemble.api import _assemble_context
+
+    class WordCounter:
+        tokenizer_id = "test-whitespace"
+        exact = True
+        description = "exact whitespace-token count for deterministic tests"
+
+        def count(self, text):
+            return len(text.split())
+
+        def truncate(self, text, max_tokens):
+            return " ".join(text.split()[:max_tokens])
+
+    result = _assemble_context([{
+        "source": "memory", "title": "retrieval",
+        "content": (
+            "An unrelated sentence discusses other systems. "
+            "Retrieval preserves provenance and source attribution. "
+            "A final unrelated sentence discusses storage."
+        ),
+    }], "retrieval provenance", 9, WordCounter())
+    assert result["tokenizer_id"] == "test-whitespace"
+    assert result["tokenizer_exact"] is True
+    assert result["estimated_tokens"] <= result["max_tokens"]
+    assert result["compressed_count"] == 1
+    assert "Retrieval preserves provenance" in result["context"]
+
+
+def test_context_tokenizer_status_is_reported_by_rest():
+    with client() as http:
+        response = http.get("/api/v1/context/tokenizer")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is True
+        assert body["exact"] is False
+        assert body["id"] == "approx-char4"
+
+
+
+def test_memory_semantic_search_matches_identifiers_exactly_not_prefixes():
+    from ensemble.memory_store import _semantic_search
+
+    documents = [
+        ("exact", "The deployment run identifier is build-2026-11-04 and remains active."),
+        ("prefix", "The deployment run identifier is build-2026-11-040."),
+    ]
+    results = _semantic_search(documents, set(), "build-2026-11-04", 10, None)
+    assert [item["file"] for item in results] == ["exact"]
+
+
+def test_memory_semantic_search_matches_identifier_inside_composite_event_id():
+    from ensemble.memory_store import _semantic_search
+
+    results = _semantic_search(
+        [("events", "Stored event id: session:run-4821:completion")],
+        set(), "run-4821", 10, None,
+    )
+    assert [item["file"] for item in results] == ["events"]
+
+
+def test_memory_semantic_search_handles_unicode_prose():
+    from ensemble.memory_store import _semantic_search
+
+    results = _semantic_search(
+        [("unicode", "Обсуждаем архитектура распределённой системы.")],
+        set(), "архитектура", 10, None,
+    )
+    assert [item["file"] for item in results] == ["unicode"]
+
+
+def test_memory_semantic_search_handles_accented_prose():
+    from ensemble.memory_store import _semantic_search
+
+    results = _semantic_search(
+        [("notes", "The café index preserves résumé metadata.")],
+        set(), "café", 10, None,
+    )
+    assert [item["file"] for item in results] == ["notes"]
+
+
+def test_memory_semantic_search_strips_trailing_period_before_identifier_classification():
+    from ensemble.memory_store import _semantic_search
+
+    results = _semantic_search(
+        [("versions", "The exact schema version is 1.2.3 and remains current.")],
+        set(), "1.2.3.", 10, None,
+    )
+    assert [item["file"] for item in results] == ["versions"]
+
+
+def test_memory_semantic_search_returns_no_results_for_unknown_identifier():
+    from ensemble.memory_store import _semantic_search
+
+    results = _semantic_search(
+        [("known", "The only identifier here is request-100.")],
+        set(), "request-101", 10, None,
+    )
+    assert results == []
+
+
+def test_memory_vectorizer_preserves_structured_identifiers():
+    from ensemble.memory_store import _vectorize_text
+
+    vector = _vectorize_text("run-4821 session:alpha.v2")
+    assert "run-4821" in vector
+    assert "run" in vector
+    assert "4821" in vector
+    assert "session:alpha.v2" in vector
+    assert "session" in vector
+    assert "alpha" in vector
+
+
+
+def test_memory_semantic_search_limit_takes_precedence_over_top_k_alias():
+    with client() as http:
+        for index in range(5):
+            response = http.put(
+                f"/api/v1/memory/memories/retrieval-{index}",
+                json={"content": f"# Retrieval {index}\n\nretrieval contract detail {index}"},
+            )
+            assert response.status_code == 200
+
+        limited = http.post(
+            "/api/v1/memory/search/semantic",
+            json={"query": "retrieval contract detail", "limit": 1, "top_k": 4},
+        )
+        top_k_only = http.post(
+            "/api/v1/memory/search/semantic",
+            json={"query": "retrieval contract detail", "top_k": 3},
+        )
+        limit_only = http.post(
+            "/api/v1/memory/search/semantic",
+            json={"query": "retrieval contract detail", "limit": 2},
+        )
+
+        assert limited.status_code == 200
+        assert top_k_only.status_code == 200
+        assert limit_only.status_code == 200
+        assert len(limited.json()["results"]) == 1
+        assert len(top_k_only.json()["results"]) == 3
+        assert len(limit_only.json()["results"]) == 2
+
+
+def test_memory_append_once_preserves_timestamp_and_exposes_ledger_metadata():
+    timestamp = "2026-10-08T23:00:00Z"
+    payload = {"entry": {"event": "SessionEnd", "timestamp": timestamp}}
+    with client() as http:
+        first = http.put("/api/v1/memory/memories/events/entries/event-1", json=payload)
+        duplicate = http.put("/api/v1/memory/memories/events/entries/event-1", json=payload)
+        changed_timestamp = http.put(
+            "/api/v1/memory/memories/events/entries/event-1",
+            json={"entry": {"event": "SessionEnd", "timestamp": "2026-10-08T23:01:00Z"}},
+        )
+        assert first.status_code == 200
+        assert first.json()["status"] == "stored"
+        assert duplicate.status_code == 200
+        assert duplicate.json()["status"] == "duplicate"
+        assert changed_timestamp.status_code == 409
+        assert "different payload" in changed_timestamp.json()["detail"]
+
+        record = http.get("/api/v1/memory/memories/events/entries").json()["entries"][0]
+        assert record["timestamp"] == timestamp
+        assert len(record["payload_sha256"]) == 64
+        assert record["captured_at"].endswith("Z")
+
+        reserved = http.put(
+            "/api/v1/memory/memories/events/entries/event-2",
+            json={"entry": {"event": "SessionEnd", "captured_at": "caller-value"}},
+        )
+        assert reserved.status_code == 400
+
+
+def test_memory_semantic_search_returns_content_and_respects_source_filters():
+    import hashlib
+
+    knowledge = "# Durable knowledge\\nDurable provenance is preserved in imported knowledge documents."
+    digest = hashlib.sha256(knowledge.encode("utf-8")).hexdigest()
+    with client() as http:
+        assert http.put(
+            "/api/v1/memory/memories/notes",
+            json={"content": "# Memory\\nMemory provenance remains available to semantic search."},
+        ).status_code == 200
+        imported = http.post("/api/v1/memory/sources/import", json={
+            "path": "/workspace/knowledge.md", "content": knowledge,
+            "sha256": digest, "metadata": {"scope": "/workspace"},
+        })
+        assert imported.status_code == 200
+
+        memory = http.post("/api/v1/memory/search/semantic", json={
+            "query": "provenance", "source": "memory",
+        })
+        durable = http.post("/api/v1/memory/search/semantic", json={
+            "query": "provenance", "source": "claude-code",
+        })
+        assert memory.status_code == durable.status_code == 200
+        assert memory.json()["results"]
+        assert durable.json()["results"]
+        assert all(not item["file"].startswith("claude-code-") for item in memory.json()["results"])
+        assert all(item["file"].startswith("claude-code-") for item in durable.json()["results"])
+        assert "Memory provenance" in memory.json()["results"][0]["content"]
+        assert "Durable provenance" in durable.json()["results"][0]["content"]
+
+
+def test_memory_semantic_search_ranks_exact_operational_artifact_phrase_first():
+    with client() as http:
+        for name, content in (
+            ("exact-artifact", "# Learning\\nThe operational learning artifact records the GA decision."),
+            ("related-artifact", "# Learning\\nOperational learning artifacts can record many GA decisions."),
+        ):
+            assert http.put(
+                f"/api/v1/memory/memories/{name}", json={"content": content},
+            ).status_code == 200
+        response = http.post("/api/v1/memory/search/semantic", json={
+            "query": "operational learning artifact", "limit": 10,
+        })
+        assert response.status_code == 200
+        results = response.json()["results"]
+        assert results[0]["file"] == "exact-artifact"
+        assert results[0]["score"] == 1.0
+
+
+def test_memory_entry_endpoint_exposes_bounded_offset_pagination():
+    with client() as http:
+        for value in ("first", "second", "third"):
+            assert http.post(
+                "/api/v1/memory/memories/history/entries",
+                json={"entry": {"value": value}},
+            ).status_code == 200
+
+        first_page = http.get("/api/v1/memory/memories/history/entries?limit=2&offset=0")
+        second_page = http.get("/api/v1/memory/memories/history/entries?limit=2&offset=2")
+        invalid_offset = http.get("/api/v1/memory/memories/history/entries?limit=2&offset=-1")
+
+        assert first_page.status_code == 200
+        assert [item["value"] for item in first_page.json()["entries"]] == ["second", "third"]
+        assert first_page.json()["next_offset"] == 2
+        assert second_page.status_code == 200
+        assert [item["value"] for item in second_page.json()["entries"]] == ["first"]
+        assert second_page.json()["next_offset"] is None
+        assert invalid_offset.status_code == 400
+
+def test_session_events_ledger_supports_idempotent_append_and_readback():
+    with client() as http:
+        event = {
+            "session_id": "session-ledger-test",
+            "project": "ensemble",
+            "uuid": "message-1",
+            "role": "user",
+            "kind": "text",
+            "text": "Retrieve existing session history through Memory.",
+            "timestamp": "2026-11-05T12:00:00Z",
+        }
+        event_id = "session-message-1"
+
+        first = http.put(
+            f"/api/v1/memory/memories/session-events/entries/{event_id}",
+            json={"entry": event},
+        )
+        retry = http.put(
+            f"/api/v1/memory/memories/session-events/entries/{event_id}",
+            json={"entry": event},
+        )
+        conflict = http.put(
+            f"/api/v1/memory/memories/session-events/entries/{event_id}",
+            json={"entry": {**event, "text": "Different content."}},
+        )
+        history = http.get(
+            "/api/v1/memory/memories/session-events/entries",
+            params={"limit": 100},
+        )
+
+        assert first.status_code == 200
+        assert first.json()["status"] == "stored"
+        assert retry.status_code == 200
+        assert retry.json()["status"] == "duplicate"
+        assert conflict.status_code == 409
+        assert history.status_code == 200
+        entries = history.json()["entries"]
+        assert len(entries) == 1
+        assert entries[0]["event_id"] == event_id
+        assert entries[0]["text"] == event["text"]
+
+
+
+
+def test_memory_lexical_semantic_and_hybrid_retrieval_smoke_metrics():
+    """Compare Memory channels on the explicitly synthetic smoke qrels.
+
+    This is a deterministic integration smoke test, not a production relevance
+    benchmark. Production quality claims require representative, human-reviewed
+    qrels from the intended corpus.
+    """
+    import json
+    from pathlib import Path
+
+    from ensemble.retrieval_eval import evaluate_runs
+
+    fixture_path = Path(__file__).parents[1] / "eval" / "retrieval-smoke.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    names = {
+        document["source_id"]: document["source_id"].replace("/", "-")
+        for document in fixture["documents"]
+    }
+    qrels = {}
+    runs = {"lexical": {}, "semantic": {}, "hybrid": {}}
+
+    with client() as http:
+        for document in fixture["documents"]:
+            name = names[document["source_id"]]
+            response = http.put(
+                f"/api/v1/memory/memories/{name}",
+                json={"content": f"# {document['title']}\\n\\n{document['content']}"},
+            )
+            assert response.status_code == 200, response.text
+
+        for query in fixture["queries"]:
+            query_id, text = query["id"], query["text"]
+            qrels[query_id] = {
+                names[source_id]: grade
+                for source_id, grade in query["relevance"].items()
+            }
+
+            lexical = http.post(
+                "/api/v1/memory/search/keywords",
+                json={"keywords": text.split(), "limit": 100},
+            )
+            semantic = http.post(
+                "/api/v1/memory/search/semantic",
+                json={"query": text, "limit": 100},
+            )
+            hybrid = http.post(
+                "/api/v1/memory/search/hybrid",
+                json={"query": text, "limit": 100},
+            )
+            assert lexical.status_code == 200, lexical.text
+            assert semantic.status_code == 200, semantic.text
+            assert hybrid.status_code == 200, hybrid.text
+
+            runs["lexical"][query_id] = [
+                item["file"] for item in lexical.json()["results"]
+            ]
+            runs["semantic"][query_id] = [
+                item["file"] for item in semantic.json()["results"]
+            ]
+            runs["hybrid"][query_id] = [
+                item["file"] for item in hybrid.json()["results"]
+            ]
+
+        metrics = evaluate_runs(qrels, runs, k=fixture["k"])
+
+    assert set(metrics["systems"]) == {"lexical", "semantic", "hybrid"}
+    for system in ("lexical", "semantic", "hybrid"):
+        macro = metrics["systems"][system]["macro"]
+        assert 0.0 <= macro["recall@3"] <= 1.0
+        assert 0.0 <= macro["mrr@3"] <= 1.0
+        assert 0.0 <= macro["ndcg@3"] <= 1.0
+
+
+
+def test_memory_source_reconciliation_isolated_to_exact_scope():
+    import hashlib
+
+    workspace_content = "Workspace-only material about retrieval provenance."
+    archive_content = "Archive-only material about durable checkpoints."
+    with client() as http:
+        for path, content, scope in (
+            ("/workspace/search.md", workspace_content, "/workspace"),
+            ("/archive/operations.md", archive_content, "/archive"),
+        ):
+            response = http.post(
+                "/api/v1/memory/sources/import",
+                json={
+                    "path": path,
+                    "content": content,
+                    "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    "metadata": {"scope": scope},
+                },
+            )
+            assert response.status_code == 200
+
+        reconciled = http.post(
+            "/api/v1/memory/sources/reconcile",
+            json={"source": "claude-code", "scope": "/workspace", "paths": []},
+        )
+        assert reconciled.status_code == 200
+        assert reconciled.json()["stale"] == ["/workspace/search.md"]
+
+        workspace_results = http.post(
+            "/api/v1/memory/search/semantic",
+            json={"query": "retrieval provenance", "source": "claude-code"},
+        ).json()["results"]
+        archive_results = http.post(
+            "/api/v1/memory/search/semantic",
+            json={"query": "durable checkpoints", "source": "claude-code"},
+        ).json()["results"]
+
+        assert all("Workspace-only material" not in item["content"] for item in workspace_results)
+        assert any("Archive-only material" in item["content"] for item in archive_results)
+        assert http.get("/api/v1/memory/sources/status").json()["indexed_document_count"] == 1

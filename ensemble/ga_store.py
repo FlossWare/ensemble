@@ -121,8 +121,9 @@ class SqliteGAStore:
 def _public_run(row: dict[str, Any]) -> dict[str, Any]:
     result = dict(row)
     for key in ("created_at", "started_at", "completed_at"):
-        if result.get(key) is not None:
-            result[key] = result[key].isoformat()
+        value = result.get(key)
+        if value is not None and hasattr(value, "isoformat"):
+            result[key] = value.isoformat()
     return result
 
 
@@ -155,15 +156,16 @@ class InMemoryGAStore:
         row = {"id": run_id, "status": "pending", "config": config, "result": None,
                "error": None, "created_at": now, "started_at": None, "completed_at": None}
         self.runs[run_id] = row
-        return dict(row)
+        return _public_run(row)
 
     async def get_run(self, run_id: str) -> dict[str, Any] | None:
-        return dict(self.runs[run_id]) if run_id in self.runs else None
+        return _public_run(self.runs[run_id]) if run_id in self.runs else None
 
     async def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
-        return sorted((dict(row) for row in self.runs.values()), key=lambda row: row["created_at"], reverse=True)[:limit]
+        rows = sorted(self.runs.values(), key=lambda row: row["created_at"], reverse=True)[:limit]
+        return [_public_run(row) for row in rows]
 
     async def update_run(self, run_id: str, **values: Any) -> None:
         if run_id not in self.runs:

@@ -72,6 +72,160 @@ ingest.addEventListener("click",async()=>{
  }catch(error){status.textContent="Ingestion failed: "+error.message;ingest.disabled=false;}
 });
 
+const crawlButton=document.getElementById("crawl-preview");
+const crawlPages=document.getElementById("crawl-pages");
+const crawlDepth=document.getElementById("crawl-depth");
+const crawlResults=document.getElementById("crawl-results");
+crawlButton.addEventListener("click",async()=>{
+ const requestedUri=uri.value.trim();
+ const maxPages=Number.parseInt(crawlPages.value,10);
+ const maxDepth=Number.parseInt(crawlDepth.value,10);
+ crawlButton.disabled=true;
+ status.textContent="Checking robots policy and crawling bounded same-origin pages…";
+ try{
+  const result=await request("/api/v1/ingest/urls/crawl-preview",{
+   uri:requestedUri,max_pages:maxPages,max_depth:maxDepth
+  });
+  if(uri.value.trim()!==requestedUri){status.textContent="URI changed. Run a fresh crawl preview.";return;}
+  crawlResults.textContent=JSON.stringify(result,null,2);
+  status.textContent="Crawl preview complete: "+result.page_count+" pages, "+result.attempted_pages+" attempts. Nothing was ingested.";
+ }catch(error){
+  crawlResults.textContent="Crawl preview failed: "+error.message;
+  status.textContent="Crawl preview failed.";
+ }finally{crawlButton.disabled=false;}
+});
+
+
+const crawlQueue=document.getElementById("crawl-queue");
+const crawlRetry=document.getElementById("crawl-retry");
+const crawlJobResults=document.getElementById("crawl-job-results");
+const crawlIngest=document.getElementById("crawl-ingest");
+
+const crawlInterval=document.getElementById("crawl-interval");
+const crawlSchedule=document.getElementById("crawl-schedule");
+const crawlSchedules=document.getElementById("crawl-schedules");
+async function refreshCrawlSchedules(){
+ const response=await fetch("/api/v1/ingest/urls/schedules");
+ const payload=await response.json();
+ if(!response.ok)throw new Error(typeof payload.detail==="string"?payload.detail:JSON.stringify(payload.detail));
+ crawlSchedules.replaceChildren();
+ if(!payload.schedules.length){crawlSchedules.textContent="No automatic refresh schedules.";return;}
+ for(const schedule of payload.schedules){
+  const row=document.createElement("div");
+  row.className="inline-fields";
+  const summary=document.createElement("span");
+  summary.textContent=schedule.uri+" · every "+schedule.interval_seconds+"s · "+(schedule.enabled?"enabled":"paused")+" · next "+schedule.next_run_at;
+  row.appendChild(summary);
+  const toggle=document.createElement("button");
+  toggle.type="button";
+  toggle.textContent=schedule.enabled?"Pause":"Resume";
+  toggle.addEventListener("click",async()=>{
+   toggle.disabled=true;
+   try{
+    await request("/api/v1/ingest/urls/schedules/"+encodeURIComponent(schedule.schedule_id)+"/"+(schedule.enabled?"pause":"resume"),{});
+    await refreshCrawlSchedules();
+   }catch(error){status.textContent="Schedule update failed: "+error.message;}
+   finally{toggle.disabled=false;}
+  });
+  row.appendChild(toggle);
+  const remove=document.createElement("button");
+  remove.type="button";
+  remove.textContent="Delete";
+  remove.addEventListener("click",async()=>{
+   remove.disabled=true;
+   try{
+    const result=await fetch("/api/v1/ingest/urls/schedules/"+encodeURIComponent(schedule.schedule_id),{method:"DELETE"});
+    if(!result.ok)throw new Error("schedule deletion failed");
+    await refreshCrawlSchedules();
+   }catch(error){status.textContent="Schedule deletion failed: "+error.message;}
+   finally{remove.disabled=false;}
+  });
+  row.appendChild(remove);
+  crawlSchedules.appendChild(row);
+ }
+}
+crawlSchedule.addEventListener("click",async()=>{
+ crawlSchedule.disabled=true;
+ try{
+  const result=await request("/api/v1/ingest/urls/schedules",{
+   uri:uri.value.trim(),
+   interval_seconds:Number.parseInt(crawlInterval.value,10),
+   max_pages:Number.parseInt(crawlPages.value,10),
+   max_depth:Number.parseInt(crawlDepth.value,10),
+   run_immediately:true
+  });
+  status.textContent="Automatic source refresh scheduled: "+result.schedule.schedule_id;
+  await refreshCrawlSchedules();
+ }catch(error){status.textContent="Could not schedule source refresh: "+error.message;}
+ finally{crawlSchedule.disabled=false;}
+});
+refreshCrawlSchedules().catch(error=>{crawlSchedules.textContent="Could not load source schedules: "+error.message;});
+
+let activeCrawlJobId=null;
+async function readCrawlJob(jobId){
+ const response=await fetch("/api/v1/ingest/urls/crawl-jobs/"+encodeURIComponent(jobId));
+ const payload=await response.json();
+ if(!response.ok)throw new Error(typeof payload.detail==="string"?payload.detail:JSON.stringify(payload.detail));
+ return payload.job;
+}
+async function pollCrawlJob(jobId){
+ for(let attempt=0;attempt<120;attempt++){
+  const job=await readCrawlJob(jobId);
+  crawlJobResults.textContent=JSON.stringify(job,null,2);
+  if(job.status==="completed"||job.status==="failed"||job.status==="interrupted"){
+   crawlRetry.hidden=job.status!=="failed"&&job.status!=="interrupted";
+   crawlIngest.hidden=job.status!=="completed"||job.result?.page_count===0||job.ingestion?.status==="completed";
+   status.textContent="Durable crawl "+job.status+": "+job.job_id;
+   return;
+  }
+  await new Promise(resolve=>setTimeout(resolve,1000));
+ }
+ status.textContent="Crawl remains queued or running. Its job is durable and can be checked later.";
+}
+crawlQueue.addEventListener("click",async()=>{
+ const requestedUri=uri.value.trim();
+ crawlQueue.disabled=true;
+ crawlRetry.hidden=true;
+ status.textContent="Queueing durable crawl job…";
+ try{
+  const result=await request("/api/v1/ingest/urls/crawl-jobs",{
+   uri:requestedUri,
+   max_pages:Number.parseInt(crawlPages.value,10),
+   max_depth:Number.parseInt(crawlDepth.value,10)
+  });
+  activeCrawlJobId=result.job.job_id;
+  crawlJobResults.textContent=JSON.stringify(result.job,null,2);
+  await pollCrawlJob(activeCrawlJobId);
+ }catch(error){
+  status.textContent="Could not queue or inspect crawl job: "+error.message;
+ }finally{crawlQueue.disabled=false;}
+});
+
+crawlIngest.addEventListener("click",async()=>{
+ if(!activeCrawlJobId)return;
+ crawlIngest.disabled=true;
+ status.textContent="Ingesting persisted crawl pages with per-page checkpoints…";
+ try{
+  const result=await request("/api/v1/ingest/urls/crawl-jobs/"+encodeURIComponent(activeCrawlJobId)+"/ingest",{});
+  crawlJobResults.textContent=JSON.stringify(result,null,2);
+  status.textContent="Crawl ingestion "+result.ingestion.status+". Completed pages are checkpointed; failed pages can be retried.";
+  crawlIngest.hidden=result.ingestion.status==="completed";
+ }catch(error){status.textContent="Crawl ingestion failed: "+error.message;}
+ finally{crawlIngest.disabled=false;}
+});
+
+crawlRetry.addEventListener("click",async()=>{
+ if(!activeCrawlJobId)return;
+ crawlRetry.disabled=true;
+ try{
+  const result=await request("/api/v1/ingest/urls/crawl-jobs/"+encodeURIComponent(activeCrawlJobId)+"/retry",{});
+  crawlJobResults.textContent=JSON.stringify(result.job,null,2);
+  crawlRetry.hidden=true;
+  await pollCrawlJob(activeCrawlJobId);
+ }catch(error){status.textContent="Crawl retry failed: "+error.message;}
+ finally{crawlRetry.disabled=false;}
+});
+
 const refreshHealth=document.getElementById("refresh-health");
 const healthResult=document.getElementById("health-result");
 refreshHealth.addEventListener("click",async()=>{
@@ -201,6 +355,31 @@ const thompsonMaxCost=document.getElementById("thompson-max-cost");
 const thompsonSelection=document.getElementById("thompson-selection");
 const thompsonRefresh=document.getElementById("thompson-refresh");
 const thompsonState=document.getElementById("thompson-state");
+const thompsonHistory=document.getElementById("thompson-history");
+async function refreshThompsonHistory(){
+ try{
+  const response=await fetch("/api/v1/thompson/selections?limit=50");
+  const payload=await response.json();
+  if(!response.ok)throw new Error(JSON.stringify(payload.detail||payload));
+  thompsonHistory.replaceChildren();
+  const selections=Array.isArray(payload.selections)?payload.selections:[];
+  if(!selections.length){thompsonHistory.textContent="No model selections recorded yet.";return;}
+  const table=document.createElement("table");
+  const head=document.createElement("tr");
+  for(const label of ["Selected model","Task type","Capability threshold","Max cost","Selected at","Request ID"]){
+   const cell=document.createElement("th");cell.textContent=label;head.append(cell);
+  }
+  table.append(head);
+  for(const selection of selections){
+   const row=document.createElement("tr");
+   const values=[selection.selected_model,selection.task_type,selection.required_capability,
+    selection.max_cost==null?"No limit":selection.max_cost,selection.created_at,selection.request_id];
+   for(const value of values){const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);}
+   table.append(row);
+  }
+  thompsonHistory.append(table);
+ }catch(error){thompsonHistory.textContent="Could not load selection history: "+error.message;}
+}
 async function refreshThompson(){
  thompsonRefresh.disabled=true;
  try{
@@ -211,20 +390,22 @@ async function refreshThompson(){
   thompsonState.replaceChildren();
   const table=document.createElement("table");
   const head=document.createElement("tr");
-  for(const label of ["Model","Successes","Failures","Calls","Avg cost","Total cost","Tokens","Action"]){
+  for(const label of ["Model","Successes","Failures","Alpha","Beta","Posterior mean","Calls","Avg cost","Total cost","Tokens","Action"]){
    const cell=document.createElement("th");cell.textContent=label;head.append(cell);
   }
   table.append(head);
   for(const [name,stats] of Object.entries(models)){
    const row=document.createElement("tr");
-   const values=[name,stats.successes,stats.failures,stats.calls,
+   const alpha=Number(stats.successes)+1,beta=Number(stats.failures)+1;
+   const posteriorMean=alpha/(alpha+beta);
+   const values=[name,stats.successes,stats.failures,alpha,beta,posteriorMean.toFixed(4),stats.calls,
     stats.calls?(stats.total_cost/stats.calls).toFixed(6):"0",
     Number(stats.total_cost).toFixed(6),stats.total_tokens];
    for(const value of values){const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);}
    const action=document.createElement("td");
    const reset=document.createElement("button");reset.type="button";reset.textContent="Reset";
    reset.addEventListener("click",async()=>{
-    if(!window.confirm("Reset Thompson history for "+name+"?"))return;
+    if(!window.confirm("Reset Thompson statistics for "+name+"?"))return;
     reset.disabled=true;
     try{
      const result=await fetch("/api/v1/thompson/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:name})});
@@ -247,11 +428,13 @@ thompsonForm.addEventListener("submit",async event=>{
  try{
   const result=await fetch("/api/v1/thompson/select",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
   const data=await result.json();if(!result.ok)throw new Error(JSON.stringify(data.detail||data));
-  thompsonSelection.textContent="Selected "+data.model+" (request "+data.request_id+")";
+  thompsonSelection.textContent="Selected "+data.model+" (selection "+data.selection_id+", request "+data.request_id+")";
+  await refreshThompsonHistory();
  }catch(error){thompsonSelection.textContent="Selection failed: "+error.message;}
 });
-thompsonRefresh.addEventListener("click",refreshThompson);
+thompsonRefresh.addEventListener("click",()=>{refreshThompson();refreshThompsonHistory();});
 refreshThompson();
+refreshThompsonHistory();
 
 const learningRefresh=document.getElementById("learning-refresh");
 const learningReset=document.getElementById("learning-reset");
@@ -338,7 +521,7 @@ async function controlJson(path, method="GET", payload=null){
 }
 const capabilities=[
  ["Embeddings","/api/v1/embeddings/health",null],
- ["Vector","/api/v1/vector/health",null],
+ ["Vector","/api/v1/vector/health","/api/v1/vector/ready"],
  ["Lexical","/api/v1/search/lexical/health","/api/v1/search/lexical/ready"],
  ["Hybrid","/api/v1/search/hybrid/health","/api/v1/search/hybrid/ready"],
  ["Reranking","/api/v1/reranking/health","/api/v1/reranking/ready"],
@@ -349,8 +532,8 @@ const capabilities=[
  ["Intent","/api/v1/intent/health","/api/v1/intent/ready"],
  ["Ranking","/api/v1/ranking/health","/api/v1/ranking/ready"],
  ["Knowledge","/api/v1/knowledge/health","/api/v1/knowledge/ready"],
- ["Memory","/api/v1/memory/health","/api/v1/memory/memories/{name}y"],
- ["Graph","/api/v1/graph/health",null],
+ ["Memory","/api/v1/memory/health","/api/v1/memory/ready"],
+ ["Graph","/api/v1/graph/health","/api/v1/graph/ready"],
  ["Thompson","/api/v1/thompson/health","/api/v1/thompson/ready"],
  ["Learning","/api/v1/learning/health","/api/v1/learning/ready"],
  ["GA Tuning","/api/v1/ga/health","/api/v1/ga/ready"]
@@ -394,10 +577,156 @@ async function refreshCapabilityTable(){
 refreshCapabilities.addEventListener("click",refreshCapabilityTable);
 refreshCapabilityTable();
 
+
+const overviewMetrics=document.getElementById("overview-metrics");
+function metricCard(label,value,note){
+ const card=document.createElement("div");card.className="metric-card";
+ const heading=document.createElement("div");heading.className="metric-label";heading.textContent=label;
+ const number=document.createElement("div");number.className="metric-value";number.textContent=String(value);
+ const detail=document.createElement("div");detail.className="metric-note";detail.textContent=note||"";
+ card.append(heading,number,detail);return card;
+}
+function findCount(payload,keys){
+ if(!payload||typeof payload!=="object")return null;
+ for(const key of keys){if(typeof payload[key]==="number")return payload[key];}
+ for(const value of Object.values(payload)){if(value&&typeof value==="object"){const found=findCount(value,keys);if(found!==null)return found;}}
+ return null;
+}
+async function refreshOverview(){
+ const button=document.getElementById("refresh-overview");button.disabled=true;
+ overviewMetrics.replaceChildren();
+ try{
+  const [health,graph,index,vectors,traces]=await Promise.allSettled([
+   controlJson("/health"),controlJson("/api/v1/graph/stats"),controlJson("/api/v1/index/manifest?limit=500"),
+   controlJson("/api/v1/vector/collections"),controlJson("/api/v1/execution-traces?limit=100")
+  ]);
+  const value=(result)=>result.status==="fulfilled"?result.value:null;
+  const graphData=value(graph),indexData=value(index),vectorData=value(vectors),traceData=value(traces),healthData=value(health);
+  const collections=Array.isArray(vectorData)?vectorData:(vectorData?.collections||[]);
+  const traceItems=Array.isArray(traceData)?traceData:(traceData?.traces||[]);
+  const cards=[
+   metricCard("Service",healthData?"Online":"Unavailable",healthData?"Health endpoint responded":"Health endpoint unavailable"),
+   metricCard("Graph nodes",findCount(graphData,["node_count","nodes_count","total_nodes"])??"n/a","Current graph inventory"),
+   metricCard("Graph edges",findCount(graphData,["edge_count","edges_count","total_edges"])??"n/a","Current relationship inventory"),
+   metricCard("Vector collections",Array.isArray(collections)?collections.length:"n/a","Configured collections"),
+   metricCard("Index sources",Array.isArray(indexData?.sources)?indexData.sources.length:"n/a","Sources in first 500 manifest entries"),
+   metricCard("Execution traces",Array.isArray(traceItems)?traceItems.length:"n/a","Recent trace records returned"),
+   metricCard("Capability checks",document.getElementById("capability-summary").textContent||"Pending","Refresh Capability Explorer for detail")
+  ];
+  overviewMetrics.append(...cards);
+ }catch(error){overviewMetrics.append(metricCard("Overview","Unavailable",error.message));}
+ finally{button.disabled=false;}
+}
+document.getElementById("refresh-overview").addEventListener("click",refreshOverview);
+refreshOverview();
 const retrievalForm=document.getElementById("retrieval-form");
 const retrievalQuery=document.getElementById("retrieval-query");
 const retrievalLimit=document.getElementById("retrieval-limit");
 const retrievalResults=document.getElementById("retrieval-results");
+function renderRetrievalPipeline(result){
+ retrievalResults.replaceChildren();
+ const fusion=result.fusion||{};
+ const summary=document.createElement("p");
+ summary.textContent="Pipeline: candidate retrieval → "+(fusion.algorithm||"fusion")+" (k="+String(fusion.k??"n/a")+") → "+(result.reranked?"reranking applied":"optional reranking")+
+  ". Weight strategy: "+(fusion.weight_strategy||"static")+
+  ". Retrieval status: "+(result.status||"unknown")+
+  (result.degraded?.length?"; degraded: "+result.degraded.join(", "):"");
+ retrievalResults.append(summary);
+ const weights=document.createElement("p");
+ weights.textContent="Channel weights: "+JSON.stringify(fusion.weights||{});
+ retrievalResults.append(weights);
+ const channelTable=document.createElement("table");
+ const channelHead=document.createElement("tr");
+ for(const label of ["Channel","Candidates","Status"]){
+  const cell=document.createElement("th");cell.textContent=label;channelHead.append(cell);
+ }
+ channelTable.append(channelHead);
+ for(const [name,details] of Object.entries(fusion.channels||{})){
+  const row=document.createElement("tr");
+  for(const value of [name,details.candidate_count??0,result.channels?.[name]?.status||"retrieved"]){
+   const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);
+  }
+  channelTable.append(row);
+ }
+
+ retrievalResults.append(channelTable);
+ const chart=document.createElement("div");chart.className="channel-bars";
+ const maxCandidates=Math.max(1,...Object.values(fusion.channels||{}).map(channel=>Number(channel.candidate_count)||0));
+ for(const [name,details] of Object.entries(fusion.channels||{})){
+  const line=document.createElement("div");line.className="channel-bar-row";
+  const label=document.createElement("span");label.textContent=name;
+  const track=document.createElement("div");track.className="channel-track";
+  const fill=document.createElement("div");fill.className="channel-fill";
+  fill.style.width=Math.max(0,Math.min(100,(Number(details.candidate_count)||0)/maxCandidates*100))+"%";
+  track.append(fill);
+  const count=document.createElement("strong");count.textContent=String(details.candidate_count??0);
+  line.append(label,track,count);chart.append(line);
+ }
+ retrievalResults.append(chart);
+ for(const channelName of ["lexical","vector"]){
+  const details=fusion.channels?.[channelName]||{};
+  const title=document.createElement("h3");title.textContent=channelName.charAt(0).toUpperCase()+channelName.slice(1)+" candidates";retrievalResults.append(title);
+  const table=document.createElement("table");
+  const head=document.createElement("tr");
+  for(const label of ["Rank","Source","Revision","Chunk","Title","Channel score"]){const cell=document.createElement("th");cell.textContent=label;head.append(cell);}
+  table.append(head);
+  for(const item of details.candidates||[]){
+   const row=document.createElement("tr");
+   for(const value of [item.rank,item.source_id,item.revision,item.chunk_id,item.title,item.score]){
+    const cell=document.createElement("td");cell.textContent=String(value??"");row.append(cell);
+   }
+   table.append(row);
+  }
+  if(!(details.candidates||[]).length){const row=document.createElement("tr");const cell=document.createElement("td");cell.colSpan=6;cell.textContent="No candidates returned for this channel.";row.append(cell);table.append(row);}
+  retrievalResults.append(table);
+  const note=document.createElement("p");note.className="muted";
+  note.textContent="Showing "+String((details.candidates||[]).length)+" of "+String(details.candidate_count??0)+" ranked candidates.";
+  retrievalResults.append(note);
+ }
+ const fusionTitle=document.createElement("h3");fusionTitle.textContent="RRF contributions";retrievalResults.append(fusionTitle);
+ const fusionTable=document.createElement("table");
+ const fusionHead=document.createElement("tr");
+ for(const label of ["Candidate","Ranks","Contributions","Fused score"]){
+  const cell=document.createElement("th");cell.textContent=label;fusionHead.append(cell);
+ }
+ fusionTable.append(fusionHead);
+ for(const item of fusion.results||[]){
+  const row=document.createElement("tr");
+  for(const value of [
+   item.chunk_id,
+   JSON.stringify(item.ranks||{lexical:item.lexical_rank,vector:item.vector_rank,graph:item.graph_rank}),
+   JSON.stringify(item.contributions||{}),
+   item.score
+  ]){
+   const cell=document.createElement("td");cell.textContent=String(value??"");row.append(cell);
+  }
+  fusionTable.append(row);
+ }
+ retrievalResults.append(fusionTable);
+ const graph=result.graph_expansion||{};
+ const graphSummary=document.createElement("p");
+ graphSummary.textContent="Graph expansion: "+String(graph.candidate_sources||0)+" sources, "+String(graph.candidate_chunks||0)+" candidate chunks, "+String(graph.duration_ms??0)+" ms.";
+ retrievalResults.append(graphSummary);
+ const resultTitle=document.createElement("h3");resultTitle.textContent="Final results";retrievalResults.append(resultTitle);
+ const resultTable=document.createElement("table");
+ const resultHead=document.createElement("tr");
+ for(const label of ["Source","Chunk","RRF score","Graph score","Rerank score"]){
+  const cell=document.createElement("th");cell.textContent=label;resultHead.append(cell);
+ }
+ resultTable.append(resultHead);
+ for(const item of result.results||[]){
+  const row=document.createElement("tr");
+  for(const value of [item.source_id,item.chunk_id,item.fusion_score,item.graph_score,item.rerank_score]){
+   const cell=document.createElement("td");cell.textContent=String(value??"");row.append(cell);
+  }
+  resultTable.append(row);
+ }
+ retrievalResults.append(resultTable);
+ const raw=document.createElement("details");
+ const disclosure=document.createElement("summary");disclosure.textContent="Full response JSON";raw.append(disclosure);
+ const pre=document.createElement("pre");pre.textContent=JSON.stringify(result,null,2);raw.append(pre);
+ retrievalResults.append(raw);
+}
 retrievalForm.addEventListener("submit",async event=>{
  event.preventDefault();retrievalResults.textContent="Searching…";
  try{
@@ -405,8 +734,69 @@ retrievalForm.addEventListener("submit",async event=>{
    query:retrievalQuery.value.trim(),limit:Number(retrievalLimit.value),
    rerank:document.getElementById("retrieval-rerank").checked
   });
-  retrievalResults.textContent=JSON.stringify(result,null,2);
+  renderRetrievalPipeline(result);
  }catch(error){retrievalResults.textContent="Search failed: "+error.message;}
+});
+
+// Provider diagnostics are read-only except for bounded in-memory scoring probes.
+const modelProviderStatus=document.getElementById("model-provider-status");
+const embeddingProbeResult=document.getElementById("embedding-probe-result");
+const rankingProbeResult=document.getElementById("ranking-probe-result");
+const rerankingProbeResult=document.getElementById("reranking-probe-result");
+async function refreshModelProviderStatus(){
+ modelProviderStatus.textContent="Checking Embeddings, Ranking, and Reranking providers…";
+ const checks=await Promise.allSettled([
+  controlJson("/api/v1/embeddings/health"),
+  controlJson("/api/v1/embeddings/model"),
+  controlJson("/api/v1/ranking/health"),
+  controlJson("/api/v1/ranking/ready"),
+  controlJson("/api/v1/reranking/health")
+ ]);
+ const names=["Embeddings health","Embedding model","Ranking health","Ranking readiness","Reranking provider"];
+ modelProviderStatus.textContent=JSON.stringify(Object.fromEntries(checks.map((item,index)=>[
+  names[index],item.status==="fulfilled"?item.value:{status:"unavailable",error:item.reason?.message||"request failed"}
+ ])),null,2);
+}
+document.getElementById("model-status-refresh").addEventListener("click",refreshModelProviderStatus);
+refreshModelProviderStatus();
+document.getElementById("embedding-probe-form").addEventListener("submit",async event=>{
+ event.preventDefault();embeddingProbeResult.textContent="Embedding query…";
+ try{
+  const result=await controlJson("/api/v1/embeddings/embed","POST",{
+   texts:[document.getElementById("embedding-probe-text").value.trim()],mode:"query"
+  });
+  const vector=result.embeddings?.[0];
+  embeddingProbeResult.textContent=JSON.stringify({
+   ok:result.ok,model:result.model,dimensions:result.dimensions,
+   vector_length:Array.isArray(vector)?vector.length:0,
+   finite:Array.isArray(vector)&&vector.every(value=>Number.isFinite(value)),
+   sample:Array.isArray(vector)?vector.slice(0,8):[]
+  },null,2);
+ }catch(error){embeddingProbeResult.textContent="Embedding probe failed: "+error.message;}
+});
+document.getElementById("ranking-probe-form").addEventListener("submit",async event=>{
+ event.preventDefault();rankingProbeResult.textContent="Fusing ranked candidates…";
+ try{
+  const channels=JSON.parse(document.getElementById("ranking-probe-channels").value);
+  const result=await controlJson("/api/v1/ranking/fuse","POST",{
+   channels,k:Number(document.getElementById("ranking-probe-k").value),identity_key:"chunk_id"
+  });
+  rankingProbeResult.textContent=JSON.stringify(result,null,2);
+ }catch(error){rankingProbeResult.textContent="RRF comparison failed: "+error.message;}
+});
+document.getElementById("reranking-probe-form").addEventListener("submit",async event=>{
+ event.preventDefault();rerankingProbeResult.textContent="Scoring candidates…";
+ try{
+  const query=document.getElementById("reranking-probe-query").value.trim();
+  const documents=document.getElementById("reranking-probe-documents").value.split("\n").map(value=>value.trim()).filter(Boolean);
+  if(!documents.length)throw new Error("Enter at least one candidate document.");
+  const result=await controlJson("/api/v1/reranking/rerank","POST",{query,documents});
+  const before=documents.map((document,index)=>({original_rank:index+1,document}));
+  const after=before.map((item,index)=>({...item,score:result.scores[index]})).sort((left,right)=>right.score-left.score);
+  rerankingProbeResult.textContent=JSON.stringify({
+   provider:result.provider,model:result.model,before,after
+  },null,2);
+ }catch(error){rerankingProbeResult.textContent="Reranking probe failed: "+error.message;}
 });
 
 const indexResults=document.getElementById("index-results");
@@ -416,10 +806,119 @@ document.getElementById("refresh-index").addEventListener("click",async()=>{
  try{indexResults.textContent=JSON.stringify(await controlJson("/api/v1/index/manifest?limit=100"),null,2);}
  catch(error){indexResults.textContent="Index inspection failed: "+error.message;}
 });
+function renderInventoryTable(container,columns,rows,emptyMessage){
+ container.replaceChildren();
+ if(!rows.length){container.textContent=emptyMessage;return;}
+ const table=document.createElement("table");
+ const head=document.createElement("tr");
+ for(const label of columns){const cell=document.createElement("th");cell.textContent=label;head.append(cell);}
+ table.append(head);
+ for(const values of rows){
+  const row=document.createElement("tr");
+  for(const value of values){const cell=document.createElement("td");cell.textContent=String(value??"n/a");row.append(cell);}
+  table.append(row);
+ }
+ container.append(table);
+}
+function renderVectorCollections(payload){
+ const collections=Array.isArray(payload?.collections)?payload.collections:[];
+ renderInventoryTable(vectorResults,["Collection","Embedding model","Dimensions","Records"],
+  collections.map(item=>[item.name,item.model,item.dimensions,item.count]),
+  "No vector collections are currently registered.");
+}
 document.getElementById("refresh-vectors").addEventListener("click",async()=>{
  vectorResults.textContent="Loading vector collections…";
- try{vectorResults.textContent=JSON.stringify(await controlJson("/api/v1/vector/collections"),null,2);}
+ try{renderVectorCollections(await controlJson("/api/v1/vector/collections"));}
  catch(error){vectorResults.textContent="Vector inspection failed: "+error.message;}
+});
+document.getElementById("vector-query-form").addEventListener("submit",async event=>{
+ event.preventDefault();
+ const output=document.getElementById("vector-query-results");
+ const collection=document.getElementById("vector-query-collection").value.trim();
+ const query=document.getElementById("vector-query-text").value.trim();
+ const topK=Number(document.getElementById("vector-query-limit").value);
+ output.textContent="Embedding query and searching collection…";
+ try{
+  const embedded=await controlJson("/api/v1/embeddings/embed","POST",{texts:[query],mode:"query"});
+  const vector=embedded.embeddings&&embedded.embeddings[0];
+  if(!Array.isArray(vector))throw new Error("Embedding provider returned no query vector.");
+  const result=await controlJson("/api/v1/vector/collections/"+encodeURIComponent(collection)+"/query","POST",{
+   embedding:vector,dimensions:embedded.dimensions,model:embedded.model,top_k:topK
+  });
+  output.textContent=JSON.stringify({
+   collection,embedding_model:embedded.model,dimensions:embedded.dimensions,
+   exact_scan:true,approximate_nearest_neighbor:false,results:result.results
+  },null,2);
+ }catch(error){output.textContent="Vector query failed: "+error.message;}
+});
+const generationId=document.getElementById("generation-id");
+const generationStatus=document.getElementById("generation-status");
+const generationResults=document.getElementById("generation-results");
+const generationCapabilities=["index","documents","vectors","memory","knowledge"];
+async function refreshGenerationStatus(){
+ generationStatus.textContent="Loading durable generation status…";
+ try{
+  const payload=await controlJson("/api/v1/index/generations");
+  generationStatus.textContent=JSON.stringify(payload,null,2);
+  const building=(payload.generations||[]).find(item=>item.state==="building");
+  if(!generationId.value.trim()&&building)generationId.value=building.generation_id;
+  return payload;
+ }catch(error){generationStatus.textContent="Generation status failed: "+error.message;throw error;}
+}
+document.getElementById("generation-refresh").addEventListener("click",()=>refreshGenerationStatus().catch(()=>{}));
+document.getElementById("generation-create").addEventListener("click",async()=>{
+ const button=document.getElementById("generation-create");button.disabled=true;
+ try{
+  const result=await controlJson("/api/v1/index/generations","POST",{});
+  generationId.value=result.generation.generation_id;
+  generationResults.textContent=JSON.stringify(result,null,2);
+  await refreshGenerationStatus();
+ }catch(error){generationResults.textContent="Generation creation failed: "+error.message;}
+ finally{button.disabled=false;}
+});
+async function runGenerationPages(mode){
+ const id=generationId.value.trim();
+ const pageSize=Number(document.getElementById("generation-page-size").value);
+ if(!id)throw new Error("Enter or create a generation ID first.");
+ if(!Number.isInteger(pageSize)||pageSize<1||pageSize>1000)throw new Error("Page size must be between 1 and 1000.");
+ const completed=[];
+ for(const capability of generationCapabilities){
+  const result=await controlJson("/api/v1/index/generations/"+encodeURIComponent(id)+"/"+mode+"/"+capability,"POST",{page_size:pageSize});
+  completed.push({capability,...result});
+  generationResults.textContent=JSON.stringify({mode,generation_id:id,completed},null,2);
+ }
+ await refreshGenerationStatus();
+ return completed;
+}
+document.getElementById("generation-copy").addEventListener("click",async()=>{
+ const button=document.getElementById("generation-copy");button.disabled=true;
+ try{await runGenerationPages("copy");}
+ catch(error){generationResults.textContent="Copy stopped: "+error.message+"\nCompleted operations above remain recorded; refresh status before retrying.";}
+ finally{button.disabled=false;}
+});
+document.getElementById("generation-reconcile").addEventListener("click",async()=>{
+ const button=document.getElementById("generation-reconcile");button.disabled=true;
+ try{await runGenerationPages("reconcile");}
+ catch(error){generationResults.textContent="Reconciliation stopped: "+error.message+"\nCompleted operations above remain recorded; refresh status before retrying.";}
+ finally{button.disabled=false;}
+});
+document.getElementById("generation-fence").addEventListener("click",async()=>{
+ const id=generationId.value.trim();if(!id){generationResults.textContent="Enter a generation ID first.";return;}
+ if(!window.confirm("Acquire the write fence for generation "+id+"? Writes may be blocked during final cutover."))return;
+ try{const result=await controlJson("/api/v1/index/generations/"+encodeURIComponent(id)+"/fence","POST",{});generationResults.textContent=JSON.stringify(result,null,2);await refreshGenerationStatus();}
+ catch(error){generationResults.textContent="Fence failed: "+error.message;}
+});
+document.getElementById("generation-activate").addEventListener("click",async()=>{
+ const id=generationId.value.trim();if(!id){generationResults.textContent="Enter a generation ID first.";return;}
+ if(!window.confirm("Activate generation "+id+" for live reads and writes? This is a production state change."))return;
+ try{const result=await controlJson("/api/v1/index/generations/"+encodeURIComponent(id)+"/activate","POST",{});generationResults.textContent=JSON.stringify(result,null,2);await refreshGenerationStatus();}
+ catch(error){generationResults.textContent="Activation failed: "+error.message;}
+});
+document.getElementById("generation-abort").addEventListener("click",async()=>{
+ const id=generationId.value.trim();if(!id){generationResults.textContent="Enter a generation ID first.";return;}
+ if(!window.confirm("Permanently abort generation "+id+"? This cancellation cannot be undone."))return;
+ try{const result=await controlJson("/api/v1/index/generations/"+encodeURIComponent(id)+"/abort","POST",{reason:"operator requested abort from Control Center"});generationResults.textContent=JSON.stringify(result,null,2);await refreshGenerationStatus();}
+ catch(error){generationResults.textContent="Abort failed: "+error.message;}
 });
 document.getElementById("source-lookup-form").addEventListener("submit",async event=>{
  event.preventDefault();
@@ -466,6 +965,46 @@ document.getElementById("source-tombstone-form").addEventListener("submit",async
   output.textContent=JSON.stringify(result,null,2);
   document.getElementById("refresh-index").click();
  }catch(error){output.textContent="Tombstone failed: "+error.message;}
+});
+
+const transcriptJobResults=document.getElementById("transcript-job-results");
+async function refreshTranscriptJobs(){
+ transcriptJobResults.textContent="Loading transcript slice job history…";
+ try{
+  transcriptJobResults.textContent=JSON.stringify(
+   await controlJson("/api/v1/ingest/transcripts/jobs?limit=50"),null,2
+  );
+ }catch(error){transcriptJobResults.textContent="Transcript job history failed: "+error.message;}
+}
+document.getElementById("refresh-transcript-jobs").addEventListener("click",refreshTranscriptJobs);
+refreshTranscriptJobs();
+
+const reclamationStatus=document.getElementById("reclamation-status");
+const reclamationDetails=document.getElementById("reclamation-source-details");
+async function refreshReclamationStatus(){
+ reclamationStatus.textContent="Loading durable reclamation queue…";
+ try{
+  const result=await controlJson("/api/v1/index/reclamation");
+  reclamationStatus.textContent=JSON.stringify(result,null,2);
+ }catch(error){reclamationStatus.textContent="Reclamation status failed: "+error.message;}
+}
+document.getElementById("reclamation-refresh").addEventListener("click",refreshReclamationStatus);
+refreshReclamationStatus();
+document.getElementById("reclamation-source-form").addEventListener("submit",async event=>{
+ event.preventDefault();
+ const sourceId=document.getElementById("reclamation-source-id").value.trim();
+ reclamationDetails.textContent="Loading reclamation job and deletion audit…";
+ try{
+  const [jobResult,auditResult]=await Promise.allSettled([
+   controlJson("/api/v1/index/reclamation/jobs/query","POST",{source_id:sourceId}),
+   controlJson("/api/v1/index/sources/"+encodeURIComponent(sourceId)+"/deletion-audit?limit=100")
+  ]);
+  reclamationDetails.textContent=JSON.stringify({
+   source_id:sourceId,
+   job:jobResult.status==="fulfilled"?jobResult.value.job:{error:jobResult.reason?.message||"job lookup failed"},
+   audit:auditResult.status==="fulfilled"?auditResult.value.events:{error:auditResult.reason?.message||"audit lookup failed"}
+  },null,2);
+ }catch(error){reclamationDetails.textContent="Reclamation inspection failed: "+error.message;}
 });
 
 document.getElementById("session-ingest-button").addEventListener("click",async()=>{
@@ -529,6 +1068,29 @@ document.getElementById("tokenization-preview").addEventListener("click",async()
  }catch(error){output.textContent="Tokenization failed: "+error.message;}
  finally{button.disabled=false;}
 });
+function renderGraphStatistics(stats){
+ const output=document.getElementById("graph-stats");
+ output.replaceChildren();
+ const metrics=document.createElement("div");metrics.className="metric-grid";
+ metrics.append(
+  metricCard("Nodes",stats.node_count??"n/a","Total graph nodes"),
+  metricCard("Edges",stats.edge_count??"n/a","Total relationships")
+ );
+ output.append(metrics);
+ const nodeHeading=document.createElement("h3");nodeHeading.textContent="Nodes by type";output.append(nodeHeading);
+ renderInventoryTable(output,["Node type","Count"],Object.entries(stats.nodes_by_type||{}),
+  "No graph nodes are recorded.");
+ const edgeHeading=document.createElement("h3");edgeHeading.textContent="Relationships by type";output.append(edgeHeading);
+ renderInventoryTable(output,["Relationship","Count"],Object.entries(stats.edges_by_relationship||{}),
+  "No graph relationships are recorded.");
+}
+document.getElementById("graph-stats-refresh").addEventListener("click",async()=>{
+ const output=document.getElementById("graph-stats");
+ output.textContent="Loading graph statistics…";
+ try{renderGraphStatistics(await controlJson("/api/v1/graph/stats"));}
+ catch(error){output.textContent="Graph statistics failed: "+error.message;}
+});
+document.getElementById("graph-stats-refresh").click();
 document.getElementById("graph-query-form").addEventListener("submit",async event=>{
  event.preventDefault();const output=document.getElementById("graph-results");
  try{
@@ -641,4 +1203,275 @@ document.getElementById("context-form").addEventListener("submit",async event=>{
   output.textContent=JSON.stringify(result,null,2);
  }catch(error){output.textContent="Context assembly failed: "+error.message;}
  finally{button.disabled=false;}
+});
+
+const traceList=document.getElementById("trace-list");
+const traceDetail=document.getElementById("trace-detail");
+function renderExecutionTrace(trace){
+ traceDetail.replaceChildren();
+ const summary=document.createElement("div");
+ summary.className="execution-trace-summary";
+ const heading=document.createElement("h4");
+ heading.textContent=[trace.operation,trace.status].filter(Boolean).join(" · ");
+ summary.append(heading);
+ const metadata=document.createElement("p");
+ metadata.textContent=[
+  trace.trace_id,
+  trace.request_id?"request "+trace.request_id:null,
+  trace.duration_ms==null?null:Number(trace.duration_ms).toFixed(3)+" ms",
+  trace.started_at,
+ ].filter(Boolean).join(" · ");
+ summary.append(metadata);
+ traceDetail.append(summary);
+
+ const attributes=trace.attributes&&typeof trace.attributes==="object"?trace.attributes:{};
+ if(Object.keys(attributes).length){
+  const section=document.createElement("section");
+  const label=document.createElement("h4");
+  label.textContent="Trace attributes";
+  const values=document.createElement("pre");
+  values.textContent=JSON.stringify(attributes,null,2);
+  section.append(label,values);
+  traceDetail.append(section);
+ }
+
+ const stages=Array.isArray(trace.stages)?trace.stages:[];
+ const stageHeading=document.createElement("h4");
+ stageHeading.textContent="Execution stages ("+stages.length+")";
+ traceDetail.append(stageHeading);
+ if(!stages.length){
+  const empty=document.createElement("p");
+  empty.textContent="No stage events recorded.";
+  traceDetail.append(empty);
+  return;
+ }
+ const durations=stages.map(stage=>Math.max(0,Number(stage.duration_ms)||0));
+ const maxDuration=Math.max(1,...durations);
+ const list=document.createElement("ol");
+ list.className="execution-trace-stages";
+ for(const [index,stage] of stages.entries()){
+  const item=document.createElement("li");
+  item.className="execution-trace-stage";
+  const row=document.createElement("div");
+  row.className="execution-trace-stage-heading";
+  const name=document.createElement("strong");
+  name.textContent=stage.name||"unnamed stage";
+  const status=document.createElement("span");
+  status.className="execution-trace-stage-status";
+  status.textContent=stage.status||"unknown";
+  const duration=document.createElement("span");
+  duration.className="execution-trace-stage-duration";
+  duration.textContent=stage.duration_ms==null?"duration unavailable":Number(stage.duration_ms).toFixed(3)+" ms";
+  row.append(name,status,duration);
+  const track=document.createElement("div");track.className="stage-duration-track";
+  const fill=document.createElement("div");fill.className="stage-duration-fill";
+  fill.style.width=Math.max(0,Math.min(100,durations[index]/maxDuration*100))+"%";
+  track.append(fill);
+  item.append(row,track);
+  const details=Object.fromEntries(Object.entries(stage).filter(([key])=>!["name","status","duration_ms"].includes(key)));
+  if(Object.keys(details).length){
+   const values=document.createElement("pre");
+   values.textContent=JSON.stringify(details,null,2);
+   item.append(values);
+  }
+  list.append(item);
+ }
+ traceDetail.append(list);
+}
+async function refreshExecutionTraces(){
+ traceList.textContent="Loading persisted execution traces…";
+ try{
+  const response=await controlJson("/api/v1/execution-traces?limit=50");
+  traceList.replaceChildren();
+  const traces=Array.isArray(response.traces)?response.traces:[];
+  if(!traces.length){traceList.textContent="No persisted traces yet.";return;}
+  for(const trace of traces){
+   const card=document.createElement("div");card.className="execution-trace-summary";
+   const heading=document.createElement("h4");
+   heading.textContent=[trace.operation,trace.status].filter(Boolean).join(" · ");
+   const metadata=document.createElement("p");
+   metadata.textContent=[trace.started_at,trace.duration_ms==null?null:Number(trace.duration_ms).toFixed(3)+" ms",
+    Array.isArray(trace.stages)?trace.stages.length+" stages":null,trace.trace_id].filter(Boolean).join(" · ");
+   const button=document.createElement("button");button.type="button";button.textContent="Inspect stages";
+   button.addEventListener("click",async()=>{
+    traceDetail.textContent="Loading trace…";
+    try{
+     const detail=await controlJson("/api/v1/execution-traces/"+encodeURIComponent(trace.trace_id));
+     renderExecutionTrace(detail.trace);
+    }catch(error){traceDetail.textContent="Trace inspection failed: "+error.message;}
+   });
+   card.append(heading,metadata,button);traceList.append(card);
+  }
+ }catch(error){traceList.textContent="Trace list failed: "+error.message;}
+}
+document.getElementById("trace-refresh").addEventListener("click",refreshExecutionTraces);
+refreshExecutionTraces();
+
+
+const collabResults=document.getElementById("collab-results");
+const collabValue=id=>document.getElementById(id).value.trim();
+const collabList=id=>collabValue(id).split(",").map(value=>value.trim()).filter(Boolean);
+const collabContext=()=>{
+ const projectId=collabValue("collab-project-id");
+ const actorId=collabValue("collab-actor-id");
+ if(!projectId||!actorId)throw new Error("Set both the project ID and actor participant ID.");
+ return {projectId,actorId};
+};
+async function collabShow(value){
+ collabResults.textContent=JSON.stringify(value,null,2);
+}
+async function collabRun(action){
+ try{await collabShow(await action());}
+ catch(error){collabResults.textContent="Collaboration operation failed: "+error.message;}
+}
+document.getElementById("collab-participant-form").addEventListener("submit",event=>{
+ event.preventDefault();
+ collabRun(async()=>{
+  const participant=await controlJson("/api/v1/collaboration/participants","POST",{
+   participant_id:collabValue("collab-participant-id")||undefined,
+   display_name:collabValue("collab-participant-name"),
+   participant_type:collabValue("collab-participant-type"),
+   provider:collabValue("collab-provider")||undefined,
+   model:collabValue("collab-model")||undefined
+  });
+  if(participant.participant){
+   document.getElementById("collab-actor-id").value=participant.participant.id;
+   if(participant.participant.payload.participant_type==="human")document.getElementById("collab-owner-id").value=participant.participant.id;
+  }
+  return participant;
+ });
+});
+document.getElementById("collab-project-form").addEventListener("submit",event=>{
+ event.preventDefault();
+ collabRun(async()=>{
+  const result=await controlJson("/api/v1/collaboration/projects","POST",{
+   name:collabValue("collab-project-name"),
+   owner_id:collabValue("collab-owner-id"),
+   human_approval_required:document.getElementById("collab-human-gate").checked
+  });
+  document.getElementById("collab-project-id").value=result.project.id;
+  document.getElementById("collab-actor-id").value=collabValue("collab-owner-id");
+  return result;
+ });
+});
+document.getElementById("collab-add-member").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {projectId,actorId}=collabContext();
+  return await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/members","POST",{
+   actor_id:actorId,participant_id:collabValue("collab-member-id"),role:collabValue("collab-member-role")
+  });
+ });
+});
+document.getElementById("collab-contribution-form").addEventListener("submit",event=>{
+ event.preventDefault();
+ collabRun(async()=>{
+  const {projectId,actorId}=collabContext();
+  const result=await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/contributions","POST",{
+   actor_id:actorId,kind:collabValue("collab-contribution-kind"),
+   work_item_id:collabValue("collab-work-item")||undefined,
+   source_ref:collabValue("collab-source-ref")||undefined,
+   summary:collabValue("collab-contribution-summary")
+  });
+  document.getElementById("collab-contribution-id").value=result.contribution.id;
+  return result;
+ });
+});
+document.getElementById("collab-review-contribution").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {actorId}=collabContext();
+  return await controlJson("/api/v1/collaboration/contributions/"+encodeURIComponent(collabValue("collab-contribution-id"))+"/review","POST",{
+   actor_id:actorId,status:collabValue("collab-review-status"),
+   rationale:collabValue("collab-review-rationale")
+  });
+ });
+});
+document.getElementById("collab-handoff-form").addEventListener("submit",event=>{
+ event.preventDefault();
+ collabRun(async()=>{
+  const {projectId,actorId}=collabContext();
+  const result=await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/handoffs","POST",{
+   actor_id:actorId,recipient_id:collabValue("collab-recipient-id")||undefined,
+   work_item_id:collabValue("collab-work-item")||undefined,
+   objective:collabValue("collab-handoff-objective"),
+   current_state:collabValue("collab-handoff-state"),
+   completed_work:collabValue("collab-handoff-completed")||undefined,
+   blockers:collabList("collab-handoff-blockers"),
+   next_actions:collabList("collab-handoff-next"),
+   references:collabList("collab-handoff-refs")
+  });
+  document.getElementById("collab-handoff-id").value=result.handoff.id;
+  return result;
+ });
+});
+document.getElementById("collab-handoff-checkpoint").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {actorId}=collabContext();
+  const id=collabValue("collab-handoff-id");
+  return await controlJson("/api/v1/collaboration/handoffs/"+encodeURIComponent(id)+"/checkpoints","POST",{
+   actor_id:actorId,current_state:collabValue("collab-handoff-state"),
+   completed_work:collabValue("collab-handoff-completed")||undefined,
+   blockers:collabList("collab-handoff-blockers"),
+   next_actions:collabList("collab-handoff-next"),
+   references:collabList("collab-handoff-refs")
+  });
+ });
+});
+for(const [buttonId,action] of [["collab-handoff-ack","acknowledge"],["collab-handoff-complete","complete"]]){
+ document.getElementById(buttonId).addEventListener("click",()=>{
+  collabRun(async()=>{
+   const {actorId}=collabContext();
+   return await controlJson("/api/v1/collaboration/handoffs/"+encodeURIComponent(collabValue("collab-handoff-id"))+"/"+action,"POST",{actor_id:actorId});
+  });
+ });
+}
+document.getElementById("collab-handoff-supersede").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {actorId}=collabContext();
+  const result=await controlJson("/api/v1/collaboration/handoffs/"+encodeURIComponent(collabValue("collab-handoff-id"))+"/supersede","POST",{
+   actor_id:actorId,work_item_id:collabValue("collab-work-item")||undefined,
+   objective:collabValue("collab-handoff-objective"),
+   current_state:collabValue("collab-handoff-state"),
+   completed_work:collabValue("collab-handoff-completed")||undefined,
+   blockers:collabList("collab-handoff-blockers"),
+   next_actions:collabList("collab-handoff-next"),
+   references:collabList("collab-handoff-refs")
+  });
+  document.getElementById("collab-handoff-id").value=result.replacement.id;
+  return result;
+ });
+});
+document.getElementById("collab-synthesize").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {projectId,actorId}=collabContext();
+  return await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/syntheses","POST",{actor_id:actorId});
+ });
+});
+document.getElementById("collab-proposal-form").addEventListener("submit",event=>{
+ event.preventDefault();
+ collabRun(async()=>{
+  const {projectId,actorId}=collabContext();
+  const result=await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/proposals","POST",{
+   actor_id:actorId,title:collabValue("collab-proposal-title"),
+   summary:collabValue("collab-proposal-summary"),
+   rationale:collabValue("collab-proposal-rationale"),
+   objections:collabList("collab-proposal-objections")
+  });
+  document.getElementById("collab-proposal-id").value=result.proposal.id;
+  return result;
+ });
+});
+document.getElementById("collab-decide").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {actorId}=collabContext();
+  return await controlJson("/api/v1/collaboration/proposals/"+encodeURIComponent(collabValue("collab-proposal-id"))+"/decisions","POST",{
+   actor_id:actorId,status:collabValue("collab-decision-status"),
+   rationale:collabValue("collab-decision-rationale")
+  });
+ });
+});
+document.getElementById("collab-refresh").addEventListener("click",()=>{
+ collabRun(async()=>{
+  const {projectId,actorId}=collabContext();
+  return await controlJson("/api/v1/collaboration/projects/"+encodeURIComponent(projectId)+"/activity?viewer_id="+encodeURIComponent(actorId)+"&limit=100");
+ });
 });
