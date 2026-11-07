@@ -30,5 +30,7 @@ jobs:
           done
       - name: Validate Control Center JavaScript
         run: node --check ensemble/control.js
+      - name: Test parity harness
+        run: python -m pytest tests/test_parity_harness.py
       - name: Test
         run: python -m pytest
