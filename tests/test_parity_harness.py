@@ -21,7 +21,7 @@ def test_compare_json_does_not_hide_unapproved_differences():
         {"results": [{"id": "a"}, {"id": "b"}]},
         {"results": [{"id": "b"}, {"id": "a"}]},
     )
-    assert differences == ["/results: list values differ"]
+    assert differences == ["/results/0/id: 'a' != 'b'", "/results/1/id: 'b' != 'a'"]
 
 
 def test_compare_observations_checks_http_status_and_body():
