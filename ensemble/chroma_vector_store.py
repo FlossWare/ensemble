@@ -168,20 +168,6 @@ class ChromaVectorStore:
                     entry["metadatas"][row] = dict(item["metadata"])
                 entry["buf"][row] = np.asarray(item["embedding"], dtype=np.float32)
 
-    def _update_cached_metadata(
-        self, name: str, items: list[dict[str, Any]],
-        generation_id: str | None = None,
-    ) -> None:
-        key = (current_partition_id(), name, generation_id)
-        with self._lock:
-            entry = self._vector_cache.get(key)
-            if entry is None:
-                return
-            for item in items:
-                row = entry["index"].get(str(item["id"]))
-                if row is not None:
-                    entry["metadatas"][row] = dict(item["metadata"])
-
     def _exact_query(
         self, name: str, embedding: list[float], top_k: int,
         generation_id: str | None = None,
