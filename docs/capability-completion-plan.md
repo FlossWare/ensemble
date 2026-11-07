@@ -268,14 +268,15 @@ See [generic-contract-audit.md](generic-contract-audit.md) for the implemented P
 
 ## Issue #48 retrieval-scope audit update (2026-11-07)
 
-Verified on branch `integration/source-lifecycle-mainline-2026-11-04`, commit `92152414daee80d862463a3ac987b591add0b82a`:
+Verified on branch `integration/source-lifecycle-mainline-2026-11-04`, commit `038c33368103e7f3043cf896f166bb3b32ae4c3f`:
 
 - Hybrid Graph expansion is tested with exact entities and source/chunk candidates scoped to the authenticated partition.
-- Hybrid reranking is tested with two authenticated partitions that intentionally reuse a source ID. Every reranker invocation receives only candidates from its request partition.
+- Hybrid reranking is tested with two authenticated partitions that intentionally reuse a source ID. Every reranker invocation receives only candidates from its request partition. The regression test also verifies final result text and per-channel diagnostics remain scoped when vector retrieval is deliberately unavailable.
+- Hybrid reranking now occurs once, after Graph expansion. The inner retrieval pass explicitly disables reranking, avoiding duplicate scoring; the outer response preserves ranking status, provider, and candidate-count metadata.
 - Knowledge hybrid vector retrieval is tested end to end through REST with the same source ID in two physically isolated SQLite partitions.
 - Memory REST coverage verifies source imports, same event IDs with independent payloads, scope-bounded reconciliation, and semantic retrieval remain partition- and scope-local.
-- Full CI: **356 passed, 1 skipped, 1 warning, 0 failed**. Installer shell syntax and Control Center JavaScript validation passed.
+- Full CI at the verified code head: **356 passed, 1 skipped, 1 warning, 0 failed**. Installer shell syntax and Control Center JavaScript validation passed.
 
-This completes the first retrieval-scope pass across lexical/vector retrieval, Graph expansion, Knowledge retrieval, and reranker inputs. The next audit pass must assert result and diagnostic metadata boundaries under degraded dependencies, then continue the durable operation lifecycle work.
+This completes the first retrieval-scope pass across lexical retrieval, vector-backed Knowledge retrieval, Graph expansion, final Hybrid results, per-channel diagnostics, and reranker inputs. The next audit pass should expand failure injection and continue the durable operation lifecycle work.
 
 Memory retrieval evaluation remains limited to the explicitly labeled synthetic smoke fixture. No relevance judgments have been invented. Representative judged fixtures and measured Memory lexical/semantic/hybrid recall remain outstanding until genuine relevance labels are available.
