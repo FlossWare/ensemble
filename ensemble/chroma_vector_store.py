@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from threading import RLock
@@ -87,17 +88,14 @@ class ChromaVectorStore:
             raise ValueError("metadata must be an object")
         result: dict[str, Any] = {}
         for key, value in metadata.items():
-            if value is None:
-                continue
-            if isinstance(value, (str, int, float, bool)):
+            if isinstance(value, (str, int, bool)):
                 result[key] = value
-            elif isinstance(value, list) and all(
-                isinstance(item, (str, int, float, bool)) for item in value
-            ):
+            elif isinstance(value, float) and math.isfinite(value):
                 result[key] = value
             else:
                 result[f"{key}__ensemble_json"] = json.dumps(
-                    value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                    value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                    allow_nan=False,
                 )
         if not result:
             result["_ensemble_record"] = True
@@ -159,6 +157,11 @@ class ChromaVectorStore:
                 **({"ensemble_generation_id": generation_id} if generation_id else {}),
             })
         return collection
+
+    @staticmethod
+    def _is_missing_collection(exc: Exception) -> bool:
+        message = str(exc).casefold()
+        return "not found" in message or "does not exist" in message
 
     @staticmethod
     def _where_source(source_id: str) -> dict[str, Any]:
@@ -225,8 +228,11 @@ class ChromaVectorStore:
             for offset in range(0, len(items), 256):
                 batch = items[offset:offset + 256]
                 for item in batch:
-                    if len(item["embedding"]) != dimensions:
+                    vector = item["embedding"]
+                    if len(vector) != dimensions:
                         raise ValueError("embedding dimensions do not match collection")
+                    if not all(math.isfinite(float(value)) for value in vector):
+                        raise ValueError("embeddings must contain only finite values")
                 collection.upsert(
                     ids=[str(item["id"]) for item in batch],
                     embeddings=[[float(value) for value in item["embedding"]] for item in batch],
@@ -253,7 +259,7 @@ class ChromaVectorStore:
         try:
             return await asyncio.to_thread(run)
         except Exception as exc:
-            if "not found" in str(exc).lower():
+            if self._is_missing_collection(exc):
                 return 0
             raise
 
@@ -270,7 +276,7 @@ class ChromaVectorStore:
         try:
             return await asyncio.to_thread(run)
         except Exception as exc:
-            if "not found" in str(exc).lower():
+            if self._is_missing_collection(exc):
                 return 0
             raise
 
@@ -353,7 +359,7 @@ class ChromaVectorStore:
         try:
             return await asyncio.to_thread(run)
         except Exception as exc:
-            if "not found" in str(exc).lower():
+            if self._is_missing_collection(exc):
                 return []
             raise
 
@@ -365,8 +371,11 @@ class ChromaVectorStore:
         def run():
             collection = self._get_collection(name, model, dimensions, generation_id)
             for item in items:
-                if len(item["embedding"]) != dimensions:
+                vector = item["embedding"]
+                if len(vector) != dimensions:
                     raise ValueError("embedding dimensions do not match collection")
+                if not all(math.isfinite(float(value)) for value in vector):
+                    raise ValueError("embeddings must contain only finite values")
             collection.upsert(
                 ids=[str(item["id"]) for item in items],
                 embeddings=[[float(value) for value in item["embedding"]] for item in items],
@@ -407,7 +416,7 @@ class ChromaVectorStore:
         try:
             return await asyncio.to_thread(run)
         except Exception as exc:
-            if "not found" in str(exc).lower():
+            if self._is_missing_collection(exc):
                 return []
             raise
 
@@ -429,7 +438,7 @@ class ChromaVectorStore:
         try:
             return await asyncio.to_thread(run)
         except Exception as exc:
-            if "not found" in str(exc).lower():
+            if self._is_missing_collection(exc):
                 return []
             raise
 
@@ -520,7 +529,7 @@ class ChromaVectorStore:
         try:
             return await asyncio.to_thread(run)
         except Exception as exc:
-            if "not found" in str(exc).lower():
+            if self._is_missing_collection(exc):
                 return None
             raise
 
@@ -539,6 +548,6 @@ class ChromaVectorStore:
         try:
             return await asyncio.to_thread(run)
         except Exception as exc:
-            if "not found" in str(exc).lower():
+            if self._is_missing_collection(exc):
                 return []
             raise
