@@ -46,6 +46,9 @@ def test_control_panel_is_served_by_the_api():
         assert 'id="reranking-probe-form"' in response.text
         assert "Context Assembly" in response.text
         assert "Index and Vector Inspection" in response.text
+        assert "Durable Source Reclamation" in response.text
+        assert 'id="reclamation-refresh"' in response.text
+        assert 'id="reclamation-source-form"' in response.text
         assert "Memory and Knowledge Inspection" in response.text
         assert "Tombstone source" in response.text
         assert "Transcript Session Ingestion" in response.text
@@ -95,6 +98,9 @@ def test_control_panel_is_served_by_the_api():
         assert "Sources in first 500 manifest entries" in script.text
         assert "/api/v1/context/assemble" in script.text
         assert "/api/v1/index/manifest" in script.text
+        assert "/api/v1/index/reclamation" in script.text
+        assert "/api/v1/index/reclamation/jobs/query" in script.text
+        assert "/deletion-audit?limit=100" in script.text
         assert "/api/v1/memory/search/hybrid" in script.text
         assert "refreshCapabilityTable" in script.text
         assert "/api/v1/index/tombstones" in script.text
