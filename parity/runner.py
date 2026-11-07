@@ -16,26 +16,6 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-def _pointer_parts(pointer: str) -> list[str]:
-    if not pointer:
-        return []
-    if not pointer.startswith("/"):
-        raise ValueError(f"JSON pointer must be empty or start with '/': {pointer}")
-    return [part.replace("~1", "/").replace("~0", "~") for part in pointer[1:].split("/")]
-
-
-def _at_pointer(value: Any, pointer: str) -> Any:
-    current = value
-    for part in _pointer_parts(pointer):
-        if isinstance(current, list):
-            current = current[int(part)]
-        elif isinstance(current, dict):
-            current = current[part]
-        else:
-            raise KeyError(pointer)
-    return current
-
-
 def compare_json(reference: Any, candidate: Any, policy: dict[str, Any] | None = None) -> list[str]:
     """Return deterministic JSON-pointer differences under an explicit policy."""
     policy = policy or {}
@@ -78,12 +58,17 @@ def compare_json(reference: Any, candidate: Any, policy: dict[str, Any] | None =
 
 
 def compare_observations(reference: dict[str, Any], candidate: dict[str, Any],
-                         policy: dict[str, Any] | None = None) -> dict[str, Any]:
+                         policy: dict[str, Any] | None = None,
+                         expected_status: int = 200) -> dict[str, Any]:
     differences: list[str] = []
-    if reference.get("status_code") != candidate.get("status_code"):
-        differences.append(
-            f"HTTP status: {reference.get('status_code')} != {candidate.get('status_code')}"
-        )
+    reference_status = reference.get("status_code")
+    candidate_status = candidate.get("status_code")
+    if reference_status != expected_status:
+        differences.append(f"Reference HTTP status: {reference_status} != expected {expected_status}")
+    if candidate_status != expected_status:
+        differences.append(f"Candidate HTTP status: {candidate_status} != expected {expected_status}")
+    if reference_status != candidate_status:
+        differences.append(f"HTTP status mismatch: {reference_status} != {candidate_status}")
     if "body" in reference and "body" in candidate:
         differences.extend(compare_json(reference["body"], candidate["body"], policy))
     elif "body" in reference or "body" in candidate:
@@ -117,8 +102,11 @@ def _request(base_url: str, spec: dict[str, Any], timeout: float) -> dict[str, A
 def run_manifest(manifest: dict[str, Any], environ: dict[str, str] | None = None,
                  timeout: float = 10.0) -> dict[str, Any]:
     environ = os.environ if environ is None else environ
+    scenarios = manifest.get("scenarios", [])
+    if not scenarios:
+        raise ValueError("parity manifest must contain at least one scenario")
     results = []
-    for scenario in manifest.get("scenarios", []):
+    for scenario in scenarios:
         ref_spec, candidate_spec = scenario["reference"], scenario["candidate"]
         ref_env = ref_spec.get("base_url_env", manifest.get("reference_base_url_env", "POC_BASE_URL"))
         candidate_env = candidate_spec.get("base_url_env", manifest.get("candidate_base_url_env", "ENSEMBLE_BASE_URL"))
@@ -131,7 +119,10 @@ def run_manifest(manifest: dict[str, Any], environ: dict[str, str] | None = None
         try:
             reference = _request(ref_url, ref_spec, timeout)
             candidate = _request(candidate_url, candidate_spec, timeout)
-            comparison = compare_observations(reference, candidate, scenario.get("comparison"))
+            comparison = compare_observations(
+                reference, candidate, scenario.get("comparison"),
+                expected_status=scenario.get("expected_status", 200),
+            )
             result.update(comparison)
             result["reference"] = reference
             result["candidate"] = candidate
