@@ -608,6 +608,29 @@ class SearchService:
             candidate_count=len(hits), result_count=len(results),
             active_generation=active_generation_id is not None,
         )
+        indexed_by_id = {str(item.chunk.id): item for item in indexed}
+        channel_candidate_limit = min(100, max(20, limit * 4))
+
+        def channel_candidates(ranks: dict, scores: dict) -> list[dict]:
+            candidates = []
+            for identifier, rank in sorted(ranks.items(), key=lambda pair: pair[1]):
+                item = indexed_by_id.get(str(identifier))
+                if item is None:
+                    continue
+                candidates.append({
+                    "rank": rank,
+                    "chunk_id": str(item.chunk.id),
+                    "document_id": item.document.id,
+                    "source_id": item.document.source_id,
+                    "revision": item.document.revision,
+                    "title": item.document.title,
+                    "chunk_ordinal": item.chunk.ordinal,
+                    "score": round(float(scores.get(identifier, 0.0)), 8),
+                })
+                if len(candidates) >= channel_candidate_limit:
+                    break
+            return candidates
+
         fusion_diagnostics = {
             "algorithm": "weighted_rrf" if any(weight != 1.0 for weight in selected_weights.values()) or weight_strategy == "thompson" else "rrf",
             "k": self.rrf_k,
@@ -617,9 +640,9 @@ class SearchService:
                 for channel in ranked_channels
             },
             "channels": {
-                "lexical": {"candidate_count": len(lexical_ranks)},
-                "vector": {"candidate_count": len(vector_ranks)},
-                "graph": {"candidate_count": 0},
+                "lexical": {"candidate_count": len(lexical_ranks), "candidates": channel_candidates(lexical_ranks, lexical_scores)},
+                "vector": {"candidate_count": len(vector_ranks), "candidates": channel_candidates(vector_ranks, vector_scores)},
+                "graph": {"candidate_count": 0, "candidates": []},
             },
             "results": [
                 {
