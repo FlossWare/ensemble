@@ -2459,7 +2459,7 @@ def create_app(
             await active_vector_store.list_collections()
         except Exception as exc:
             raise HTTPException(status_code=503, detail="vector storage unavailable") from exc
-        return {"ok": True, "service": "vector", "backend": "sqlite"}
+        return {"ok": True, "service": "vector", "backend": getattr(active_vector_store, "backend_name", "unknown")}
 
     @app.get("/api/v1/vector/ready", tags=["vector"])
     async def vector_ready():
@@ -2467,7 +2467,7 @@ def create_app(
             await active_vector_store.list_collections()
         except Exception as exc:
             raise HTTPException(status_code=503, detail="vector persistence unavailable") from exc
-        return {"ok": True, "ready": True, "backend": "sqlite"}
+        return {"ok": True, "ready": True, "backend": getattr(active_vector_store, "backend_name", "unknown")}
 
     @app.get("/api/v1/vector/collections", tags=["vector"])
     async def vector_collections():
@@ -2508,6 +2508,7 @@ def create_app(
         )
         return {"ok": True, "upserted": result}
 
+    @app.post("/api/v1/vector/collections/{name}/existing", tags=["vector"])
     @app.post("/api/v1/vector/collections/{name}/records/lookup", tags=["vector"])
     async def vector_existing(name: str, payload: dict[str, Any]):
         _validate_vector_collection_name(name)
@@ -2518,6 +2519,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="ids must be a list of at most 1000 non-empty strings")
         return {"ok": True, "found": await active_vector_store.existing(name, ids)}
 
+    @app.post("/api/v1/vector/collections/{name}/upsert", tags=["vector"])
     @app.put("/api/v1/vector/collections/{name}/records", tags=["vector"])
     async def vector_upsert(name: str, payload: dict[str, Any], request: Request):
         _validate_vector_collection_name(name)
@@ -2571,6 +2573,7 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "upserted": count}
 
+    @app.post("/api/v1/vector/collections/{name}/metadata", tags=["vector"])
     @app.patch("/api/v1/vector/collections/{name}/records/metadata", tags=["vector"])
     async def vector_metadata(name: str, payload: dict[str, Any], request: Request):
         _validate_vector_collection_name(name)
@@ -2593,6 +2596,7 @@ def create_app(
             )
         return {"ok": True, "updated": updated}
 
+    @app.post("/api/v1/vector/collections/{name}/delete-superseded", tags=["vector"])
     @app.post("/api/v1/vector/collections/{name}/records/prune", tags=["vector"])
     async def vector_delete_superseded(name: str, payload: dict[str, Any], request: Request):
         _validate_vector_collection_name(name)
