@@ -39,6 +39,11 @@ def test_control_panel_is_served_by_the_api():
         assert "Reset Learning outcomes" in response.text
         assert "Capability Explorer" in response.text
         assert "Retrieval Explorer" in response.text
+        assert "Embeddings and Ranking Diagnostics" in response.text
+        assert 'id="model-workbench"' in response.text
+        assert 'id="embedding-probe-form"' in response.text
+        assert 'id="ranking-probe-form"' in response.text
+        assert 'id="reranking-probe-form"' in response.text
         assert "Context Assembly" in response.text
         assert "Index and Vector Inspection" in response.text
         assert "Memory and Knowledge Inspection" in response.text
@@ -76,6 +81,14 @@ def test_control_panel_is_served_by_the_api():
         assert "/api/v1/search/hybrid" in script.text
         assert "renderRetrievalPipeline" in script.text
         assert "RRF contributions" in script.text
+        assert "Independent lexical/vector" in script.text
+        assert 'details.candidates||[]' in script.text
+        assert "/api/v1/embeddings/health" in script.text
+        assert "/api/v1/embeddings/model" in script.text
+        assert "/api/v1/ranking/fuse" in script.text
+        assert "/api/v1/reranking/health" in script.text
+        assert "/api/v1/reranking/rerank" in script.text
+        assert "before,after" in script.text
         assert "channel-bars" in script.text
         assert "refreshOverview" in script.text
         assert '/api/v1/index/manifest?limit=500' in script.text
