@@ -208,7 +208,7 @@
         "path": "/extract",
         "base_url_env": "POC_EXTRACTION_URL",
         "request": {
-          "text": "Track issue FLOSS-123 in the release notes."
+          "text": "please track issue FLOSS-123 in release notes."
         }
       },
       "candidate": {
@@ -216,7 +216,7 @@
         "path": "/api/v1/entities/extract",
         "base_url_env": "ENSEMBLE_BASE_URL",
         "request": {
-          "text": "Track issue FLOSS-123 in the release notes."
+          "text": "please track issue FLOSS-123 in release notes."
         }
       },
       "comparison": {
