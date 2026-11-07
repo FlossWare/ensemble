@@ -76,6 +76,10 @@ Remaining:
 
 ### 5. Index generation rebuild and cutover
 
+The rebuild is a durable, bounded operation rather than a process-local background task: its generation state, per-capability copy/reconciliation checkpoints, source cursor, and write-fence state persist in SQLite. `GET /api/v1/index/generations` exposes operation status; repeated page calls resume from the last committed checkpoint; `POST /api/v1/index/generations/{generation_id}/abort` is the cancellation boundary. Aborted generations remain aborted across restart and reject further copy work.
+
+Regression coverage now verifies retry/resume without duplicate acknowledged pages, sealed-checkpoint replay after application restart, durable cancellation, rejection of work after cancellation, and interrupted write-fence recovery. The 2026-11-07 run on PR #47 passed **359 tests, 1 skipped, 1 warning, 0 failed** after these additions.
+
 Merged into `main` via [PR #42](https://github.com/FlossWare/ensemble/pull/42):
 - REST operations create and inspect a rebuild, perform bounded copy passes for Index, Documents, Vectors, Memory, and Knowledge, reconcile each capability, acquire the write fence, activate, and abort.
 - Memory now has generation-scoped durable snapshots and a mutation journal. Memory writes are blocked while the shared cutover fence is held.
