@@ -42,7 +42,7 @@ def test_chroma_vector_store_generation_and_source_lifecycle(tmp_path):
             item = {
                 "id": "record-1", "embedding": [1.0, 0.0],
                 "document": "generation document",
-                "metadata": {"source_id": "source-1", "url": "source-1"},
+                "metadata": {"source_id": "source-1", "url": "source-1", "content_sha256": "old-digest"},
             }
             await store.upsert("test-vectors", "model-a", 2, [item])
             await store.upsert_generation("generation-1", "test-vectors", "model-a", 2, [item])
