@@ -1,6 +1,6 @@
 # Control Center API and UI Mapping
 
-**Status:** Integration-branch implementation inventory, updated 2026-11-05.
+**Status:** Integration-branch implementation inventory, updated 2026-11-07.
 **Purpose:** Describe the actual browser workbenches and their REST contracts. A UI panel is not proof of production readiness or complete capability parity.
 
 ## 1. Browser workbench coverage
