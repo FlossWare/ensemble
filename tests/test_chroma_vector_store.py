@@ -145,3 +145,34 @@ def test_chroma_exact_numpy_cache_updates_incrementally_after_query(tmp_path):
         finally:
             await store.close()
     asyncio.run(exercise())
+
+
+def test_chroma_store_opens_existing_poc_collection_metadata(tmp_path):
+    import chromadb
+
+    async def exercise():
+        path = tmp_path / "chromadb" / "default"
+        path.mkdir(parents=True)
+        client = chromadb.PersistentClient(path=str(path))
+        collection = client.get_or_create_collection(
+            "poc-vectors",
+            metadata={"hnsw:space": "cosine", "model": "model-a", "dimensions": 2},
+        )
+        collection.upsert(
+            ids=["poc-1"], embeddings=[[1.0, 0.0]],
+            documents=["from POC"], metadatas=[{"source_id": "poc-source"}],
+        )
+        store = ChromaVectorStore(tmp_path)
+        await store.initialize()
+        try:
+            results = await store.query("poc-vectors", [1.0, 0.0], 1)
+            assert results[0]["id"] == "poc-1"
+            assert results[0]["document"] == "from POC"
+            upgraded = await asyncio.to_thread(store._get_collection, "poc-vectors", create=False)
+            assert upgraded.metadata["model"] == "model-a"
+            assert upgraded.metadata["dimensions"] == 2
+            assert upgraded.metadata["ensemble_model"] == "model-a"
+            assert upgraded.metadata["ensemble_dimensions"] == 2
+        finally:
+            await store.close()
+    asyncio.run(exercise())
