@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from bisect import bisect_right
 import hashlib
 import json
 import math
@@ -39,6 +40,7 @@ class ChromaVectorStore:
             root = Path(".ensemble")
         self.persistence_root = root.resolve()
         self._clients: dict[str, Any] = {}
+        self._record_id_snapshots: dict[tuple[str, str, str], list[str]] = {}
         self._lock = RLock()
 
     def _partition_path(self) -> Path:
@@ -77,6 +79,16 @@ class ChromaVectorStore:
             item if hasattr(item, "metadata") else client.get_collection(name=item)
             for item in listed
         ]
+
+    def _invalidate_record_snapshot(self, name: str) -> None:
+        partition = current_partition_id()
+        with self._lock:
+            stale = [
+                key for key in self._record_id_snapshots
+                if key[0] == partition and key[1] == name
+            ]
+            for key in stale:
+                self._record_id_snapshots.pop(key, None)
 
     @staticmethod
     def _generation_name(generation_id: str, name: str) -> str:
@@ -247,7 +259,9 @@ class ChromaVectorStore:
                     metadatas=[self._metadata_to_chroma(item["metadata"]) for item in batch],
                 )
             return len(items)
-        return await asyncio.to_thread(run)
+        result = await asyncio.to_thread(run)
+        self._invalidate_record_snapshot(name)
+        return result
 
     async def update_metadata(self, name: str, items: list[dict[str, Any]]) -> int:
         if not items:
@@ -281,7 +295,10 @@ class ChromaVectorStore:
                 collection.delete(ids=found)
             return len(found)
         try:
-            return await asyncio.to_thread(run)
+            result = await asyncio.to_thread(run)
+            if result:
+                self._invalidate_record_snapshot(name)
+            return result
         except Exception as exc:
             if self._is_missing_collection(exc):
                 return 0
@@ -331,6 +348,9 @@ class ChromaVectorStore:
                 selected = ids[:500]
                 if selected:
                     collection.delete(ids=selected)
+                    self._invalidate_record_snapshot(
+                        (collection.metadata or {}).get("ensemble_name", collection.name)
+                    )
                 total += len(selected)
                 if len(ids) > 500:
                     return 501
@@ -533,8 +553,20 @@ class ChromaVectorStore:
     async def record_key_upper_bound(self, name: str) -> str | None:
         def run():
             collection = self._get_collection(name, create=False)
-            ids = collection.get(include=[])["ids"]
-            return max(ids) if ids else None
+            ids = sorted(collection.get(include=[])["ids"])
+            if not ids:
+                return None
+            upper_bound = ids[-1]
+            partition = current_partition_id()
+            with self._lock:
+                stale = [
+                    key for key in self._record_id_snapshots
+                    if key[0] == partition and key[1] == name
+                ]
+                for key in stale:
+                    self._record_id_snapshots.pop(key, None)
+                self._record_id_snapshots[(partition, name, upper_bound)] = ids
+            return upper_bound
         try:
             return await asyncio.to_thread(run)
         except Exception as exc:
@@ -549,11 +581,26 @@ class ChromaVectorStore:
             return []
         def run():
             collection = self._get_collection(name, create=False)
-            result = collection.get(include=["embeddings", "documents", "metadatas"])
-            rows = self._records_from_get(result)
-            rows = [row for row in rows if row["id"] <= upper_bound and (cursor is None or row["id"] > cursor)]
-            rows.sort(key=lambda row: row["id"])
-            return rows[:limit]
+            partition = current_partition_id()
+            key = (partition, name, upper_bound)
+            with self._lock:
+                ids = self._record_id_snapshots.get(key)
+            if ids is None:
+                ids = sorted(
+                    record_id for record_id in collection.get(include=[])["ids"]
+                    if record_id <= upper_bound
+                )
+                with self._lock:
+                    self._record_id_snapshots[key] = ids
+            start = bisect_right(ids, cursor) if cursor is not None else 0
+            selected = ids[start:start + limit]
+            if not selected:
+                return []
+            result = collection.get(
+                ids=selected, include=["embeddings", "documents", "metadatas"],
+            )
+            by_id = {row["id"]: row for row in self._records_from_get(result)}
+            return [by_id[record_id] for record_id in selected if record_id in by_id]
         try:
             return await asyncio.to_thread(run)
         except Exception as exc:
