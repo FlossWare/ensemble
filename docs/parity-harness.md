@@ -15,7 +15,7 @@ The parity harness makes observable POC behavior comparable with Ensemble behavi
 
 ## First scenario set
 
-`parity/scenarios/core-contracts.json` begins with health contracts for Chunking and Tokenization. These are deliberately small smoke checks, not a claim of functional parity. Expand each capability with behavior scenarios only after confirming its request and response contracts from both source trees.
+`parity/scenarios/core-contracts.json` now contains health and behavior scenarios for Chunking and Tokenization, deterministic Reciprocal Rank Fusion, entity extraction, and intent classification. Extraction compares shared entity fields while ignoring Ensemble-only identity/provenance metadata; intent compares the common label and confidence contract. These are targeted contracts, not a claim that the entire capability is at parity.
 
 ## Run
 
@@ -37,10 +37,10 @@ Use `--strict` when a run must fail if any scenario could not execute. The repor
 - JSON objects compare recursively and ignore object key ordering.
 - Arrays compare exactly and in order by default. This is intentional for ranked results and ordered event histories.
 - `ignore_json_pointers` is for known volatile fields only.
+- `include_json_pointers` compares only explicitly named shared contract fields; missing fields still fail. Use this when the POC and Ensemble expose intentionally different metadata, and document the selected contract fields in the scenario.
 - `numeric_tolerances` maps JSON pointers to absolute numeric tolerances. It must not be used to paper over ranking, confidence, or model drift without an explicit quality rationale.
-- Arrays are always compared in order, while their elements are compared recursively so numeric tolerances can be applied to individual scores without weakening rank-order checks. `include_json_pointers` can project a scenario onto explicitly shared contract fields when the POC and Ensemble intentionally expose different response metadata.
 - Add retrieval-specific metrics (Recall@k, MRR, nDCG, rank agreement) as separate evaluators over a shared judged corpus. Do not reduce retrieval quality to raw JSON equality.
 
 ## Current limitations
 
-This first increment provides the manifest-driven HTTP runner, deterministic comparison policy, machine-readable report, and unit tests. It does not yet include all POC-to-Ensemble route mappings, a shared judged retrieval corpus, live model/runtime comparisons, or a Control Center view. Those require source-audited scenario contracts and reference/candidate environment wiring. A capability with no executed scenario remains unmeasured, not complete.
+This increment provides the manifest-driven HTTP runner, explicit contract projections, deterministic comparison policy, machine-readable report, unit tests, and source-verified scenarios for five capabilities. It does not yet include the full POC-to-Ensemble route inventory, a shared judged retrieval corpus, live model/runtime comparisons, or a Control Center view. Those require source-audited scenario contracts and reference/candidate environment wiring. A capability with no executed scenario remains unmeasured, not complete.
