@@ -3085,7 +3085,7 @@ def create_app(
         """Analyze observed outcomes; anomaly flags are review signals only."""
         try:
             outcomes = await active_learning_store.recent_outcomes(days)
-            cache_root = Path(os.getenv("ENSEMBLE_ANALYTICS_CACHE_DIR", ".ensemble/analytics")).expanduser()
+            cache_root = os.getenv("ENSEMBLE_ANALYTICS_CACHE_DIR", ".ensemble/analytics")
             report = await asyncio.to_thread(
                 analyze_outcomes, outcomes, cache_dir=cache_root,
                 contamination=contamination,
