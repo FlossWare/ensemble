@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from sqlalchemy import (
@@ -43,6 +43,8 @@ jobs = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("completed_at", DateTime(timezone=True), nullable=True),
+    Column("lease_owner", String(64), nullable=True),
+    Column("lease_expires_at", DateTime(timezone=True), nullable=True),
 )
 
 
@@ -57,10 +59,11 @@ class TranscriptCheckpointStore(Protocol):
     ) -> dict[str, Any]: ...
     async def start_job(
         self, job_id: str, source_id: str, revision_id: str, project: str,
-        file: str, start_offset: int, payload_sha256: str,
+        file: str, start_offset: int, payload_sha256: str, owner_id: str | None = None,
     ) -> dict[str, Any]: ...
-    async def complete_job(self, job_id: str, end_offset: int, result: dict[str, Any]) -> dict[str, Any]: ...
-    async def fail_job(self, job_id: str, error: str) -> None: ...
+    async def heartbeat_job(self, job_id: str, owner_id: str) -> bool: ...
+    async def complete_job(self, job_id: str, end_offset: int, result: dict[str, Any], owner_id: str | None = None) -> dict[str, Any]: ...
+    async def fail_job(self, job_id: str, error: str, owner_id: str | None = None) -> None: ...
     async def get_job(self, job_id: str) -> dict[str, Any] | None: ...
     async def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]: ...
     async def recover_interrupted(self) -> int: ...
@@ -111,6 +114,8 @@ def _job_record(row: Any) -> dict[str, Any]:
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
         "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+        "lease_owner": row["lease_owner"],
+        "lease_expires_at": row["lease_expires_at"].isoformat() if row["lease_expires_at"] else None,
     }
 
 
@@ -215,68 +220,76 @@ class SqliteTranscriptCheckpointStore:
 
     async def start_job(
         self, job_id: str, source_id: str, revision_id: str, project: str,
-        file: str, start_offset: int, payload_sha256: str,
+        file: str, start_offset: int, payload_sha256: str, owner_id: str | None = None,
     ) -> dict[str, Any]:
-        _validate_commit(
-            source_id, revision_id, project, file, start_offset, start_offset,
-            payload_sha256, {},
-        )
+        _validate_commit(source_id, revision_id, project, file, start_offset, start_offset, payload_sha256, {})
         if not re.fullmatch(r"[0-9a-f]{64}", job_id or ""):
             raise ValueError("job_id must be a lowercase SHA-256 digest")
+        owner_id = owner_id or job_id
+        if not re.fullmatch(r"[0-9a-f]{1,64}", owner_id):
+            raise ValueError("owner_id must be lowercase hexadecimal, at most 64 characters")
         now = datetime.now(timezone.utc)
+        expiry = now + timedelta(seconds=900)
         async with self.engine.begin() as connection:
-            row = (await connection.execute(select(jobs).where(
-                jobs.c.job_id == job_id,
-            ))).mappings().first()
+            row = (await connection.execute(select(jobs).where(jobs.c.job_id == job_id))).mappings().first()
             if row is None:
                 await connection.execute(jobs.insert().values(
                     job_id=job_id, source_id=source_id, revision_id=revision_id,
-                    project=project, file=file, start_offset=start_offset,
-                    end_offset=None, payload_sha256=payload_sha256, status="running",
-                    attempts=1, last_error=None, result=None,
-                    created_at=now, updated_at=now, completed_at=None,
+                    project=project, file=file, start_offset=start_offset, end_offset=None,
+                    payload_sha256=payload_sha256, status="running", attempts=1,
+                    last_error=None, result=None, created_at=now, updated_at=now,
+                    completed_at=None, lease_owner=owner_id, lease_expires_at=expiry,
                 ))
                 return {"status": "running", "attempts": 1, "created": True}
-            if (
-                row["source_id"] != source_id or row["revision_id"] != revision_id
-                or row["start_offset"] != start_offset
-                or row["payload_sha256"] != payload_sha256
-            ):
+            if (row["source_id"] != source_id or row["revision_id"] != revision_id
+                or row["start_offset"] != start_offset or row["payload_sha256"] != payload_sha256):
                 raise ValueError("transcript job identity conflicts with an existing operation")
-            if row["status"] in {"completed", "running"}:
-                return {"status": row["status"], "attempts": row["attempts"], "created": False}
+            old_expiry = row["lease_expires_at"]
+            if old_expiry is not None and old_expiry.tzinfo is None:
+                old_expiry = old_expiry.replace(tzinfo=timezone.utc)
+            if row["status"] == "completed":
+                return {"status": "completed", "attempts": row["attempts"], "created": False}
+            if row["status"] == "running" and (old_expiry is None or old_expiry > now):
+                return {"status": "running", "attempts": row["attempts"], "created": False}
             attempts = row["attempts"] + 1
-            await connection.execute(update(jobs).where(
-                jobs.c.job_id == job_id,
-            ).values(
-                status="running", attempts=attempts, last_error=None,
-                updated_at=now, completed_at=None,
+            await connection.execute(update(jobs).where(jobs.c.job_id == job_id).values(
+                status="running", attempts=attempts, last_error=None, updated_at=now,
+                completed_at=None, lease_owner=owner_id, lease_expires_at=expiry,
             ))
         return {"status": "running", "attempts": attempts, "created": True}
 
-    async def complete_job(self, job_id: str, end_offset: int, result: dict[str, Any]) -> dict[str, Any]:
+    async def heartbeat_job(self, job_id: str, owner_id: str) -> bool:
         now = datetime.now(timezone.utc)
         async with self.engine.begin() as connection:
             changed = await connection.execute(update(jobs).where(
-                jobs.c.job_id == job_id,
-            ).values(
-                status="completed", end_offset=end_offset, result=result,
-                last_error=None, updated_at=now, completed_at=now,
+                jobs.c.job_id == job_id, jobs.c.status == "running", jobs.c.lease_owner == owner_id,
+            ).values(updated_at=now, lease_expires_at=now + timedelta(seconds=900)))
+        return changed.rowcount == 1
+
+    async def complete_job(self, job_id: str, end_offset: int, result: dict[str, Any], owner_id: str | None = None) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        conditions = [jobs.c.job_id == job_id, jobs.c.status == "running"]
+        if owner_id is not None:
+            conditions.append(jobs.c.lease_owner == owner_id)
+        async with self.engine.begin() as connection:
+            changed = await connection.execute(update(jobs).where(*conditions).values(
+                status="completed", end_offset=end_offset, result=result, last_error=None,
+                updated_at=now, completed_at=now, lease_owner=None, lease_expires_at=None,
             ))
             if changed.rowcount != 1:
-                raise ValueError("transcript job not found")
+                raise ValueError("transcript job not found or lease ownership was lost")
             row = (await connection.execute(select(jobs).where(jobs.c.job_id == job_id))).mappings().first()
         return _job_record(row)
 
-    async def fail_job(self, job_id: str, error: str) -> None:
+    async def fail_job(self, job_id: str, error: str, owner_id: str | None = None) -> None:
         now = datetime.now(timezone.utc)
+        conditions = [jobs.c.job_id == job_id, jobs.c.status == "running"]
+        if owner_id is not None:
+            conditions.append(jobs.c.lease_owner == owner_id)
         async with self.engine.begin() as connection:
-            await connection.execute(update(jobs).where(
-                jobs.c.job_id == job_id,
-                jobs.c.status == "running",
-            ).values(
-                status="failed", last_error=str(error)[:2000],
-                updated_at=now,
+            await connection.execute(update(jobs).where(*conditions).values(
+                status="failed", last_error=str(error)[:2000], updated_at=now,
+                lease_owner=None, lease_expires_at=None,
             ))
 
     async def get_job(self, job_id: str) -> dict[str, Any] | None:
@@ -300,10 +313,12 @@ class SqliteTranscriptCheckpointStore:
         async with self.engine.begin() as connection:
             result = await connection.execute(update(jobs).where(
                 jobs.c.status == "running",
+                jobs.c.lease_expires_at.is_not(None),
+                jobs.c.lease_expires_at <= now,
             ).values(
                 status="interrupted",
-                last_error="Process restarted before the operation completed; resubmit the same slice to retry.",
-                updated_at=now,
+                last_error="Transcript worker lease expired; resubmit the same slice to retry.",
+                updated_at=now, lease_owner=None, lease_expires_at=None,
             ))
         return int(result.rowcount or 0)
 
