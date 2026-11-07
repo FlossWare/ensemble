@@ -116,3 +116,28 @@ def test_chroma_generation_snapshot_pages_stable_ids_and_resumes(tmp_path):
         finally:
             await store.close()
     asyncio.run(exercise())
+
+
+def test_chroma_exact_numpy_cache_updates_incrementally_after_query(tmp_path):
+    async def exercise():
+        store = ChromaVectorStore(tmp_path)
+        await store.initialize()
+        try:
+            await store.upsert("exact-vectors", "model-a", 2, [{
+                "id": "first", "embedding": [1.0, 0.0],
+                "document": "first", "metadata": {"source_id": "s1"},
+            }])
+            first = await store.query("exact-vectors", [1.0, 0.0], 1)
+            assert first[0]["id"] == "first"
+            assert first[0]["score"] == 1.0
+
+            await store.upsert("exact-vectors", "model-a", 2, [{
+                "id": "second", "embedding": [0.0, 1.0],
+                "document": "second", "metadata": {"source_id": "s2"},
+            }])
+            second = await store.query("exact-vectors", [0.0, 1.0], 1)
+            assert second[0]["id"] == "second"
+            assert second[0]["score"] == 1.0
+        finally:
+            await store.close()
+    asyncio.run(exercise())
