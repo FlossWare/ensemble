@@ -394,6 +394,8 @@ def test_startup_recovers_crawl_jobs_in_every_configured_partition(tmp_path, mon
 
 
 def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path, monkeypatch):
+    from ensemble.embeddings import DisabledEmbeddingProvider
+
     class RecordingReranker:
         def __init__(self):
             self.calls = []
@@ -423,7 +425,10 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
     base = f"sqlite+aiosqlite:///{tmp_path / 'reranker-partitions.db'}"
     asyncio.run(asyncio.to_thread(_ensure_partition_schema, base, "default"))
     reranker = RecordingReranker()
-    app = create_app(database_url=base, reranker=reranker)
+    app = create_app(
+        database_url=base, reranker=reranker,
+        embedding_provider=DisabledEmbeddingProvider(),
+    )
 
     alpha_headers = {
         "Authorization": f"Bearer {alpha_token}",
@@ -478,7 +483,8 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
             )
             # Diagnostics must describe only the authorized partition's candidates.
             assert body["fusion"]["channels"]["lexical"]["candidate_count"] == 1
-            assert body["fusion"]["channels"]["vector"]["candidate_count"] <= 1
+            assert body["fusion"]["channels"]["vector"]["candidate_count"] == 0
+            assert body["channels"]["vector"]["status"] == "unavailable"
             assert body["fusion"]["channels"]["graph"]["candidate_count"] == 0
             assert len(body["fusion"]["results"]) == 1
         # Hybrid reranks once, after retrieval and Graph expansion.
