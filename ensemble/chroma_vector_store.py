@@ -302,8 +302,10 @@ class ChromaVectorStore:
             changed = 0
             for collection in self._list_collections():
                 rows = self._records_from_get(collection.get(where=self._where_source(source_id), include=["metadatas"]))
-                selected = [(row["id"], row["metadata"]) for row in rows if row["metadata"].pop("_tombstoned", None)]
+                selected = [(row["id"], row["metadata"]) for row in rows if row["metadata"].get("_tombstoned")]
                 if selected:
+                    for _, metadata in selected:
+                        metadata["_tombstoned"] = False
                     collection.update(
                         ids=[record_id for record_id, _ in selected],
                         metadatas=[self._metadata_to_chroma(metadata) for _, metadata in selected],
