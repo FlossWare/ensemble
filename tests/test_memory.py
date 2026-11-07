@@ -778,6 +778,6 @@ def test_memory_source_reconciliation_isolated_to_exact_scope():
             json={"query": "durable checkpoints", "source": "claude-code"},
         ).json()["results"]
 
-        assert all(item["source_path"] != "/workspace/search.md" for item in workspace_results)
-        assert any(item["source_path"] == "/archive/operations.md" for item in archive_results)
+        assert all("Workspace-only material" not in item["content"] for item in workspace_results)
+        assert any("Archive-only material" in item["content"] for item in archive_results)
         assert http.get("/api/v1/memory/sources/status").json()["indexed_document_count"] == 1
