@@ -770,6 +770,75 @@ document.getElementById("vector-query-form").addEventListener("submit",async eve
   },null,2);
  }catch(error){output.textContent="Vector query failed: "+error.message;}
 });
+const generationId=document.getElementById("generation-id");
+const generationStatus=document.getElementById("generation-status");
+const generationResults=document.getElementById("generation-results");
+const generationCapabilities=["index","documents","vectors","memory","knowledge"];
+async function refreshGenerationStatus(){
+ generationStatus.textContent="Loading durable generation status…";
+ try{
+  const payload=await controlJson("/api/v1/index/generations");
+  generationStatus.textContent=JSON.stringify(payload,null,2);
+  const building=(payload.generations||[]).find(item=>item.state==="building");
+  if(!generationId.value.trim()&&building)generationId.value=building.generation_id;
+  return payload;
+ }catch(error){generationStatus.textContent="Generation status failed: "+error.message;throw error;}
+}
+document.getElementById("generation-refresh").addEventListener("click",()=>refreshGenerationStatus().catch(()=>{}));
+document.getElementById("generation-create").addEventListener("click",async()=>{
+ const button=document.getElementById("generation-create");button.disabled=true;
+ try{
+  const result=await controlJson("/api/v1/index/generations","POST",{});
+  generationId.value=result.generation.generation_id;
+  generationResults.textContent=JSON.stringify(result,null,2);
+  await refreshGenerationStatus();
+ }catch(error){generationResults.textContent="Generation creation failed: "+error.message;}
+ finally{button.disabled=false;}
+});
+async function runGenerationPages(mode){
+ const id=generationId.value.trim();
+ const pageSize=Number(document.getElementById("generation-page-size").value);
+ if(!id)throw new Error("Enter or create a generation ID first.");
+ if(!Number.isInteger(pageSize)||pageSize<1||pageSize>1000)throw new Error("Page size must be between 1 and 1000.");
+ const completed=[];
+ for(const capability of generationCapabilities){
+  const result=await controlJson("/api/v1/index/generations/"+encodeURIComponent(id)+"/"+mode+"/"+capability,"POST",{page_size:pageSize});
+  completed.push({capability,...result});
+  generationResults.textContent=JSON.stringify({mode,generation_id:id,completed},null,2);
+ }
+ await refreshGenerationStatus();
+ return completed;
+}
+document.getElementById("generation-copy").addEventListener("click",async()=>{
+ const button=document.getElementById("generation-copy");button.disabled=true;
+ try{await runGenerationPages("copy");}
+ catch(error){generationResults.textContent="Copy stopped: "+error.message+"\nCompleted operations above remain recorded; refresh status before retrying.";}
+ finally{button.disabled=false;}
+});
+document.getElementById("generation-reconcile").addEventListener("click",async()=>{
+ const button=document.getElementById("generation-reconcile");button.disabled=true;
+ try{await runGenerationPages("reconcile");}
+ catch(error){generationResults.textContent="Reconciliation stopped: "+error.message+"\nCompleted operations above remain recorded; refresh status before retrying.";}
+ finally{button.disabled=false;}
+});
+document.getElementById("generation-fence").addEventListener("click",async()=>{
+ const id=generationId.value.trim();if(!id){generationResults.textContent="Enter a generation ID first.";return;}
+ if(!window.confirm("Acquire the write fence for generation "+id+"? Writes may be blocked during final cutover."))return;
+ try{const result=await controlJson("/api/v1/index/generations/"+encodeURIComponent(id)+"/fence","POST",{});generationResults.textContent=JSON.stringify(result,null,2);await refreshGenerationStatus();}
+ catch(error){generationResults.textContent="Fence failed: "+error.message;}
+});
+document.getElementById("generation-activate").addEventListener("click",async()=>{
+ const id=generationId.value.trim();if(!id){generationResults.textContent="Enter a generation ID first.";return;}
+ if(!window.confirm("Activate generation "+id+" for live reads and writes? This is a production state change."))return;
+ try{const result=await controlJson("/api/v1/index/generations/"+encodeURIComponent(id)+"/activate","POST",{});generationResults.textContent=JSON.stringify(result,null,2);await refreshGenerationStatus();}
+ catch(error){generationResults.textContent="Activation failed: "+error.message;}
+});
+document.getElementById("generation-abort").addEventListener("click",async()=>{
+ const id=generationId.value.trim();if(!id){generationResults.textContent="Enter a generation ID first.";return;}
+ if(!window.confirm("Permanently abort generation "+id+"? This cancellation cannot be undone."))return;
+ try{const result=await controlJson("/api/v1/index/generations/"+encodeURIComponent(id)+"/abort","POST",{reason:"operator requested abort from Control Center"});generationResults.textContent=JSON.stringify(result,null,2);await refreshGenerationStatus();}
+ catch(error){generationResults.textContent="Abort failed: "+error.message;}
+});
 document.getElementById("source-lookup-form").addEventListener("submit",async event=>{
  event.preventDefault();
  const id=document.getElementById("source-id").value.trim();
