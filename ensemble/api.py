@@ -4700,7 +4700,7 @@ def create_app(
                     "job_id": job_id, "job": job,
                 }
             await active_transcript_store.fail_job(
-                job_id, f"checkpoint mismatch; expected byte offset {checkpoint['byte_offset']}",
+                job_id, f"checkpoint mismatch; expected byte offset {checkpoint['byte_offset']}", owner_id,
             )
             raise HTTPException(
                 status_code=409,
