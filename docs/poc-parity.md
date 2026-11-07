@@ -16,7 +16,7 @@ Disposition meanings:
 - Reference: use as behavioral evidence only; do not carry code forward.
 - Not assessed: full source, tests, edge cases, and dependencies have not yet been inspected.
 
-The table below is a reference inventory, not a parity certification. POC third-party libraries are part of the expected implementation baseline: an unapproved library substitution is a parity gap even if a replacement offers similar operations. See [POC Dependency Parity Audit](poc-dependency-parity.md). Intentional differences should be documented when they affect caller-visible behavior, data integrity, or operational expectations. POC third-party libraries are part of the expected implementation baseline: an unapproved library substitution is a parity gap even if a replacement offers similar operations. See [POC Dependency Parity Audit](poc-dependency-parity.md).
+The table below is a reference inventory, not a parity certification. POC third-party libraries are part of the expected implementation baseline: an unapproved library substitution is a parity gap even if a replacement offers similar operations. See [POC Dependency Parity Audit](poc-dependency-parity.md). Intentional differences should be documented when they affect caller-visible behavior, data integrity, or operational expectations.
 
 ## Complete POC service inventory
 
