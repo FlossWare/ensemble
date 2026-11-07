@@ -242,18 +242,21 @@ def test_sqlite_transcript_leases_are_persistent_and_exclusive(tmp_path):
             await first_store.initialize()
             await second_store.initialize()
 
-            first = await first_store.start_job(
-                job_id, "source-1", "revision-1", "project", "transcript.jsonl",
-                64, digest, owner_a,
+            claims = await asyncio.gather(
+                first_store.start_job(
+                    job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+                    64, digest, owner_a,
+                ),
+                second_store.start_job(
+                    job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+                    64, digest, owner_b,
+                ),
             )
-            duplicate = await second_store.start_job(
-                job_id, "source-1", "revision-1", "project", "transcript.jsonl",
-                64, digest, owner_b,
-            )
-            assert first["created"] is True
-            assert duplicate["created"] is False
-            assert await second_store.heartbeat_job(job_id, owner_a) is True
-            assert await second_store.heartbeat_job(job_id, owner_b) is False
+            assert sum(bool(claim["created"]) for claim in claims) == 1
+            active_owner = (await first_store.get_job(job_id))["lease_owner"]
+            stale_owner = owner_b if active_owner == owner_a else owner_a
+            assert await second_store.heartbeat_job(job_id, active_owner) is True
+            assert await second_store.heartbeat_job(job_id, stale_owner) is False
             assert await second_store.recover_interrupted() == 0
             assert (await second_store.get_job(job_id))["status"] == "running"
 
@@ -265,15 +268,16 @@ def test_sqlite_transcript_leases_are_persistent_and_exclusive(tmp_path):
             assert await second_store.recover_interrupted() == 1
             assert (await second_store.get_job(job_id))["status"] == "interrupted"
 
+            new_owner = "9" * 32
             retry = await second_store.start_job(
                 job_id, "source-1", "revision-1", "project", "transcript.jsonl",
-                64, digest, owner_b,
+                64, digest, new_owner,
             )
             assert retry == {"status": "running", "attempts": 2, "created": True}
             with pytest.raises(ValueError, match="lease ownership was lost"):
-                await first_store.complete_job(job_id, 96, {"inserted": 1}, owner_a)
+                await first_store.complete_job(job_id, 96, {"inserted": 1}, active_owner)
             completed = await second_store.complete_job(
-                job_id, 96, {"inserted": 1}, owner_b,
+                job_id, 96, {"inserted": 1}, new_owner,
             )
             assert completed["status"] == "completed"
             assert (await first_store.get_job(job_id))["status"] == "completed"
