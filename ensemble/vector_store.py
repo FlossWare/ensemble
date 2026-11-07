@@ -129,6 +129,8 @@ class VectorStore(Protocol):
 
 
 class SqliteVectorStore:
+    backend_name = "sqlite"
+
     """Exact vector operations persisted in Ensemble's SQLite database."""
 
     def __init__(self, database_url: str | None = None):
