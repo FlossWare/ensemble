@@ -43,6 +43,13 @@ class ChromaVectorStore:
 
     def _partition_path(self) -> Path:
         partition = current_partition_id()
+        configured = os.getenv("ENSEMBLE_CHROMA_PATH", "").strip()
+        if configured:
+            root = Path(configured).expanduser().resolve()
+            if partition == "default":
+                return root
+            suffix = hashlib.sha256(partition.encode("utf-8")).hexdigest()
+            return root / "partitions" / suffix
         if partition == "default":
             suffix = "default"
         else:
