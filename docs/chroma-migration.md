@@ -1,6 +1,6 @@
 # ChromaDB storage and migration
 
-Production Ensemble uses ChromaDB for vector records and cosine/HNSW retrieval. SQLite remains the source of truth for Index revisions, tombstones, generation journals, and the rest of Ensemble's durable application state. PostgreSQL is not introduced.
+Production Ensemble uses ChromaDB for persistent vector records and the POC's exact NumPy dot-product retrieval. Chroma collection metadata retains the POC cosine-space setting; retrieval does not delegate ranking to Chroma's approximate HNSW query. SQLite remains the source of truth for Index revisions, tombstones, generation journals, and the rest of Ensemble's durable application state. PostgreSQL is not introduced.
 
 ## Storage layout
 
@@ -61,5 +61,5 @@ The operation is idempotent and non-destructive. It reports the number of base a
 - Back up the persistence root before migration.
 - Keep the ChromaDB directory in the persistence root for backup/restore coverage.
 - Preserve the existing SQLite Index database; ChromaDB is not a replacement for Index revision and generation coordination.
-- ChromaDB collections retain the POC cosine distance configuration and embedding model/dimension identity.
-- Validate retrieval recall and latency against the POC corpus before tuning HNSW parameters or declaring full vector parity.
+- ChromaDB collections retain the POC cosine-space metadata and embedding model/dimension identity. The service loads collection vectors into a NumPy matrix, caches it per partition/collection/generation, updates it incrementally on upsert, and invalidates it when records are deleted or lifecycle metadata changes.
+- Validate exact ranking, cache invalidation/reload, and latency against the POC corpus before declaring full vector parity.
