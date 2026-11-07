@@ -967,6 +967,18 @@ document.getElementById("source-tombstone-form").addEventListener("submit",async
  }catch(error){output.textContent="Tombstone failed: "+error.message;}
 });
 
+const transcriptJobResults=document.getElementById("transcript-job-results");
+async function refreshTranscriptJobs(){
+ transcriptJobResults.textContent="Loading transcript slice job history…";
+ try{
+  transcriptJobResults.textContent=JSON.stringify(
+   await controlJson("/api/v1/ingest/transcripts/jobs?limit=50"),null,2
+  );
+ }catch(error){transcriptJobResults.textContent="Transcript job history failed: "+error.message;}
+}
+document.getElementById("refresh-transcript-jobs").addEventListener("click",refreshTranscriptJobs);
+refreshTranscriptJobs();
+
 const reclamationStatus=document.getElementById("reclamation-status");
 const reclamationDetails=document.getElementById("reclamation-source-details");
 async function refreshReclamationStatus(){
