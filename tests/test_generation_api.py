@@ -849,3 +849,94 @@ def test_source_reclamation_waits_for_generation_build_to_finish(tmp_path):
                 ("reclaim-during-build",),
             ).fetchone()[0]
         assert retained == 1
+
+
+
+def test_generation_copy_retries_and_restart_resume_from_durable_checkpoints(tmp_path):
+    with _client(tmp_path) as client:
+        for index in range(2):
+            ingested = client.post("/api/v1/ingest/documents", json={
+                "source_id": f"durable-rebuild-{index}",
+                "revision": 1,
+                "title": f"Durable rebuild {index}",
+                "content": f"Durable rebuild source content {index}.",
+            })
+            assert ingested.status_code == 201, ingested.text
+
+        created = client.post(
+            "/api/v1/index/generations",
+            json={"generation_id": "durable-rebuild-retry"},
+        )
+        assert created.status_code == 200
+
+        first = client.post(
+            "/api/v1/index/generations/durable-rebuild-retry/copy/index",
+            json={"page_size": 1},
+        )
+        assert first.status_code == 200
+        assert first.json()["status"] == "in_progress"
+        assert first.json()["source_count"] == 1
+
+        # A retry resumes from the committed cursor rather than copying the
+        # acknowledged first page again.
+        retried = client.post(
+            "/api/v1/index/generations/durable-rebuild-retry/copy/index",
+            json={"page_size": 1},
+        )
+        assert retried.status_code == 200
+        assert retried.json()["status"] == "complete"
+        assert retried.json()["source_count"] == 2
+
+    # The generation record and sealed checkpoint survive application restart.
+    with _client(tmp_path) as client:
+        status = client.get("/api/v1/index/generations")
+        assert status.status_code == 200
+        generation = next(
+            item for item in status.json()["generations"]
+            if item["generation_id"] == "durable-rebuild-retry"
+        )
+        assert generation["state"] == "building"
+        assert generation["checkpoints"]["index"]["sealed"] is True
+        replay = client.post(
+            "/api/v1/index/generations/durable-rebuild-retry/copy/index",
+            json={"page_size": 1},
+        )
+        assert replay.status_code == 200
+        assert replay.json()["status"] == "complete"
+        assert replay.json()["page_count"] == 0
+        assert replay.json()["source_count"] == 2
+
+
+def test_generation_abort_is_a_durable_cancellation_boundary(tmp_path):
+    with _client(tmp_path) as client:
+        created = client.post(
+            "/api/v1/index/generations",
+            json={"generation_id": "durable-rebuild-cancel"},
+        )
+        assert created.status_code == 200
+
+        aborted = client.post(
+            "/api/v1/index/generations/durable-rebuild-cancel/abort",
+            json={"reason": "operator cancelled rebuild"},
+        )
+        assert aborted.status_code == 200
+        assert aborted.json()["generation"]["state"] == "aborted"
+
+        rejected = client.post(
+            "/api/v1/index/generations/durable-rebuild-cancel/copy/index",
+            json={"page_size": 10},
+        )
+        assert rejected.status_code == 409
+
+    with _client(tmp_path) as client:
+        status = client.get("/api/v1/index/generations")
+        generation = next(
+            item for item in status.json()["generations"]
+            if item["generation_id"] == "durable-rebuild-cancel"
+        )
+        assert generation["state"] == "aborted"
+        rejected = client.post(
+            "/api/v1/index/generations/durable-rebuild-cancel/copy/index",
+            json={"page_size": 10},
+        )
+        assert rejected.status_code == 409
