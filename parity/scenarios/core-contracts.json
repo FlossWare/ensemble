@@ -43,6 +43,80 @@
           "/uptime_seconds"
         ]
       }
+    },
+    {
+      "id": "chunking-window-v1",
+      "capability": "chunking",
+      "reference": {
+        "method": "POST",
+        "path": "/chunk",
+        "base_url_env": "POC_CHUNKING_URL",
+        "request": {
+          "profile": "window-v1",
+          "source_id": "parity-fixture-001",
+          "media_type": "text/plain",
+          "text": "Alpha beta gamma. Delta epsilon zeta. Eta theta iota."
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/chunking/chunk",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "profile": "window-v1",
+          "source_id": "parity-fixture-001",
+          "media_type": "text/plain",
+          "text": "Alpha beta gamma. Delta epsilon zeta. Eta theta iota."
+        }
+      }
+    },
+    {
+      "id": "chunking-markdown-v1",
+      "capability": "chunking",
+      "reference": {
+        "method": "POST",
+        "path": "/chunk",
+        "base_url_env": "POC_CHUNKING_URL",
+        "request": {
+          "profile": "markdown-v1",
+          "source_id": "parity-fixture-002",
+          "media_type": "text/markdown",
+          "text": "# Overview\\nAlpha beta.\\n\\n## Details\\nGamma delta."
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/chunking/chunk",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "profile": "markdown-v1",
+          "source_id": "parity-fixture-002",
+          "media_type": "text/markdown",
+          "text": "# Overview\\nAlpha beta.\\n\\n## Details\\nGamma delta."
+        }
+      }
+    },
+    {
+      "id": "tokenization-compound-identifiers",
+      "capability": "tokenization",
+      "reference": {
+        "method": "POST",
+        "path": "/tokenize",
+        "base_url_env": "POC_TOKENIZATION_URL",
+        "request": {
+          "profile": "lexical-v1",
+          "text": "Deploy memory-service v1.2 from /var/lib/ensemble; café UUID-1234."
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/tokenization/tokenize",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "profile": "lexical-v1",
+          "text": "Deploy memory-service v1.2 from /var/lib/ensemble; café UUID-1234."
+        }
+      }
     }
   ]
 }
