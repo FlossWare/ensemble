@@ -41,6 +41,7 @@ from .scraping import ScrapeError, crawl_uri, preview_uri, _validate_public_uri
 from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
 from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpointStore, InMemoryTranscriptCheckpointStore
 from .file_ingestion import extract_pdf, PDFExtractionError, MAX_PDF_BYTES
+from .image_ingestion import extract_image_metadata, image_metadata_text, ImageExtractionError, MAX_IMAGE_BYTES
 from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
 from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
 from .ga_config import load_ga_config
@@ -3927,6 +3928,39 @@ def create_app(
         from pathlib import Path
         from fastapi.responses import Response
         return Response(Path(__file__).with_name("control.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+    @app.post("/api/v1/ingest/images", status_code=201, tags=["ingestion"])
+    async def ingest_image(request: Request, source_id: str, title: str, revision: int = 1):
+        """Index image dimensions and embedded metadata; OCR/vision is explicitly not implied."""
+        media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if media_type not in {"image/png", "image/jpeg", "image/webp", "image/tiff", "image/bmp"}:
+            raise HTTPException(status_code=415, detail="unsupported image Content-Type")
+        if not source_id.strip() or len(source_id) > 1024:
+            raise HTTPException(status_code=400, detail="source_id must be 1-1024 characters")
+        if not title.strip() or len(title) > 2048:
+            raise HTTPException(status_code=400, detail="title must be 1-2048 characters")
+        if revision < 1:
+            raise HTTPException(status_code=400, detail="revision must be positive")
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="image exceeds the 20 MiB upload limit")
+        raw = await request.body()
+        try:
+            extracted = extract_image_metadata(raw)
+            document = DocumentIn(
+                source_id=source_id, revision=revision, title=title,
+                content=image_metadata_text(extracted), media_type=media_type,
+                metadata={"source_type": "image", **extracted},
+            )
+            result, decision = await ingest_indexed_document(
+                document, origin="image", locator=source_id, request=request
+            )
+            return {"ok": True, "decision": decision, "document": result,
+                    "extraction": extracted, "visual_content_processed": False}
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ImageExtractionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/api/v1/ingest/files", status_code=201, tags=["ingestion"])
     async def ingest_pdf(request: Request, source_id: str, title: str, revision: int = 1):
