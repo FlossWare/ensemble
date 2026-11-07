@@ -44,7 +44,7 @@ Use `--strict` when a run must fail if any scenario could not execute. The repor
 - `ignore_json_pointers` is for known volatile fields only.
 - `include_json_pointers` compares only explicitly named shared contract fields; missing fields still fail. Use this when the POC and Ensemble expose intentionally different metadata, and document the selected contract fields in the scenario.
 - `numeric_tolerances` maps JSON pointers to absolute numeric tolerances. It must not be used to paper over ranking, confidence, or model drift without an explicit quality rationale.
-- Add retrieval-specific metrics (Recall@k, MRR, nDCG, rank agreement) as separate evaluators over a shared judged corpus. Do not reduce retrieval quality to raw JSON equality.
+- Retrieval quality is evaluated separately with `python -m parity.retrieval_metrics` against a versioned judged corpus. It reports Recall@k, MRR@k, nDCG@k, candidate-minus-reference deltas, top-k Jaccard overlap, and Kendall tau over common IDs. The evaluator deliberately applies no pass/fail threshold until the judged corpus and acceptable regression policy have been reviewed. See [judged retrieval corpus format](../parity/corpora/README.md).
 
 ## Latest POC baseline
 
@@ -56,4 +56,4 @@ The capability map is pinned to POC `main` at `b1581e317d291bb9e16a12f4291664014
 
 ## Current limitations
 
-This increment provides the manifest-driven HTTP runner, explicit contract projections, deterministic comparison policy, machine-readable report, unit tests, and source-verified scenarios for five capabilities. It does not yet include the full POC-to-Ensemble route inventory, a shared judged retrieval corpus, live model/runtime comparisons, or a Control Center view. Those require source-audited scenario contracts and reference/candidate environment wiring. A capability with no executed scenario remains unmeasured, not complete.
+This increment provides the manifest-driven HTTP runner, explicit contract projections, deterministic comparison policy, machine-readable report, unit tests, and source-verified scenarios for five capabilities. It does not yet include the full POC-to-Ensemble route inventory, a shared judged retrieval corpus, live model/runtime comparisons, or a Control Center view. The retrieval metric engine is implemented, but the shared judged corpus and live POC/Ensemble result adapters remain outstanding. Those require source-audited scenario contracts and reference/candidate environment wiring. A capability with no executed scenario remains unmeasured, not complete.
