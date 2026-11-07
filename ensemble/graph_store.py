@@ -5,6 +5,8 @@ import json
 import os
 from typing import Any, Protocol
 
+import networkx as nx
+
 from sqlalchemy import Column, ForeignKey, JSON, MetaData, String, Table, delete, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -180,30 +182,72 @@ class SqliteGraphStore:
             raise ValueError("direction must be out, in, or both")
         if isinstance(max_depth, bool) or not isinstance(max_depth, int) or not 1 <= max_depth <= 100:
             raise ValueError("max_depth must be an integer from 1 to 100")
-        if await self.get_node(start) is None:
-            raise KeyError("node not found: " + start)
-        visited, frontier, result = {start}, {start}, []
         async with self.engine.connect() as connection:
-            all_edges = (await connection.execute(select(edges).order_by(edges.c.id))).mappings().all()
+            node_rows = (await connection.execute(select(nodes).order_by(nodes.c.id))).mappings().all()
+            edge_rows = (await connection.execute(select(edges).order_by(edges.c.id))).mappings().all()
+        graph = nx.MultiDiGraph()
+        for row in node_rows:
+            graph.add_node(row["id"], type=row["node_type"], properties=row["properties"])
+        for row in edge_rows:
+            graph.add_edge(
+                row["source_id"], row["target_id"], key=row["id"],
+                id=row["id"], type=row["edge_type"], properties=row["properties"],
+            )
+        if start not in graph:
+            raise KeyError("node not found: " + start)
+        if direction == "in":
+            traversal_graph = graph.reverse(copy=False)
+        elif direction == "both":
+            traversal_graph = graph.to_undirected(as_view=True)
+        else:
+            traversal_graph = graph
+        result = []
+        visited = {start}
+        frontier = {start}
         for depth in range(1, max_depth + 1):
             next_frontier = set()
-            for edge in all_edges:
-                if edge_type is not None and edge["edge_type"] != edge_type:
-                    continue
-                neighbors = []
-                if direction in {"out", "both"} and edge["source_id"] in frontier:
-                    neighbors.append(edge["target_id"])
-                if direction in {"in", "both"} and edge["target_id"] in frontier:
-                    neighbors.append(edge["source_id"])
-                for neighbor in neighbors:
+            for current in sorted(frontier):
+                for neighbor in sorted(traversal_graph.neighbors(current)):
                     if neighbor in visited:
                         continue
+                    if direction == "both":
+                        candidates = [
+                            (source, target, key, attrs)
+                            for source, target, key, attrs in graph.edges(keys=True, data=True)
+                            if {source, target} == {current, neighbor}
+                        ]
+                    elif direction == "in":
+                        candidates = [
+                            (source, target, key, attrs)
+                            for source, target, key, attrs in graph.in_edges(current, keys=True, data=True)
+                            if source == neighbor
+                        ]
+                    else:
+                        candidates = [
+                            (source, target, key, attrs)
+                            for source, target, key, attrs in graph.out_edges(current, keys=True, data=True)
+                            if target == neighbor
+                        ]
+                    if edge_type is not None:
+                        candidates = [item for item in candidates if item[3]["type"] == edge_type]
+                    if not candidates:
+                        continue
+                    source, target, _key, attrs = min(candidates, key=lambda item: item[3]["id"])
                     visited.add(neighbor)
                     next_frontier.add(neighbor)
-                    node = await self.get_node(neighbor)
-                    via = {"id": edge["id"], "source": edge["source_id"], "target": edge["target_id"], "type": edge["edge_type"], "properties": edge["properties"]}
-                    result.append({"depth": depth, "node": node, "via": via})
+                    result.append({
+                        "depth": depth,
+                        "node": {
+                            "id": neighbor, "type": graph.nodes[neighbor]["type"],
+                            "properties": graph.nodes[neighbor]["properties"],
+                        },
+                        "via": {
+                            "id": attrs["id"], "source": source, "target": target,
+                            "type": attrs["type"], "properties": attrs["properties"],
+                        },
+                    })
             frontier = next_frontier
             if not frontier:
                 break
         return result
+
