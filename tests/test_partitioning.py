@@ -390,3 +390,86 @@ def test_startup_recovers_crawl_jobs_in_every_configured_partition(tmp_path, mon
     assert {partition: job["status"] for partition, job in recovered.items()} == {
         "alpha": "interrupted", "beta": "interrupted",
     }
+
+
+
+def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path, monkeypatch):
+    class RecordingReranker:
+        def __init__(self):
+            self.calls = []
+
+        @property
+        def available(self):
+            return True
+
+        def status(self):
+            return {"ok": True, "ready": True, "provider": "recording-test"}
+
+        def score(self, query, documents):
+            self.calls.append(list(documents))
+            return [float(index) for index, _ in enumerate(documents)]
+
+    alpha_token, beta_token = "alpha-rerank-secret", "beta-rerank-secret"
+    token_map = {
+        hashlib.sha256(alpha_token.encode()).hexdigest(): {
+            "subject": "alpha-client", "partitions": ["alpha"],
+        },
+        hashlib.sha256(beta_token.encode()).hexdigest(): {
+            "subject": "beta-client", "partitions": ["beta"],
+        },
+    }
+    monkeypatch.setenv("ENSEMBLE_PARTITION_TOKENS", json.dumps(token_map))
+    monkeypatch.setenv("ENSEMBLE_AUTH_REQUIRED", "1")
+    base = f"sqlite+aiosqlite:///{tmp_path / 'reranker-partitions.db'}"
+    asyncio.run(asyncio.to_thread(_ensure_partition_schema, base, "default"))
+    reranker = RecordingReranker()
+    app = create_app(database_url=base, reranker=reranker)
+
+    alpha_headers = {
+        "Authorization": f"Bearer {alpha_token}",
+        "X-Ensemble-Partition": "alpha",
+    }
+    beta_headers = {
+        "Authorization": f"Bearer {beta_token}",
+        "X-Ensemble-Partition": "beta",
+    }
+
+    with TestClient(app) as client:
+        for headers, source_text, title in (
+            (alpha_headers, "alpha confidential retrieval material", "Alpha"),
+            (beta_headers, "beta confidential retrieval material", "Beta"),
+        ):
+            response = client.post(
+                "/api/v1/ingest/documents",
+                headers=headers,
+                json={
+                    "source_id": "same-source",
+                    "revision": 1,
+                    "title": title,
+                    "content": source_text,
+                },
+            )
+            assert response.status_code == 201, response.text
+
+        alpha = client.post(
+            "/api/v1/search/hybrid",
+            headers=alpha_headers,
+            json={"query": "confidential retrieval material", "limit": 10, "rerank": True},
+        )
+        beta = client.post(
+            "/api/v1/search/hybrid",
+            headers=beta_headers,
+            json={"query": "confidential retrieval material", "limit": 10, "rerank": True},
+        )
+
+        assert alpha.status_code == 200, alpha.text
+        assert beta.status_code == 200, beta.text
+        assert alpha.json()["reranked"] is True
+        assert beta.json()["reranked"] is True
+        assert len(reranker.calls) == 2
+        assert reranker.calls[0]
+        assert reranker.calls[1]
+        assert all("alpha confidential" in item for item in reranker.calls[0])
+        assert all("beta confidential" not in item for item in reranker.calls[0])
+        assert all("beta confidential" in item for item in reranker.calls[1])
+        assert all("alpha confidential" not in item for item in reranker.calls[1])
