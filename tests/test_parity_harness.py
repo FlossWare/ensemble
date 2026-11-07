@@ -102,3 +102,20 @@ def test_capability_map_references_known_scenarios_and_keeps_unmeasured_explicit
             assert capability["measurement"] == "mapped-unmeasured"
         else:
             assert capability["measurement"] == "scenario-backed"
+
+
+
+def test_latest_poc_memory_and_knowledge_changes_are_in_parity_inventory():
+    root = Path.cwd()
+    capability_map = json.loads((root / "parity/capability-map.json").read_text())
+    memory = next(item for item in capability_map["capabilities"] if item["id"] == "memory")
+    prompt = next(item for item in capability_map["capabilities"] if item["id"] == "prompt-capture")
+    hybrid = next(item for item in capability_map["capabilities"] if item["id"] == "hybrid-search")
+
+    history_routes = {(route["method"], route["path"]) for route in memory["poc"]["http_routes"]}
+    assert ("GET", "/history") in history_routes
+    assert ("GET", "/history/{event_id}") in history_routes
+    assert prompt["poc"]["ledger"].endswith("/prompts/prompts.jsonl")
+    assert prompt["measurement"] == "mapped-unmeasured"
+    assert "chunk_index" in hybrid["notes"]
+    assert "content_sha256" in hybrid["notes"]
