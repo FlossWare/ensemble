@@ -42,6 +42,10 @@ def audit_dependencies(root: Path, policy: dict[str, Any]) -> dict[str, Any]:
     exceptions = {normalize(name): reason for name, reason in policy.get("approved_exceptions", {}).items()}
     missing_python = sorted(python_required - python_declared)
     missing_node = sorted(node_required - node_declared)
+    declared_exceptions = sorted(
+        name for name in exceptions
+        if name in python_declared or name in node_declared
+    )
     return {
         "schema_version": 1,
         "reference": policy.get("reference", {}),
@@ -56,7 +60,8 @@ def audit_dependencies(root: Path, policy: dict[str, Any]) -> dict[str, Any]:
             "missing": missing_node,
         },
         "approved_exceptions": exceptions,
-        "status": "FAIL" if missing_python or missing_node else "PASS",
+        "declared_exceptions": declared_exceptions,
+        "status": "FAIL" if missing_python or missing_node or declared_exceptions else "PASS",
     }
 
 
