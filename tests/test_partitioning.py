@@ -208,6 +208,10 @@ def test_document_ingestion_and_retrieval_do_not_cross_partitions(tmp_path, monk
         assert beta_hybrid.status_code == 200, beta_hybrid.text
         assert "graph_expansion" in alpha_hybrid.json()
         assert "intent" in alpha_hybrid.json()
+        assert alpha_hybrid.json()["graph_expansion"]["candidate_sources"] == 1
+        assert alpha_hybrid.json()["graph_expansion"]["candidate_chunks"] >= 1
+        assert beta_hybrid.json()["graph_expansion"]["candidate_sources"] == 1
+        assert beta_hybrid.json()["graph_expansion"]["candidate_chunks"] >= 1
         assert any("alpha-only" in item["text"] for item in alpha_hybrid.json()["results"])
         assert not any("beta-only" in item["text"] for item in alpha_hybrid.json()["results"])
         assert any("beta-only" in item["text"] for item in beta_hybrid.json()["results"])
