@@ -30,7 +30,7 @@ def test_compare_observations_checks_http_status_and_body():
         {"status_code": 503, "body": {"ready": False}},
     )
     assert result["status"] == "FAIL"
-    assert len(result["differences"]) == 2
+    assert len(result["differences"]) == 3
 
 
 def test_missing_reference_or_candidate_is_not_run():
@@ -53,3 +53,17 @@ def test_initial_manifest_is_valid_and_has_stable_scenario_ids():
     assert len(ids) == len(set(ids))
     assert all(scenario["reference"]["path"].startswith("/") for scenario in manifest["scenarios"])
     assert all(scenario["candidate"]["path"].startswith("/api/v1/") for scenario in manifest["scenarios"])
+
+
+def test_matching_error_statuses_do_not_pass():
+    result = compare_observations(
+        {"status_code": 404, "body": {"error": "not found"}},
+        {"status_code": 404, "body": {"error": "not found"}},
+    )
+    assert result["status"] == "FAIL"
+    assert result["differences"][0] == "Reference HTTP status: 404 != expected 200"
+
+
+def test_empty_manifest_is_rejected():
+    with pytest.raises(ValueError, match="at least one scenario"):
+        run_manifest({"version": 1, "scenarios": []}, environ={})
