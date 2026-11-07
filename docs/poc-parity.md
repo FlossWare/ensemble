@@ -50,7 +50,7 @@ Ensemble implements the POC's source-manifest decision model in SQLite: accepted
 
 ## Vector storage implementation
 
-Production Ensemble now uses ChromaDB's persistent client for vector records and cosine similarity search. Collection metadata records the logical collection name, embedding model, dimensions, and distance space. Generation data uses isolated ChromaDB collections; partition IDs map to separate persistence directories. SQLite remains authoritative for Index revisions, tombstones, generation journals, and cutover coordination, not vector embeddings. The previous `SqliteVectorStore` is retained only as a legacy test adapter and is not selected by the production API.
+Production Ensemble now uses ChromaDB's persistent client for vector records and the POC's exact NumPy dot-product search over a per-collection matrix cache. Collection metadata records the logical collection name, embedding model, dimensions, and cosine distance space; Ensemble does not use ChromaDB's HNSW query for ranking. Generation data uses isolated ChromaDB collections; partition IDs map to separate persistence directories. SQLite remains authoritative for Index revisions, tombstones, generation journals, and cutover coordination, not vector embeddings. The previous `SqliteVectorStore` is retained only as a legacy test adapter and is not selected by the production API.
 
 ## Embedding runtime behavior to preserve or explicitly supersede
 
