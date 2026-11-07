@@ -22,7 +22,8 @@ The parity harness makes observable POC behavior comparable with Ensemble behavi
 Set the POC service base URLs independently because the POC runs these capabilities on separate listeners. Ensemble uses its single REST listener.
 
 ```sh
-POC_BASE_URL=http://127.0.0.1:8775 \
+POC_CHUNKING_URL=http://127.0.0.1:8775 \
+POC_TOKENIZATION_URL=http://127.0.0.1:8776 \\
 ENSEMBLE_BASE_URL=http://127.0.0.1:8080 \
 python -m parity.runner parity/scenarios/core-contracts.json \
   --report parity-report.json
