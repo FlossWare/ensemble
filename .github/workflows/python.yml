@@ -30,6 +30,8 @@ jobs:
           done
       - name: Validate Control Center JavaScript
         run: node --check ensemble/control.js
+      - name: Audit POC dependency retention
+        run: python -m parity.dependency_audit
       - name: Test parity harness
         run: python -m pytest tests/test_parity_harness.py
       - name: Test
