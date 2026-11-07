@@ -113,6 +113,15 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 <pre id="source-result">No source selected.</pre>
 <form id="source-tombstone-form"><input id="tombstone-source-id" type="text" required maxlength="512" placeholder="Source identifier to tombstone"><input id="tombstone-sequence" type="number" min="1" required placeholder="Revision sequence"><button type="submit">Tombstone source</button></form>
 <p class="muted">Tombstones are permanent source-index decisions. Confirm carefully before submitting.</p><pre id="tombstone-result">No tombstone requested.</pre>
+<h3>Durable Source Reclamation</h3>
+<p class="muted">Read-only queue status and per-source deletion audit. Physical reclamation runs through the durable worker; this panel does not trigger purge or cancel a pending deletion.</p>
+<div class="toolbar"><button id="reclamation-refresh" type="button">Refresh reclamation queue</button></div>
+<pre id="reclamation-status">Queue status not loaded.</pre>
+<form id="reclamation-source-form">
+<label>Source identifier <input id="reclamation-source-id" type="text" required maxlength="1024" placeholder="Source identifier"></label>
+<button type="submit">Inspect reclamation and audit</button>
+</form>
+<pre id="reclamation-source-details">No source reclamation selected.</pre>
 </section>
 <section id="generation-workbench">
  <h2>Index Generation Lifecycle</h2>
