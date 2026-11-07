@@ -61,6 +61,15 @@ class ChromaVectorStore:
                 self._clients[partition] = client
             return client
 
+    def _list_collections(self):
+        client = self._client()
+        listed = client.list_collections()
+        # ChromaDB <=0.5 returned Collection objects; newer releases return names.
+        return [
+            item if hasattr(item, "metadata") else client.get_collection(name=item)
+            for item in listed
+        ]
+
     @staticmethod
     def _generation_name(generation_id: str, name: str) -> str:
         digest = hashlib.sha256(f"{generation_id}\0{name}".encode("utf-8")).hexdigest()[:48]
@@ -184,7 +193,7 @@ class ChromaVectorStore:
     async def list_collections(self) -> list[dict[str, Any]]:
         def run():
             result = []
-            for collection in self._client().list_collections():
+            for collection in self._list_collections():
                 metadata = collection.metadata or {}
                 if metadata.get("ensemble_generation_id"):
                     continue
@@ -268,7 +277,7 @@ class ChromaVectorStore:
     async def tombstone_source(self, source_id: str) -> int:
         def run():
             changed = 0
-            for collection in self._client().list_collections():
+            for collection in self._list_collections():
                 rows = self._records_from_get(collection.get(where=self._where_source(source_id), include=["metadatas"]))
                 selected = [(row["id"], row["metadata"]) for row in rows if not row["metadata"].get("_tombstoned")]
                 if selected:
@@ -285,7 +294,7 @@ class ChromaVectorStore:
     async def restore_source(self, source_id: str) -> int:
         def run():
             changed = 0
-            for collection in self._client().list_collections():
+            for collection in self._list_collections():
                 rows = self._records_from_get(collection.get(where=self._where_source(source_id), include=["metadatas"]))
                 selected = [(row["id"], row["metadata"]) for row in rows if row["metadata"].pop("_tombstoned", None)]
                 if selected:
@@ -300,7 +309,7 @@ class ChromaVectorStore:
     async def reclaim_source(self, source_id: str) -> int:
         def run():
             total = 0
-            for collection in self._client().list_collections():
+            for collection in self._list_collections():
                 if (collection.metadata or {}).get("ensemble_generation_id"):
                     continue
                 ids = collection.get(where=self._where_source(source_id), include=[])["ids"]
@@ -443,7 +452,7 @@ class ChromaVectorStore:
     async def delete_generation_source(self, generation_id: str, source_id: str, name: str | None = None) -> int:
         def run():
             removed = 0
-            for collection in self._client().list_collections():
+            for collection in self._list_collections():
                 metadata = collection.metadata or {}
                 if metadata.get("ensemble_generation_id") != generation_id:
                     continue
@@ -462,7 +471,7 @@ class ChromaVectorStore:
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:
         def run():
             changed = 0
-            for collection in self._client().list_collections():
+            for collection in self._list_collections():
                 if (collection.metadata or {}).get("ensemble_generation_id") != generation_id:
                     continue
                 rows = self._records_from_get(collection.get(where=self._where_source(source_id), include=["metadatas"]))
@@ -479,7 +488,7 @@ class ChromaVectorStore:
     async def restore_generation_source(self, generation_id: str, source_id: str) -> int:
         def run():
             changed = 0
-            for collection in self._client().list_collections():
+            for collection in self._list_collections():
                 if (collection.metadata or {}).get("ensemble_generation_id") != generation_id:
                     continue
                 rows = self._records_from_get(collection.get(where=self._where_source(source_id), include=["metadatas"]))
