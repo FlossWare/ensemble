@@ -18,9 +18,8 @@ from .partitioning import current_partition_id
 
 
 class ChromaVectorStore:
-    backend_name = "chromadb"
-
-    """ChromaDB persistent vector backend with partition-isolated storage.
+    """
+    backend_name = "chromadb"ChromaDB persistent vector backend with partition-isolated storage.
 
     SQLite remains the authority for Index, source revisions, and generation
     coordination. Vector records and similarity search live in ChromaDB.
