@@ -481,3 +481,80 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
             "beta confidential" in item and "alpha confidential" not in item
             for call in beta_calls for item in call
         )
+
+
+def test_hybrid_knowledge_retrieval_is_partition_isolated(tmp_path, monkeypatch):
+    class Embeddings:
+        available = True
+
+        def status(self):
+            return {"ok": True, "ready": True, "model": "partition-test", "dimensions": 3}
+
+        async def embed(self, texts, mode="document"):
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+    alpha_token, beta_token = "alpha-knowledge-secret", "beta-knowledge-secret"
+    token_map = {
+        hashlib.sha256(alpha_token.encode()).hexdigest(): {
+            "subject": "alpha-client", "partitions": ["alpha"],
+        },
+        hashlib.sha256(beta_token.encode()).hexdigest(): {
+            "subject": "beta-client", "partitions": ["beta"],
+        },
+    }
+    monkeypatch.setenv("ENSEMBLE_PARTITION_TOKENS", json.dumps(token_map))
+    monkeypatch.setenv("ENSEMBLE_AUTH_REQUIRED", "1")
+    base = f"sqlite+aiosqlite:///{tmp_path / 'knowledge-partitions.db'}"
+    app = create_app(
+        database_url=base, embedding_provider=Embeddings(),
+        run_reclamation_worker=False,
+    )
+    alpha_headers = {
+        "Authorization": f"Bearer {alpha_token}",
+        "X-Ensemble-Partition": "alpha",
+    }
+    beta_headers = {
+        "Authorization": f"Bearer {beta_token}",
+        "X-Ensemble-Partition": "beta",
+    }
+
+    with TestClient(app) as client:
+        for headers, title, content, revision_id in (
+            (alpha_headers, "Alpha knowledge", "alpha confidential knowledge material", "alpha-revision"),
+            (beta_headers, "Beta knowledge", "beta confidential knowledge material", "beta-revision"),
+        ):
+            stored = client.post(
+                "/api/v1/knowledge/records", headers=headers,
+                json={
+                    "source_id": "shared-knowledge-source",
+                    "revision_sequence": 1, "revision_id": revision_id,
+                    "title": title, "content": content,
+                    "provenance": {"origin": "partition-test", "locator": "test://shared-source"},
+                    "profiles": {"chunking": "window-v1@1", "tokenization": "lexical-v1@1"},
+                },
+            )
+            assert stored.status_code == 200, stored.text
+            assert stored.json()["stored"] is True
+
+        alpha = client.post(
+            "/api/v1/search/hybrid/knowledge", headers=alpha_headers,
+            json={"query": "confidential knowledge material", "limit": 10},
+        )
+        beta = client.post(
+            "/api/v1/search/hybrid/knowledge", headers=beta_headers,
+            json={"query": "confidential knowledge material", "limit": 10},
+        )
+
+        assert alpha.status_code == 200, alpha.text
+        assert beta.status_code == 200, beta.text
+        alpha_results = alpha.json()["results"]
+        beta_results = beta.json()["results"]
+        assert alpha_results
+        assert beta_results
+        assert {item["metadata"]["source_id"] for item in alpha_results} == {"shared-knowledge-source"}
+        assert {item["metadata"]["source_id"] for item in beta_results} == {"shared-knowledge-source"}
+        assert all("alpha confidential" in item["document"] for item in alpha_results)
+        assert all("beta confidential" not in item["document"] for item in alpha_results)
+        assert all("beta confidential" in item["document"] for item in beta_results)
+        assert all("alpha confidential" not in item["document"] for item in beta_results)
+
