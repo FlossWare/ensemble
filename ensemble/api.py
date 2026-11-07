@@ -4748,6 +4748,8 @@ def create_app(
                 "incomplete_tail": parsed["incomplete_tail"],
                 "touches_detected": len(parsed["touches"]),
             })
+        if not await active_transcript_store.heartbeat_job(job_id, owner_id):
+            raise HTTPException(status_code=409, detail="transcript worker lease was lost")
         try:
             committed = await active_transcript_store.commit(
                 source_id, revision_id, project, file_path, offset, parsed["end_offset"],
