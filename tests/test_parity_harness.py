@@ -1,0 +1,55 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from parity.runner import compare_json, compare_observations, run_manifest
+
+
+def test_compare_json_reports_nested_paths_and_ignores_explicit_fields():
+    differences = compare_json(
+        {"items": [{"id": "a", "score": 0.9}], "generated": "then"},
+        {"items": [{"id": "a", "score": 0.901}], "generated": "now"},
+        {"ignore_json_pointers": ["/generated"],
+         "numeric_tolerances": {"/items/0/score": 0.01}},
+    )
+    assert differences == []
+
+
+def test_compare_json_does_not_hide_unapproved_differences():
+    differences = compare_json(
+        {"results": [{"id": "a"}, {"id": "b"}]},
+        {"results": [{"id": "b"}, {"id": "a"}]},
+    )
+    assert differences == ["/results: list values differ"]
+
+
+def test_compare_observations_checks_http_status_and_body():
+    result = compare_observations(
+        {"status_code": 200, "body": {"ready": True}},
+        {"status_code": 503, "body": {"ready": False}},
+    )
+    assert result["status"] == "FAIL"
+    assert len(result["differences"]) == 2
+
+
+def test_missing_reference_or_candidate_is_not_run():
+    report = run_manifest(
+        {"version": 1, "scenarios": [{
+            "id": "health", "capability": "platform",
+            "reference": {"path": "/health"},
+            "candidate": {"path": "/health"},
+        }]},
+        environ={},
+    )
+    assert report["overall"] == "NOT_RUN"
+    assert report["summary"]["NOT_RUN"] == 1
+    assert report["results"][0]["status"] == "NOT_RUN"
+
+
+def test_initial_manifest_is_valid_and_has_stable_scenario_ids():
+    manifest = json.loads(Path("parity/scenarios/core-contracts.json").read_text())
+    ids = [scenario["id"] for scenario in manifest["scenarios"]]
+    assert len(ids) == len(set(ids))
+    assert all(scenario["reference"]["path"].startswith("/") for scenario in manifest["scenarios"])
+    assert all(scenario["candidate"]["path"].startswith("/api/v1/") for scenario in manifest["scenarios"])
