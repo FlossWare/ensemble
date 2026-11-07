@@ -4655,9 +4655,10 @@ def create_app(
         job_id = hashlib.sha256(
             f"{source_id}\\0{revision_id}\\0{offset}\\0{payload_digest}".encode("utf-8")
         ).hexdigest()
+        owner_id = uuid4().hex
         try:
             job_state = await active_transcript_store.start_job(
-                job_id, source_id, revision_id, project, file_path, offset, payload_digest,
+                job_id, source_id, revision_id, project, file_path, offset, payload_digest, owner_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
