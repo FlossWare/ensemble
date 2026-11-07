@@ -483,7 +483,12 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
             )
             # Diagnostics must describe only the authorized partition's candidates.
             assert body["fusion"]["channels"]["lexical"]["candidate_count"] == 1
+            lexical_candidates = body["fusion"]["channels"]["lexical"]["candidates"]
+            assert len(lexical_candidates) == 1
+            assert lexical_candidates[0]["source_id"] == "same-source"
+            assert lexical_candidates[0]["title"] == ("Alpha" if own_marker.startswith("alpha") else "Beta")
             assert body["fusion"]["channels"]["vector"]["candidate_count"] == 0
+            assert body["fusion"]["channels"]["vector"]["candidates"] == []
             assert body["channels"]["vector"]["status"] == "unavailable"
             assert body["fusion"]["channels"]["graph"]["candidate_count"] == 0
             assert len(body["fusion"]["results"]) == 1
