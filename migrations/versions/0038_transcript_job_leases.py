@@ -26,7 +26,7 @@ def upgrade() -> None:
     # Give pre-lease workers a bounded grace period to finish after upgrade.
     op.execute(
         "UPDATE ensemble_transcript_jobs "
-        "SET lease_expires_at = datetime(updated_at, '+5 minutes') "
+        "SET lease_expires_at = datetime(updated_at, '+15 minutes') "
         "WHERE status = 'running'"
     )
 
