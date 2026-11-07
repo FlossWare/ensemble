@@ -189,7 +189,9 @@
       },
       "scenario_ids": [],
       "measurement": "mapped-unmeasured",
-      "notes": "POC knowledge search combines vector and exact-match retrieval with weighted RRF and optional reranking. Exact-match hits now preserve chunk_index, chunk_count, and content_sha256. Ensemble currently needs the exact-match lexical leg and provenance projection verified; vector-only route similarity is not sufficient."
+      "notes": "POC knowledge search combines vector and exact-match retrieval with weighted RRF and optional reranking. Exact-match hits now preserve chunk_index, chunk_count, and content_sha256. Ensemble currently needs the exact-match lexical leg and provenance projection verified; vector-only route similarity is not sufficient. Retrieval metric evaluation is implemented; shared judged corpus and live result adapters remain pending.",
+      "quality_evaluator": "parity.retrieval_metrics",
+      "judged_corpus_status": "pending"
     },
     {
       "id": "knowledge",
