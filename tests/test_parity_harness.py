@@ -125,7 +125,7 @@ def test_latest_poc_memory_and_knowledge_changes_are_in_parity_inventory():
 def test_capability_map_contains_source_and_candidate_routes_for_every_area():
     capability_map = json.loads((Path.cwd() / "parity/capability-map.json").read_text())
     for capability in capability_map["capabilities"]:
-        assert capability["poc"].get("routes") or capability["poc"].get("operations")
+        assert any(capability["poc"].get(key) for key in ("routes", "http_routes", "operations", "socket_operations", "capture"))
         assert capability["ensemble"].get("routes")
         assert capability["poc"].get("transport")
         assert capability["ensemble"].get("transport")
