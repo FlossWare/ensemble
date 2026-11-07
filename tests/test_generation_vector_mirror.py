@@ -9,7 +9,7 @@ from ensemble.index_store import SqliteIndexStore
 from ensemble.models import DocumentIn
 from ensemble.services import DocumentService
 from ensemble.store import SqlDocumentStore
-from ensemble.vector_store import SqliteVectorStore
+from ensemble.chroma_vector_store import ChromaVectorStore
 
 
 class _TestEmbeddings:
@@ -30,7 +30,7 @@ def test_vector_generation_mirror_failure_keeps_index_change_unacknowledged(tmp_
 
     async def exercise():
         documents = SqlDocumentStore(database_url)
-        vectors = SqliteVectorStore(database_url)
+        vectors = ChromaVectorStore(database_url=database_url)
         index = SqliteIndexStore(database_url)
         await documents.initialize()
         await vectors.initialize()
