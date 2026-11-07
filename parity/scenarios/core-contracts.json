@@ -9,11 +9,13 @@
       "capability": "chunking",
       "reference": {
         "method": "GET",
-        "path": "/health"
+        "path": "/health",
+        "base_url_env": "POC_CHUNKING_URL"
       },
       "candidate": {
         "method": "GET",
-        "path": "/api/v1/chunking/health"
+        "path": "/api/v1/chunking/health",
+        "base_url_env": "ENSEMBLE_BASE_URL"
       },
       "comparison": {
         "ignore_json_pointers": [
@@ -27,11 +29,13 @@
       "capability": "tokenization",
       "reference": {
         "method": "GET",
-        "path": "/health"
+        "path": "/health",
+        "base_url_env": "POC_TOKENIZATION_URL"
       },
       "candidate": {
         "method": "GET",
-        "path": "/api/v1/tokenization/health"
+        "path": "/api/v1/tokenization/health",
+        "base_url_env": "ENSEMBLE_BASE_URL"
       },
       "comparison": {
         "ignore_json_pointers": [
