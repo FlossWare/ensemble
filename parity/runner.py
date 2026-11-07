@@ -41,7 +41,6 @@ def compare_json(reference: Any, candidate: Any, policy: dict[str, Any] | None =
     policy = policy or {}
     ignored = set(policy.get("ignore_json_pointers", []))
     tolerances = policy.get("numeric_tolerances", {})
-    ordered = set(policy.get("ordered_json_pointers", []))
     differences: list[str] = []
 
     def walk(left: Any, right: Any, pointer: str) -> None:
@@ -65,16 +64,12 @@ def compare_json(reference: Any, candidate: Any, policy: dict[str, Any] | None =
                 else:
                     walk(left[key], right[key], child)
         elif isinstance(left, list):
-            if pointer in ordered:
-                if len(left) != len(right):
-                    differences.append(f"{pointer or '/'}: list length {len(left)} != {len(right)}")
-                for index, (a, b) in enumerate(zip(left, right)):
-                    walk(a, b, f"{pointer}/{index}")
-            else:
-                # Default list comparison is exact and order-sensitive. Marking a
-                # path ordered is explicit documentation, not a different behavior.
-                if left != right:
-                    differences.append(f"{pointer or '/'}: list values differ")
+            # Arrays are order-sensitive, but recurse so numeric tolerances and
+            # ignored pointers still work for individual array elements.
+            if len(left) != len(right):
+                differences.append(f"{pointer or '/'}: list length {len(left)} != {len(right)}")
+            for index, (a, b) in enumerate(zip(left, right)):
+                walk(a, b, f"{pointer}/{index}")
         elif left != right:
             differences.append(f"{pointer or '/'}: {left!r} != {right!r}")
 
