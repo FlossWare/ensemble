@@ -415,6 +415,7 @@ class ChromaVectorStore:
             result = await asyncio.to_thread(run)
             if result:
                 self._invalidate_record_snapshot(name)
+                self._invalidate_vector_cache(name)
             return result
         except Exception as exc:
             if self._is_missing_collection(exc):
