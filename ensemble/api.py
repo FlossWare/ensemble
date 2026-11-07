@@ -266,7 +266,7 @@ def create_app(
     active_reranker = reranker or configured_reranker()
     active_vector_store = vector_store or (
         InMemoryVectorStore() if isinstance(document_store, InMemoryDocumentStore)
-        else ChromaVectorStore()
+        else ChromaVectorStore(database_url=database_url)
     )
     active_index_store = index_store or (
         InMemoryIndexStore() if isinstance(document_store, InMemoryDocumentStore)
