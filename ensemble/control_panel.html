@@ -40,7 +40,7 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 <div class="app-shell">
 <aside class="sidebar" aria-label="Control Center navigation">
 <div class="nav-label">Workspace</div><nav>
-<a href="#platform-status">Overview</a><a href="#retrieval-explorer">Retrieval</a><a href="#memory-inspector">Intelligence</a><a href="#graph-workbench">Knowledge Graph</a><a href="#pipeline-inspector">Pipelines</a><a href="#collaboration-panel">Collaboration</a><a href="#ga-panel">Experiments</a>
+<a href="#platform-status">Overview</a><a href="#retrieval-explorer">Retrieval</a><a href="#memory-inspector">Intelligence</a><a href="#graph-workbench">Knowledge Graph</a><a href="#generation-workbench">Index Generations</a><a href="#pipeline-inspector">Pipelines</a><a href="#collaboration-panel">Collaboration</a><a href="#ga-panel">Experiments</a>
 </nav><div class="nav-label">Administration</div><nav>
 <a href="#index-inspector">Index &amp; Vectors</a><a href="#runtime-config">Runtime</a><a href="#partition-session">Partition session</a>
 </nav></aside><main class="main-content">
@@ -88,6 +88,16 @@ table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;p
 <form id="source-tombstone-form"><input id="tombstone-source-id" type="text" required maxlength="512" placeholder="Source identifier to tombstone"><input id="tombstone-sequence" type="number" min="1" required placeholder="Revision sequence"><button type="submit">Tombstone source</button></form>
 <p class="muted">Tombstones are permanent source-index decisions. Confirm carefully before submitting.</p><pre id="tombstone-result">No tombstone requested.</pre>
 </section>
+<section id="generation-workbench">
+ <h2>Index Generation Lifecycle</h2>
+ <p class="muted">Operate the durable SQLite-backed rebuild lifecycle one bounded page at a time. Review status and checkpoints before fencing or activating. A generation switch affects live retrieval and writes.</p>
+ <div class="toolbar"><button id="generation-refresh" type="button">Refresh generation status</button><input id="generation-id" type="text" maxlength="64" placeholder="Generation ID (created or existing)"><button id="generation-create" type="button">Create generation</button></div>
+ <label>Page size <input id="generation-page-size" type="number" min="1" max="1000" value="250"></label>
+ <div class="toolbar"><button id="generation-copy" type="button">Copy next page across capabilities</button><button id="generation-reconcile" type="button">Reconcile next page across capabilities</button></div>
+ <div class="toolbar"><button id="generation-fence" type="button">Fence reconciled generation</button><button id="generation-activate" type="button">Activate generation</button><button id="generation-abort" type="button">Abort generation</button></div>
+ <pre id="generation-status">Not loaded. Refresh status before operating on an existing generation.</pre>
+ <pre id="generation-results">No generation operation run.</pre>
+ </section>
 <section id="memory-inspector">
 <h2>Memory and Knowledge Inspection</h2>
 <div class="toolbar"><button id="refresh-memories" type="button">Refresh memory names</button><button id="refresh-memory-knowledge" type="button">Refresh Knowledge status</button></div>
