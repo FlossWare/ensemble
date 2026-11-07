@@ -313,7 +313,7 @@ class SqliteIndexStore:
                 generations.c.generation_id == generation_id,
                 generations.c.state == "building",
             ).values(
-                state="failed", verification={"failure": reason},
+                state="aborted", verification={"aborted": reason},
                 updated_at=datetime.now(timezone.utc),
             ))
             if changed.rowcount != 1:
