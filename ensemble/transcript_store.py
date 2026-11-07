@@ -281,8 +281,10 @@ class SqliteTranscriptCheckpointStore:
     async def complete_job(self, job_id: str, end_offset: int, result: dict[str, Any], owner_id: str | None = None) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         conditions = [jobs.c.job_id == job_id, jobs.c.status == "running"]
-        if owner_id is not None:
-            conditions.extend([jobs.c.lease_owner == owner_id, jobs.c.lease_expires_at > now])
+        conditions.extend([
+            jobs.c.lease_owner == (owner_id or job_id),
+            jobs.c.lease_expires_at > now,
+        ])
         async with self.engine.begin() as connection:
             changed = await connection.execute(update(jobs).where(*conditions).values(
                 status="completed", end_offset=end_offset, result=result,
@@ -297,8 +299,10 @@ class SqliteTranscriptCheckpointStore:
     async def fail_job(self, job_id: str, error: str, owner_id: str | None = None) -> None:
         now = datetime.now(timezone.utc)
         conditions = [jobs.c.job_id == job_id, jobs.c.status == "running"]
-        if owner_id is not None:
-            conditions.extend([jobs.c.lease_owner == owner_id, jobs.c.lease_expires_at > now])
+        conditions.extend([
+            jobs.c.lease_owner == (owner_id or job_id),
+            jobs.c.lease_expires_at > now,
+        ])
         async with self.engine.begin() as connection:
             await connection.execute(update(jobs).where(*conditions).values(
                 status="failed", last_error=str(error)[:2000], updated_at=now,
@@ -432,10 +436,9 @@ class InMemoryTranscriptCheckpointStore:
         row = self._jobs.get(job_id)
         if row is None or row["status"] != "running":
             raise ValueError("transcript job not found or lease ownership was lost")
-        if owner_id is not None:
-            expiry = datetime.fromisoformat(row["lease_expires_at"]) if row.get("lease_expires_at") else None
-            if row.get("lease_owner") != owner_id or expiry is None or expiry <= datetime.now(timezone.utc):
-                raise ValueError("transcript job not found or lease ownership was lost")
+        expiry = datetime.fromisoformat(row["lease_expires_at"]) if row.get("lease_expires_at") else None
+        if row.get("lease_owner") != (owner_id or job_id) or expiry is None or expiry <= datetime.now(timezone.utc):
+            raise ValueError("transcript job not found or lease ownership was lost")
         now = datetime.now(timezone.utc).isoformat()
         row.update({
             "status": "completed", "end_offset": end_offset, "result": result,
@@ -447,10 +450,9 @@ class InMemoryTranscriptCheckpointStore:
     async def fail_job(self, job_id: str, error: str, owner_id: str | None = None) -> None:
         row = self._jobs.get(job_id)
         if row is not None and row["status"] == "running":
-            if owner_id is not None:
-                expiry = datetime.fromisoformat(row["lease_expires_at"]) if row.get("lease_expires_at") else None
-                if row.get("lease_owner") != owner_id or expiry is None or expiry <= datetime.now(timezone.utc):
-                    return
+            expiry = datetime.fromisoformat(row["lease_expires_at"]) if row.get("lease_expires_at") else None
+            if row.get("lease_owner") != (owner_id or job_id) or expiry is None or expiry <= datetime.now(timezone.utc):
+                return
             row.update({
                 "status": "failed", "last_error": str(error)[:2000],
                 "updated_at": datetime.now(timezone.utc).isoformat(),
