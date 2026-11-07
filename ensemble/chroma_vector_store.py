@@ -406,7 +406,10 @@ class ChromaVectorStore:
                 )
             return len(selected)
         try:
-            return await asyncio.to_thread(run)
+            result = await asyncio.to_thread(run)
+            if result:
+                self._update_cached_metadata(name, items)
+            return result
         except Exception as exc:
             if self._is_missing_collection(exc):
                 return 0
@@ -446,6 +449,11 @@ class ChromaVectorStore:
                         metadatas=[self._metadata_to_chroma(metadata) for _, metadata in selected],
                     )
                     changed += len(selected)
+                    metadata = collection.metadata or {}
+                    self._invalidate_vector_cache(
+                        metadata.get("ensemble_name", collection.name),
+                        metadata.get("ensemble_generation_id"),
+                    )
             return changed
         return await asyncio.to_thread(run)
 
@@ -463,6 +471,11 @@ class ChromaVectorStore:
                         metadatas=[self._metadata_to_chroma(metadata) for _, metadata in selected],
                     )
                     changed += len(selected)
+                    metadata = collection.metadata or {}
+                    self._invalidate_vector_cache(
+                        metadata.get("ensemble_name", collection.name),
+                        metadata.get("ensemble_generation_id"),
+                    )
             return changed
         return await asyncio.to_thread(run)
 
@@ -476,9 +489,9 @@ class ChromaVectorStore:
                 selected = ids[:500]
                 if selected:
                     collection.delete(ids=selected)
-                    self._invalidate_record_snapshot(
-                        (collection.metadata or {}).get("ensemble_name", collection.name)
-                    )
+                    logical_name = (collection.metadata or {}).get("ensemble_name", collection.name)
+                    self._invalidate_record_snapshot(logical_name)
+                    self._invalidate_vector_cache(logical_name)
                 total += len(selected)
                 if len(ids) > 500:
                     return 501
@@ -517,7 +530,9 @@ class ChromaVectorStore:
                 metadatas=[self._metadata_to_chroma(item["metadata"]) for item in items],
             )
             return len(items)
-        return await asyncio.to_thread(run)
+        result = await asyncio.to_thread(run)
+        self._apply_vector_upsert(name, items, generation_id)
+        return result
 
     async def query_generation(self, generation_id: str, name: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]:
         if top_k < 1:
@@ -567,7 +582,10 @@ class ChromaVectorStore:
                     metadatas=[self._metadata_to_chroma(item["metadata"]) for item in selected],
                 )
             return len(selected)
-        return await asyncio.to_thread(run)
+        result = await asyncio.to_thread(run)
+        if result:
+            self._update_cached_metadata(name, items, generation_id)
+        return result
 
     async def delete_generation_source(self, generation_id: str, source_id: str, name: str | None = None) -> int:
         def run():
@@ -582,6 +600,9 @@ class ChromaVectorStore:
                 selected = ids[:500]
                 if selected:
                     collection.delete(ids=selected)
+                    self._invalidate_vector_cache(
+                        metadata.get("ensemble_name", collection.name), generation_id,
+                    )
                 removed += len(selected)
                 if len(ids) > 500:
                     return 501
@@ -602,6 +623,10 @@ class ChromaVectorStore:
                     collection.update(ids=[record_id for record_id, _ in selected],
                                       metadatas=[self._metadata_to_chroma(metadata) for _, metadata in selected])
                     changed += len(selected)
+                    metadata = collection.metadata or {}
+                    self._invalidate_vector_cache(
+                        metadata.get("ensemble_name", collection.name), generation_id,
+                    )
             return changed
         return await asyncio.to_thread(run)
 
@@ -612,11 +637,17 @@ class ChromaVectorStore:
                 if (collection.metadata or {}).get("ensemble_generation_id") != generation_id:
                     continue
                 rows = self._records_from_get(collection.get(where=self._where_source(source_id), include=["metadatas"]))
-                selected = [(row["id"], row["metadata"]) for row in rows if row["metadata"].pop("_tombstoned", None)]
+                selected = [(row["id"], row["metadata"]) for row in rows if row["metadata"].get("_tombstoned")]
                 if selected:
+                    for _, metadata in selected:
+                        metadata["_tombstoned"] = False
                     collection.update(ids=[record_id for record_id, _ in selected],
                                       metadatas=[self._metadata_to_chroma(metadata) for _, metadata in selected])
                     changed += len(selected)
+                    metadata = collection.metadata or {}
+                    self._invalidate_vector_cache(
+                        metadata.get("ensemble_name", collection.name), generation_id,
+                    )
             return changed
         return await asyncio.to_thread(run)
 
@@ -630,7 +661,9 @@ class ChromaVectorStore:
                 removed += collection.count()
                 client.delete_collection(collection.name)
             return removed
-        return await asyncio.to_thread(run)
+        result = await asyncio.to_thread(run)
+        self._invalidate_generation_caches(generation_id)
+        return result
 
     async def record_key_upper_bound(self, name: str) -> str | None:
         def run():
