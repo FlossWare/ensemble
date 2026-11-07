@@ -284,16 +284,20 @@ class ChromaVectorStore:
             )
         if stored.get("hnsw:space") not in (None, "cosine"):
             raise RuntimeError(f"collection {name} does not use cosine distance")
-        if model is not None and (
-            stored.get("ensemble_model") in (None, "unknown")
-            or stored.get("model") != model
-            or stored.get("dimensions") != dimensions
+        effective_model = model or (stored_model if stored_model not in (None, "unknown") else None)
+        effective_dimensions = dimensions or (
+            stored_dimensions if stored_dimensions not in (None, 0) else None
+        )
+        if effective_model is not None and effective_dimensions is not None and (
+            stored.get("ensemble_model") != effective_model
+            or stored.get("model") != effective_model
+            or stored.get("dimensions") != effective_dimensions
             or stored.get("ensemble_name") != name
         ):
             collection.modify(metadata={
                 **stored, "hnsw:space": "cosine", "ensemble_name": name,
-                "model": model, "dimensions": int(dimensions or 0),
-                "ensemble_model": model, "ensemble_dimensions": int(dimensions or 0),
+                "model": effective_model, "dimensions": int(effective_dimensions),
+                "ensemble_model": effective_model, "ensemble_dimensions": int(effective_dimensions),
                 **({"ensemble_generation_id": generation_id} if generation_id else {}),
             })
         return collection
