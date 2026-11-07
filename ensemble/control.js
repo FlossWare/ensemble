@@ -967,6 +967,34 @@ document.getElementById("source-tombstone-form").addEventListener("submit",async
  }catch(error){output.textContent="Tombstone failed: "+error.message;}
 });
 
+const reclamationStatus=document.getElementById("reclamation-status");
+const reclamationDetails=document.getElementById("reclamation-source-details");
+async function refreshReclamationStatus(){
+ reclamationStatus.textContent="Loading durable reclamation queue…";
+ try{
+  const result=await controlJson("/api/v1/index/reclamation");
+  reclamationStatus.textContent=JSON.stringify(result,null,2);
+ }catch(error){reclamationStatus.textContent="Reclamation status failed: "+error.message;}
+}
+document.getElementById("reclamation-refresh").addEventListener("click",refreshReclamationStatus);
+refreshReclamationStatus();
+document.getElementById("reclamation-source-form").addEventListener("submit",async event=>{
+ event.preventDefault();
+ const sourceId=document.getElementById("reclamation-source-id").value.trim();
+ reclamationDetails.textContent="Loading reclamation job and deletion audit…";
+ try{
+  const [jobResult,auditResult]=await Promise.allSettled([
+   controlJson("/api/v1/index/reclamation/jobs/query","POST",{source_id:sourceId}),
+   controlJson("/api/v1/index/sources/"+encodeURIComponent(sourceId)+"/deletion-audit?limit=100")
+  ]);
+  reclamationDetails.textContent=JSON.stringify({
+   source_id:sourceId,
+   job:jobResult.status==="fulfilled"?jobResult.value.job:{error:jobResult.reason?.message||"job lookup failed"},
+   audit:auditResult.status==="fulfilled"?auditResult.value.events:{error:auditResult.reason?.message||"audit lookup failed"}
+  },null,2);
+ }catch(error){reclamationDetails.textContent="Reclamation inspection failed: "+error.message;}
+});
+
 document.getElementById("session-ingest-button").addEventListener("click",async()=>{
  const button=document.getElementById("session-ingest-button");
  const status=document.getElementById("session-ingest-status");
