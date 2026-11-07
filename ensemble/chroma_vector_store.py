@@ -115,13 +115,15 @@ class ChromaVectorStore:
         stored = collection.metadata or {}
         if stored.get("ensemble_name") not in (None, name):
             raise RuntimeError("ChromaDB collection identity mismatch")
-        if model is not None and stored.get("ensemble_model") not in (None, "unknown", model):
+        stored_model = stored.get("ensemble_model", stored.get("model"))
+        stored_dimensions = stored.get("ensemble_dimensions", stored.get("dimensions"))
+        if model is not None and stored_model not in (None, "unknown", model):
             raise RuntimeError(
-                f"collection {name} uses model={stored.get('ensemble_model')}; request uses model={model}"
+                f"collection {name} uses model={stored_model}; request uses model={model}"
             )
-        if dimensions is not None and stored.get("ensemble_dimensions") not in (None, 0, dimensions):
+        if dimensions is not None and stored_dimensions not in (None, 0, dimensions):
             raise RuntimeError(
-                f"collection {name} uses dimensions={stored.get('ensemble_dimensions')}; request uses dimensions={dimensions}"
+                f"collection {name} uses dimensions={stored_dimensions}; request uses dimensions={dimensions}"
             )
         if stored.get("hnsw:space") not in (None, "cosine"):
             raise RuntimeError(f"collection {name} does not use cosine distance")
@@ -159,9 +161,9 @@ class ChromaVectorStore:
         await asyncio.to_thread(self._client)
 
     async def close(self) -> None:
-        # PersistentClient owns process-level resources and has no stable public close API.
-        with self._lock:
-            self._clients.clear()
+        # PersistentClient has no public close API. Keep its process-level client
+        # cached so another app lifespan cannot open the same path twice.
+        return None
 
     async def list_collections(self) -> list[dict[str, Any]]:
         def run():
