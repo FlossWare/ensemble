@@ -130,7 +130,8 @@ def test_hybrid_exposes_deterministic_rrf_contributions_and_configured_k(monkeyp
         assert body["fusion"]["k"] == 20
         assert body["fusion"]["channels"]["lexical"]["candidate_count"] > 0
         assert body["fusion"]["channels"]["vector"]["candidate_count"] > 0
-        diagnostics = body["fusion"]["results"]
+        fusion = body["fusion"]
+        diagnostics = fusion["results"]
         assert diagnostics
         first = diagnostics[0]
         assert first["lexical_rank"] == 1
