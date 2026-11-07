@@ -199,6 +199,62 @@
           "k": 60
         }
       }
+    },
+    {
+      "id": "extraction-issue-key-v1",
+      "capability": "extraction",
+      "reference": {
+        "method": "POST",
+        "path": "/extract",
+        "base_url_env": "POC_EXTRACTION_URL",
+        "request": {
+          "text": "Track issue FLOSS-123 in the release notes."
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/entities/extract",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "text": "Track issue FLOSS-123 in the release notes."
+        }
+      },
+      "comparison": {
+        "include_json_pointers": [
+          "/entities/0/type",
+          "/entities/0/text",
+          "/entities/0/start",
+          "/entities/0/end",
+          "/entities/0/exact",
+          "/entities/0/confidence"
+        ]
+      }
+    },
+    {
+      "id": "intent-history-v1",
+      "capability": "intent",
+      "reference": {
+        "method": "POST",
+        "path": "/classify",
+        "base_url_env": "POC_INTENT_URL",
+        "request": {
+          "text": "What did we decide earlier?"
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/intent/classify",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "text": "What did we decide earlier?"
+        }
+      },
+      "comparison": {
+        "include_json_pointers": [
+          "/label",
+          "/confidence"
+        ]
+      }
     }
   ]
 }
