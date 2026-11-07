@@ -4712,7 +4712,7 @@ def create_app(
             await active_transcript_store.fail_job(job_id, str(exc), owner_id)
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except ValueError as exc:
-            await active_transcript_store.fail_job(job_id, str(exc))
+            await active_transcript_store.fail_job(job_id, str(exc), owner_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not parsed["messages"]:
             result = {
@@ -4754,10 +4754,10 @@ def create_app(
                 payload_digest, result,
             )
         except ValueError as exc:
-            await active_transcript_store.fail_job(job_id, str(exc))
+            await active_transcript_store.fail_job(job_id, str(exc), owner_id)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
-            await active_transcript_store.fail_job(job_id, f"{type(exc).__name__}: {exc}")
+            await active_transcript_store.fail_job(job_id, f"{type(exc).__name__}: {exc}", owner_id)
             raise HTTPException(status_code=503, detail="transcript checkpoint persistence unavailable") from exc
         if committed["replayed"]:
             result = committed["result"]
