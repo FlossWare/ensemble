@@ -53,10 +53,18 @@ def evaluate_runs(
         raise ValueError("k must be a positive integer")
     if not isinstance(qrels, Mapping) or not isinstance(runs, Mapping):
         raise ValueError("qrels and runs must be mappings")
-    normalized_qrels = {
-        query: _relevance_map(values, query)
-        for query, values in qrels.items()
-    }
+    normalized_qrels: dict[str, dict[str, float]] = {}
+    for query, values in qrels.items():
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("qrels query IDs must be non-empty strings")
+        relevance = _relevance_map(values, query)
+        if not relevance:
+            raise ValueError(f"qrels for query {query!r} contain no human judgments")
+        normalized_qrels[query] = relevance
+    if not normalized_qrels:
+        raise ValueError("qrels must contain at least one judged query")
+    if not runs:
+        raise ValueError("runs must contain at least one retrieval system")
     output: dict[str, Any] = {"k": k, "systems": {}}
     for system, query_runs in runs.items():
         if not isinstance(system, str) or not system.strip() or not isinstance(query_runs, Mapping):
