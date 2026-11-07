@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import tomllib
 
 
@@ -43,3 +44,17 @@ def test_chroma_migration_scripts_compile():
     for name in ("import-poc-chroma.py", "migrate-sqlite-vectors-to-chroma.py"):
         path = ROOT / "scripts" / name
         compile(path.read_text(encoding="utf-8"), str(path), "exec")
+
+
+
+def test_poc_node_adapter_dependencies_are_preserved_without_postgresql():
+    manifest = json.loads(
+        (ROOT / "integrations" / "claude-code" / "package.json").read_text(encoding="utf-8")
+    )
+    dependencies = manifest["dependencies"]
+    for package in (
+        "@xenova/transformers", "better-sqlite3", "chromadb",
+        "neo4j-driver", "uuid", "js-yaml",
+    ):
+        assert package in dependencies
+    assert "pg" not in dependencies
