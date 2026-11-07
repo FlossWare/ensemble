@@ -30,6 +30,11 @@ POC_INTENT_URL=http://127.0.0.1:8779 \
 POC_HYBRID_URL=http://127.0.0.1:8773 \
 POC_KNOWLEDGE_URL=http://127.0.0.1:8781 \
 POC_GRAPH_URL=http://127.0.0.1:8766 \
+POC_EMBEDDING_URL=http://127.0.0.1:8770 \
+POC_VECTOR_URL=http://127.0.0.1:8771 \
+POC_LEXICAL_URL=http://127.0.0.1:8772 \
+POC_RERANKING_URL=http://127.0.0.1:8774 \
+POC_INDEX_URL=http://127.0.0.1:8777 \
 ENSEMBLE_BASE_URL=http://127.0.0.1:8080 \
 python -m parity.runner parity/scenarios/core-contracts.json \
   --report parity-report.json
@@ -52,7 +57,7 @@ The capability map is pinned to POC `main` at `b1581e317d291bb9e16a12f4291664014
 
 ## Capability inventory
 
-`parity/capability-map.json` records source-audited POC and Ensemble route mappings for Chunking, Tokenization, Ranking, Extraction, Intent, Hybrid Search, Knowledge, Graph, and Memory. A route mapping is not a parity result: capabilities without executed scenarios remain `mapped-unmeasured`. Memory is explicitly recorded as a private Unix-socket POC service, so it needs a transport adapter before it can participate in the HTTP runner.
+`parity/capability-map.json` records source-audited POC and Ensemble route mappings for all audited service areas, including Embedding, Vector, Lexical, Hybrid Search, Reranking, Chunking, Tokenization, Index, Extraction, Intent, Ranking, Knowledge, Memory, Graph, and Prompt Capture. A route mapping is not a parity result: capabilities without executed scenarios remain `mapped-unmeasured`. Memory is explicitly recorded as a private Unix-socket POC service, so it needs a transport adapter before it can participate in the HTTP runner.
 
 ## Current limitations
 
