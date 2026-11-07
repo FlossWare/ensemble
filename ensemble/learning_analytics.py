@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -34,10 +35,10 @@ def _frame(outcomes: list[dict[str, Any]]) -> pd.DataFrame:
             value = values[name]
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"outcome {name} must be numeric")
-            if not pd.notna(value) or value < 0:
+            if not math.isfinite(float(value)) or value < 0:
                 raise ValueError(f"outcome {name} must be finite and non-negative")
-        if not 1 <= values["rating"] <= 5:
-            raise ValueError("outcome rating must be between 1 and 5")
+        if isinstance(values["rating"], bool) or int(values["rating"]) != values["rating"] or not 1 <= values["rating"] <= 5:
+            raise ValueError("outcome rating must be an integer between 1 and 5")
         rows.append({
             **values,
             "task_id": str(row.get("task_id", "")),
