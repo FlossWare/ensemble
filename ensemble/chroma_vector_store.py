@@ -8,6 +8,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from sqlalchemy.engine import make_url
+
 from .partitioning import current_partition_id
 
 
@@ -18,9 +20,23 @@ class ChromaVectorStore:
     coordination. Vector records and similarity search live in ChromaDB.
     """
 
-    def __init__(self, persistence_root: str | Path | None = None):
-        configured = persistence_root or os.getenv("ENSEMBLE_PERSISTENCE_ROOT", ".ensemble")
-        self.persistence_root = Path(configured).expanduser().resolve()
+    def __init__(
+        self, persistence_root: str | Path | None = None,
+        database_url: str | None = None,
+    ):
+        configured = persistence_root or os.getenv("ENSEMBLE_PERSISTENCE_ROOT")
+        if configured:
+            root = Path(configured).expanduser()
+        elif database_url:
+            parsed = make_url(database_url)
+            database = Path(parsed.database or ".ensemble/ensemble.db").expanduser().resolve()
+            root = database.parent / (
+                "chromadb" if database.name == "ensemble.db"
+                else f"{database.stem}-chromadb"
+            )
+        else:
+            root = Path(".ensemble")
+        self.persistence_root = root.resolve()
         self._clients: dict[str, Any] = {}
         self._lock = RLock()
 
@@ -302,22 +318,29 @@ class ChromaVectorStore:
             return []
         def run():
             collection = self._get_collection(name, create=False)
-            result = collection.query(
-                query_embeddings=[[float(value) for value in embedding]],
-                n_results=top_k,
-                include=["documents", "metadatas", "distances"],
-                where={"_tombstoned": {"$ne": True}},
-            )
-            ids = (result.get("ids") or [[]])[0]
-            docs = (result.get("documents") or [[]])[0]
-            metas = (result.get("metadatas") or [[]])[0]
-            distances = (result.get("distances") or [[]])[0]
-            rows = [{
-                "id": record_id, "document": docs[index],
-                "score": float(1.0 - distances[index]),
-                "metadata": self._metadata_from_chroma(metas[index]),
-            } for index, record_id in enumerate(ids)]
-            return sorted(rows, key=lambda item: (-item["score"], item["id"]))
+            count = collection.count()
+            requested = min(count, max(top_k, 32))
+            rows = []
+            while requested:
+                result = collection.query(
+                    query_embeddings=[[float(value) for value in embedding]],
+                    n_results=requested,
+                    include=["documents", "metadatas", "distances"],
+                )
+                ids = (result.get("ids") or [[]])[0]
+                docs = (result.get("documents") or [[]])[0]
+                metas = (result.get("metadatas") or [[]])[0]
+                distances = (result.get("distances") or [[]])[0]
+                rows = [{
+                    "id": record_id, "document": docs[index],
+                    "score": float(1.0 - distances[index]),
+                    "metadata": self._metadata_from_chroma(metas[index]),
+                } for index, record_id in enumerate(ids)
+                    if not self._metadata_from_chroma(metas[index]).get("_tombstoned")]
+                if len(rows) >= top_k or requested >= count:
+                    break
+                requested = min(count, requested * 2)
+            return sorted(rows, key=lambda item: (-item["score"], item["id"]))[:top_k]
         try:
             return await asyncio.to_thread(run)
         except Exception as exc:
@@ -349,20 +372,29 @@ class ChromaVectorStore:
             return []
         def run():
             collection = self._get_collection(name, generation_id=generation_id, create=False)
-            result = collection.query(
-                query_embeddings=[[float(value) for value in embedding]],
-                n_results=top_k, include=["documents", "metadatas", "distances"],
-                where={"_tombstoned": {"$ne": True}},
-            )
-            ids = (result.get("ids") or [[]])[0]
-            docs = (result.get("documents") or [[]])[0]
-            metas = (result.get("metadatas") or [[]])[0]
-            distances = (result.get("distances") or [[]])[0]
-            return [{
-                "id": record_id, "document": docs[index],
-                "score": float(1.0 - distances[index]),
-                "metadata": self._metadata_from_chroma(metas[index]),
-            } for index, record_id in enumerate(ids)]
+            count = collection.count()
+            requested = min(count, max(top_k, 32))
+            rows = []
+            while requested:
+                result = collection.query(
+                    query_embeddings=[[float(value) for value in embedding]],
+                    n_results=requested,
+                    include=["documents", "metadatas", "distances"],
+                )
+                ids = (result.get("ids") or [[]])[0]
+                docs = (result.get("documents") or [[]])[0]
+                metas = (result.get("metadatas") or [[]])[0]
+                distances = (result.get("distances") or [[]])[0]
+                rows = [{
+                    "id": record_id, "document": docs[index],
+                    "score": float(1.0 - distances[index]),
+                    "metadata": self._metadata_from_chroma(metas[index]),
+                } for index, record_id in enumerate(ids)
+                    if not self._metadata_from_chroma(metas[index]).get("_tombstoned")]
+                if len(rows) >= top_k or requested >= count:
+                    break
+                requested = min(count, requested * 2)
+            return sorted(rows, key=lambda item: (-item["score"], item["id"]))[:top_k]
         try:
             return await asyncio.to_thread(run)
         except Exception as exc:
