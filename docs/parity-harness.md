@@ -25,6 +25,11 @@ Set the POC service base URLs independently because the POC runs these capabilit
 POC_CHUNKING_URL=http://127.0.0.1:8775 \
 POC_TOKENIZATION_URL=http://127.0.0.1:8776 \
 POC_RANKING_URL=http://127.0.0.1:8780 \
+POC_EXTRACTION_URL=http://127.0.0.1:8778 \
+POC_INTENT_URL=http://127.0.0.1:8779 \
+POC_HYBRID_URL=http://127.0.0.1:8773 \
+POC_KNOWLEDGE_URL=http://127.0.0.1:8781 \
+POC_GRAPH_URL=http://127.0.0.1:8766 \
 ENSEMBLE_BASE_URL=http://127.0.0.1:8080 \
 python -m parity.runner parity/scenarios/core-contracts.json \
   --report parity-report.json
