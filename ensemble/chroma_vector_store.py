@@ -512,7 +512,7 @@ class ChromaVectorStore:
     async def delete_generation(self, generation_id: str) -> int:
         def run():
             client = self._client()
-            targets = [collection for collection in client.list_collections()
+            targets = [collection for collection in self._list_collections()
                        if (collection.metadata or {}).get("ensemble_generation_id") == generation_id]
             removed = 0
             for collection in targets:
