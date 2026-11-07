@@ -2508,31 +2508,6 @@ def create_app(
         )
         return {"ok": True, "upserted": result}
 
-    @app.post("/api/v1/vector/collections/{name}/query", tags=["vector"])
-    async def vector_query(name: str, payload: dict[str, Any]):
-        _validate_vector_collection_name(name)
-        embedding = payload.get("embedding")
-        limit = payload.get("limit", 200)
-        generation_id = payload.get("generation_id")
-        if not isinstance(embedding, list) or not embedding or len(embedding) > 8192:
-            raise HTTPException(status_code=400, detail="embedding must be a non-empty vector of at most 8192 values")
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
-            raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
-        try:
-            vector = [float(value) for value in embedding]
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="embedding values must be numeric") from exc
-        import math
-        if any(not math.isfinite(value) for value in vector):
-            raise HTTPException(status_code=400, detail="embedding values must be finite")
-        if generation_id is not None and (not isinstance(generation_id, str) or not generation_id):
-            raise HTTPException(status_code=400, detail="generation_id must be a non-empty string")
-        if generation_id:
-            results = await active_vector_store.query_generation(generation_id, name, vector, limit)
-        else:
-            results = await active_vector_store.query(name, vector, limit)
-        return {"ok": True, "results": results}
-
     @app.post("/api/v1/vector/collections/{name}/records/lookup", tags=["vector"])
     async def vector_existing(name: str, payload: dict[str, Any]):
         _validate_vector_collection_name(name)
@@ -2673,29 +2648,50 @@ def create_app(
     @app.post("/api/v1/vector/collections/{name}/query", tags=["vector"])
     async def vector_query(name: str, payload: dict[str, Any]):
         _validate_vector_collection_name(name)
-        vector, top_k = payload.get("embedding"), payload.get("top_k", 10)
-        if not isinstance(top_k, int) or isinstance(top_k, bool) or not 1 <= top_k <= 200:
-            raise HTTPException(status_code=400, detail="top_k must be an integer from 1 to 200")
-        if not isinstance(vector, list):
-            raise HTTPException(status_code=400, detail="embedding must be a list")
+        vector = payload.get("embedding")
+        top_k = payload.get("top_k", payload.get("limit", 10))
+        max_top_k = 1000 if "limit" in payload and "top_k" not in payload else 200
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= max_top_k:
+            raise HTTPException(
+                status_code=400,
+                detail=f"top_k must be an integer from 1 to {max_top_k}",
+            )
+        if not isinstance(vector, list) or not vector or len(vector) > 8192:
+            raise HTTPException(
+                status_code=400,
+                detail="embedding must be a non-empty vector of at most 8192 values",
+            )
+
         status = embeddings.status()
-        requested_model = payload.get("model")
+        requested_model = payload.get("model") or status.get("model")
         if requested_model is not None and (
             not isinstance(requested_model, str) or not requested_model or len(requested_model) > 512
         ):
             raise HTTPException(status_code=400, detail="model must be a non-empty string of at most 512 characters")
+
         collection = next(
             (item for item in await active_vector_store.list_collections() if item["name"] == name),
             None,
         )
         if collection is not None and requested_model is not None and requested_model != collection["model"]:
             raise HTTPException(status_code=409, detail="query embedding model does not match vector collection model")
-        dimensions = payload.get("dimensions") or status.get("dimensions")
-        if not isinstance(dimensions, int) or isinstance(dimensions, bool) or len(vector) != dimensions:
-            # Existing collections define the authoritative dimension when no provider is configured.
-            dimensions = collection["dimensions"] if collection else dimensions
-        if not isinstance(dimensions, int) or len(vector) != dimensions:
+
+        requested_dimensions = payload.get("dimensions")
+        if requested_dimensions is not None and (
+            isinstance(requested_dimensions, bool)
+            or not isinstance(requested_dimensions, int)
+            or not 1 <= requested_dimensions <= 8192
+        ):
+            raise HTTPException(status_code=400, detail="dimensions must be an integer from 1 to 8192")
+        dimensions = (
+            requested_dimensions
+            if requested_dimensions is not None
+            else collection["dimensions"] if collection is not None
+            else status.get("dimensions")
+        )
+        if isinstance(dimensions, bool) or not isinstance(dimensions, int) or len(vector) != dimensions:
             raise HTTPException(status_code=400, detail="embedding dimension does not match collection")
+
         try:
             vector = [float(value) for value in vector]
         except (TypeError, ValueError) as exc:
@@ -2703,8 +2699,11 @@ def create_app(
         import math
         if any(not math.isfinite(value) for value in vector):
             raise HTTPException(status_code=400, detail="embedding values must be finite")
+
         requested_generation = payload.get("generation_id")
         if requested_generation is not None:
+            if not isinstance(requested_generation, str) or not requested_generation:
+                raise HTTPException(status_code=400, detail="generation_id must be a non-empty string")
             active_generation = await active_generation_id()
             if requested_generation != active_generation:
                 raise HTTPException(status_code=409, detail="generation_id is not the active verified generation")
