@@ -257,6 +257,8 @@ class ChromaVectorStore:
             metadata = {
                 "hnsw:space": "cosine",
                 "ensemble_name": name,
+                "model": model or "unknown",
+                "dimensions": int(dimensions or 0),
                 "ensemble_model": model or "unknown",
                 "ensemble_dimensions": int(dimensions or 0),
             }
@@ -285,6 +287,7 @@ class ChromaVectorStore:
         if stored.get("ensemble_model") in (None, "unknown") and model is not None:
             collection.modify(metadata={
                 **stored, "hnsw:space": "cosine", "ensemble_name": name,
+                "model": model, "dimensions": int(dimensions or 0),
                 "ensemble_model": model, "ensemble_dimensions": int(dimensions or 0),
                 **({"ensemble_generation_id": generation_id} if generation_id else {}),
             })
