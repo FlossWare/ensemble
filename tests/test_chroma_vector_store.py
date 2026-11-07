@@ -20,6 +20,10 @@ def test_chroma_vector_store_persists_searches_and_rejects_model_mismatch(tmp_pa
             assert result[0]["metadata"]["nested"] == {"revision": 1}
             assert await store.existing("test-vectors", ["record-1", "missing"]) == ["record-1"]
             assert (await store.list_collections())[0]["name"] == "test-vectors"
+            collection = await asyncio.to_thread(store._get_collection, "test-vectors", create=False)
+            assert collection.metadata["model"] == "model-a"
+            assert collection.metadata["dimensions"] == 2
+            assert collection.metadata["hnsw:space"] == "cosine"
             try:
                 await store.upsert("test-vectors", "model-b", 2, [{
                     "id": "record-2", "embedding": [0.0, 1.0],
