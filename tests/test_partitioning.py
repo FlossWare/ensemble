@@ -401,7 +401,10 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
             return {"ok": True, "ready": True, "model": "partition-test", "dimensions": 3}
 
         async def embed(self, texts, mode="document"):
-            return [[1.0, 0.0, 0.0] for _ in texts]
+            return [
+                [0.0, 1.0, 0.0] if "graph expansion only" in text else [1.0, 0.0, 0.0]
+                for text in texts
+            ]
 
     class RecordingReranker:
         def __init__(self):
@@ -463,15 +466,48 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
             )
             assert response.status_code == 201, response.text
 
+        # A graph-only source in each partition must not leak through expansion.
+        # Its content does not match lexical search and its vector is orthogonal.
+        for headers, marker in (
+            (alpha_headers, "alpha graph expansion only source"),
+            (beta_headers, "beta graph expansion only source"),
+        ):
+            ingested = client.post(
+                "/api/v1/ingest/documents", headers=headers,
+                json={"source_id": "graph-only-source", "revision": 1,
+                      "title": marker, "content": marker},
+            )
+            assert ingested.status_code == 201, ingested.text
+            entity = client.post(
+                "/api/v1/graph/nodes", headers=headers,
+                json={"id": "shared-path-entity", "type": "entity", "properties": {
+                    "entity_type": "path", "normalized": "/workspace/secret.md",
+                }},
+            )
+            source = client.post(
+                "/api/v1/graph/nodes", headers=headers,
+                json={"id": "shared-source-node", "type": "source", "properties": {
+                    "source_id": "graph-only-source", "revision": 1,
+                }},
+            )
+            assert entity.status_code == 200, entity.text
+            assert source.status_code == 200, source.text
+            edge = client.post(
+                "/api/v1/graph/edges", headers=headers,
+                json={"source": "shared-source-node", "target": "shared-path-entity",
+                      "type": "mentions", "properties": {}},
+            )
+            assert edge.status_code == 200, edge.text
+
         alpha = client.post(
             "/api/v1/search/hybrid",
             headers=alpha_headers,
-            json={"query": "confidential retrieval material", "limit": 10, "rerank": True},
+            json={"query": "confidential retrieval material /workspace/secret.md", "limit": 10, "rerank": True},
         )
         beta = client.post(
             "/api/v1/search/hybrid",
             headers=beta_headers,
-            json={"query": "confidential retrieval material", "limit": 10, "rerank": True},
+            json={"query": "confidential retrieval material /workspace/secret.md", "limit": 10, "rerank": True},
         )
 
         assert alpha.status_code == 200, alpha.text
@@ -499,8 +535,10 @@ def test_hybrid_reranker_receives_only_authorized_partition_candidates(tmp_path,
             assert all(candidate["title"] == ("Alpha" if own_marker.startswith("alpha") else "Beta")
                        for candidate in vector_candidates)
             assert body["channels"]["vector"]["status"] == "ok"
-            assert body["fusion"]["channels"]["graph"]["candidate_count"] == 0
-            assert len(body["fusion"]["results"]) == 1
+            assert body["fusion"]["channels"]["graph"]["candidate_count"] == 1
+            assert any(item.get("graph_rank") is not None for item in body["fusion"]["results"])
+            assert any("graph expansion only" in hit["text"] for hit in body["results"])
+            assert len(body["fusion"]["results"]) == 2
         # Hybrid reranks once, after retrieval and Graph expansion.
         # Every invocation must remain within the authenticated partition.
         assert len(reranker.calls) == 2
