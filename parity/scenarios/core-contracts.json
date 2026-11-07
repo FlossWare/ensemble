@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "description": "Initial deterministic service-health contract checks. Add behavior scenarios only after confirming both request and response contracts from source.",
+  "reference_base_url_env": "POC_BASE_URL",
+  "candidate_base_url_env": "ENSEMBLE_BASE_URL",
+  "scenarios": [
+    {
+      "id": "chunking-health",
+      "capability": "chunking",
+      "reference": {
+        "method": "GET",
+        "path": "/health"
+      },
+      "candidate": {
+        "method": "GET",
+        "path": "/api/v1/chunking/health"
+      },
+      "comparison": {
+        "ignore_json_pointers": [
+          "/timestamp",
+          "/uptime_seconds"
+        ]
+      }
+    },
+    {
+      "id": "tokenization-health",
+      "capability": "tokenization",
+      "reference": {
+        "method": "GET",
+        "path": "/health"
+      },
+      "candidate": {
+        "method": "GET",
+        "path": "/api/v1/tokenization/health"
+      },
+      "comparison": {
+        "ignore_json_pointers": [
+          "/timestamp",
+          "/uptime_seconds"
+        ]
+      }
+    }
+  ]
+}
