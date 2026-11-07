@@ -4,6 +4,8 @@ from typing import Any
 
 
 class InMemoryVectorStore:
+    backend_name = "memory"
+
     def __init__(self):
         self._collections: dict[str, dict[str, Any]] = {}
 
