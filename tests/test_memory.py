@@ -664,3 +664,77 @@ def test_session_events_ledger_supports_idempotent_append_and_readback():
         assert entries[0]["event_id"] == event_id
         assert entries[0]["text"] == event["text"]
 
+
+
+
+def test_memory_lexical_semantic_and_hybrid_retrieval_smoke_metrics():
+    """Compare Memory channels on the explicitly synthetic smoke qrels.
+
+    This is a deterministic integration smoke test, not a production relevance
+    benchmark. Production quality claims require representative, human-reviewed
+    qrels from the intended corpus.
+    """
+    import json
+    from pathlib import Path
+
+    from ensemble.retrieval_eval import evaluate_runs
+
+    fixture_path = Path(__file__).parents[1] / "eval" / "retrieval-smoke.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    names = {
+        document["source_id"]: document["source_id"].replace("/", "-")
+        for document in fixture["documents"]
+    }
+    qrels = {}
+    runs = {"lexical": {}, "semantic": {}, "hybrid": {}}
+
+    with client() as http:
+        for document in fixture["documents"]:
+            name = names[document["source_id"]]
+            response = http.put(
+                f"/api/v1/memory/memories/{name}",
+                json={"content": f"# {document['title']}\\n\\n{document['content']}"},
+            )
+            assert response.status_code == 200, response.text
+
+        for query in fixture["queries"]:
+            query_id, text = query["id"], query["text"]
+            qrels[query_id] = {
+                names[source_id]: grade
+                for source_id, grade in query["relevance"].items()
+            }
+
+            lexical = http.post(
+                "/api/v1/memory/search/keywords",
+                json={"keywords": text.split(), "limit": 100},
+            )
+            semantic = http.post(
+                "/api/v1/memory/search/semantic",
+                json={"query": text, "limit": 100},
+            )
+            hybrid = http.post(
+                "/api/v1/memory/search/hybrid",
+                json={"query": text, "limit": 100},
+            )
+            assert lexical.status_code == 200, lexical.text
+            assert semantic.status_code == 200, semantic.text
+            assert hybrid.status_code == 200, hybrid.text
+
+            runs["lexical"][query_id] = [
+                item["file"] for item in lexical.json()["results"]
+            ]
+            runs["semantic"][query_id] = [
+                item["file"] for item in semantic.json()["results"]
+            ]
+            runs["hybrid"][query_id] = [
+                item["file"] for item in hybrid.json()["results"]
+            ]
+
+        metrics = evaluate_runs(qrels, runs, k=fixture["k"])
+
+    assert set(metrics["systems"]) == {"lexical", "semantic", "hybrid"}
+    for system in ("lexical", "semantic", "hybrid"):
+        macro = metrics["systems"][system]["macro"]
+        assert 0.0 <= macro["recall@3"] <= 1.0
+        assert 0.0 <= macro["mrr@3"] <= 1.0
+        assert 0.0 <= macro["ndcg@3"] <= 1.0
