@@ -1,0 +1,355 @@
+{
+  "schema_version": 1,
+  "reference": {
+    "repository": "FlossWare/poc-claude-ensemble",
+    "ref": "main"
+  },
+  "candidate": {
+    "repository": "FlossWare/ensemble",
+    "ref": "integration/source-lifecycle-mainline-2026-11-04"
+  },
+  "rule": "A route mapping is not evidence of behavioral parity. Each entry remains unmeasured until a scenario executes against both systems.",
+  "capabilities": [
+    {
+      "id": "chunking",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_CHUNKING_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/chunk"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/chunking/chunk"
+          }
+        ]
+      },
+      "scenario_ids": [
+        "chunking-health",
+        "chunking-window-v1",
+        "chunking-markdown-v1"
+      ],
+      "measurement": "scenario-backed"
+    },
+    {
+      "id": "tokenization",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_TOKENIZATION_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/tokenize"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/tokenization/tokenize"
+          }
+        ]
+      },
+      "scenario_ids": [
+        "tokenization-health",
+        "tokenization-compound-identifiers"
+      ],
+      "measurement": "scenario-backed"
+    },
+    {
+      "id": "ranking",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_RANKING_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/rank"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/ranking/rank"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/ranking/fuse"
+          }
+        ]
+      },
+      "scenario_ids": [
+        "ranking-rrf-deterministic"
+      ],
+      "measurement": "scenario-backed"
+    },
+    {
+      "id": "extraction",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_EXTRACTION_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/extract"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/entities/extract"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/entities/resolve"
+          }
+        ]
+      },
+      "scenario_ids": [
+        "extraction-issue-key-v1"
+      ],
+      "measurement": "scenario-backed"
+    },
+    {
+      "id": "intent",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_INTENT_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/classify"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/intent/classify"
+          }
+        ]
+      },
+      "scenario_ids": [
+        "intent-history-v1"
+      ],
+      "measurement": "scenario-backed"
+    },
+    {
+      "id": "hybrid-search",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_HYBRID_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/search"
+          },
+          {
+            "method": "POST",
+            "path": "/knowledge/search"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/search/hybrid"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/search/hybrid/knowledge"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "Requires a shared deterministic search corpus, fixed embedding/reranker configuration, and retrieval-quality evaluation."
+    },
+    {
+      "id": "knowledge",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_KNOWLEDGE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/records"
+          },
+          {
+            "method": "GET",
+            "path": "/records/{source_id}"
+          },
+          {
+            "method": "POST",
+            "path": "/records/{source_id}/tombstone"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/knowledge/records"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/knowledge/records/{source_id}"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/knowledge/records/{source_id}/tombstone"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "Record acceptance decisions, duplicate revisions, retrieval materialization, and tombstone semantics separately."
+    },
+    {
+      "id": "graph",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_GRAPH_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/graph/add-node"
+          },
+          {
+            "method": "POST",
+            "path": "/graph/add-edge"
+          },
+          {
+            "method": "POST",
+            "path": "/graph/query"
+          },
+          {
+            "method": "POST",
+            "path": "/graph/traverse"
+          },
+          {
+            "method": "GET",
+            "path": "/graph/node/{node_id}"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/graph/nodes"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/graph/edges"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/graph/query"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/graph/traverse"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/graph/nodes/{node_id}"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "Compare typed node/edge properties, deterministic IDs where contractually required, direction, depth, and multi-edge traversal."
+    },
+    {
+      "id": "memory",
+      "poc": {
+        "transport": "unix-socket",
+        "socket": "private memory daemon socket",
+        "operations": [
+          "/memory/read",
+          "/memory/write",
+          "/memory/append",
+          "/memory/append-once",
+          "/memory/entries",
+          "/memory/retrieve",
+          "/memory/list",
+          "/memory/search",
+          "/memory/search-hybrid",
+          "/memory/chunk",
+          "/memory/ingest",
+          "/memory/reconcile",
+          "/memory/knowledge/status",
+          "GET /history",
+          "GET /history/{event_id}"
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/api/v1/memory/memories"
+          },
+          {
+            "method": "PUT",
+            "path": "/api/v1/memory/memories/{name}"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/memories/{name}/entries"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/memory/memories/{name}/entries"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/recall"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/search/semantic"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/search/hybrid"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "Different transports and event models require a reference adapter. Do not assume REST route similarity proves append-only ledger or semantic recall parity."
+    }
+  ]
+}
