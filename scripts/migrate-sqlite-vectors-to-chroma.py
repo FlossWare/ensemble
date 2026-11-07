@@ -165,8 +165,9 @@ async def main() -> None:
         raise SystemExit("--batch-size must be between 1 and 1000")
 
     database = _database_path(args.database_url)
-    root = Path(args.persistence_root).expanduser().resolve() if args.persistence_root else database.parent
-    candidates = [database, *sorted((root / "partitions").glob("*.db"))]
+    # Partition database files are derived from the SQLite database's parent,
+    # independently of the Chroma persistence root.
+    candidates = [database, *sorted((database.parent / "partitions").glob("*.db"))]
     databases = [path for path in candidates if path.is_file()]
     if not databases:
         raise SystemExit("No SQLite persistence databases found.")
