@@ -24,7 +24,8 @@ from .services import DocumentService, SearchService
 from .rrf import reciprocal_rank_fusion
 from .rest_client import InternalRestClient
 from .store import DocumentStore, InMemoryDocumentStore, SqlDocumentStore
-from .vector_store import SqliteVectorStore, VectorStore
+from .vector_store import VectorStore
+from .chroma_vector_store import ChromaVectorStore
 from .vector_memory import InMemoryVectorStore
 from .index_store import IndexStore, SqliteIndexStore
 from .index_memory import InMemoryIndexStore
@@ -265,7 +266,7 @@ def create_app(
     active_reranker = reranker or configured_reranker()
     active_vector_store = vector_store or (
         InMemoryVectorStore() if isinstance(document_store, InMemoryDocumentStore)
-        else SqliteVectorStore(database_url)
+        else ChromaVectorStore()
     )
     active_index_store = index_store or (
         InMemoryIndexStore() if isinstance(document_store, InMemoryDocumentStore)
