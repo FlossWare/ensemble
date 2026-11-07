@@ -69,3 +69,34 @@ def test_graph_source_reclamation_removes_owned_edges_and_source_nodes(tmp_path)
         await store.close()
 
     asyncio.run(scenario())
+
+
+def test_networkx_traversal_preserves_direction_and_relationship_filters(tmp_path):
+    async def scenario():
+        url = "sqlite+aiosqlite:///" + str(tmp_path / "graph-directions.db")
+        store = SqliteGraphStore(url)
+        async with store.engine.begin() as connection:
+            await connection.run_sync(graph_metadata.create_all)
+        await store.initialize()
+        left = await store.add_node("service", {"name": "left"}, "left")
+        center = await store.add_node("service", {"name": "center"}, "center")
+        upper = await store.add_node("service", {"name": "upper"}, "upper")
+        right = await store.add_node("service", {"name": "right"}, "right")
+        await store.add_edge(left["id"], center["id"], "feeds", {}, "left-center")
+        await store.add_edge(upper["id"], center["id"], "backs", {}, "upper-center")
+        await store.add_edge(center["id"], right["id"], "feeds", {}, "center-right")
+
+        outgoing = await store.traverse(left["id"], direction="out", max_depth=2)
+        assert [item["node"]["id"] for item in outgoing] == ["center", "right"]
+
+        incoming = await store.traverse(center["id"], direction="in", max_depth=1)
+        assert {item["node"]["id"] for item in incoming} == {"left", "upper"}
+
+        bidirectional = await store.traverse(center["id"], direction="both", max_depth=1)
+        assert {item["node"]["id"] for item in bidirectional} == {"left", "upper", "right"}
+
+        filtered = await store.traverse(center["id"], direction="both", max_depth=1, edge_type="feeds")
+        assert {item["node"]["id"] for item in filtered} == {"left", "right"}
+        await store.close()
+
+    asyncio.run(scenario())
