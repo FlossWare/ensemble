@@ -202,8 +202,8 @@ class ChromaVectorStore:
                     continue
                 result.append({
                     "name": metadata.get("ensemble_name", collection.name),
-                    "model": metadata.get("ensemble_model", "unknown"),
-                    "dimensions": metadata.get("ensemble_dimensions", 0),
+                    "model": metadata.get("ensemble_model", metadata.get("model", "unknown")),
+                    "dimensions": metadata.get("ensemble_dimensions", metadata.get("dimensions", 0)),
                     "count": collection.count(),
                 })
             return sorted(result, key=lambda item: item["name"])
