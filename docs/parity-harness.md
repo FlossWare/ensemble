@@ -38,7 +38,7 @@ Use `--strict` when a run must fail if any scenario could not execute. The repor
 - Arrays compare exactly and in order by default. This is intentional for ranked results and ordered event histories.
 - `ignore_json_pointers` is for known volatile fields only.
 - `numeric_tolerances` maps JSON pointers to absolute numeric tolerances. It must not be used to paper over ranking, confidence, or model drift without an explicit quality rationale.
-- Arrays are always compared in order, while their elements are compared recursively so numeric tolerances can be applied to individual scores without weakening rank-order checks.
+- Arrays are always compared in order, while their elements are compared recursively so numeric tolerances can be applied to individual scores without weakening rank-order checks. `include_json_pointers` can project a scenario onto explicitly shared contract fields when the POC and Ensemble intentionally expose different response metadata.
 - Add retrieval-specific metrics (Recall@k, MRR, nDCG, rank agreement) as separate evaluators over a shared judged corpus. Do not reduce retrieval quality to raw JSON equality.
 
 ## Current limitations
