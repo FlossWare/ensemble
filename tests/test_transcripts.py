@@ -1,11 +1,17 @@
 import asyncio
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import update
 
 import pytest
 
 from ensemble.transcripts import parse_jsonl
-from ensemble.transcript_store import InMemoryTranscriptCheckpointStore
+from ensemble.transcript_store import (
+    InMemoryTranscriptCheckpointStore, SqliteTranscriptCheckpointStore,
+    jobs, transcript_metadata,
+)
 
 
 def _line(record):
@@ -150,11 +156,14 @@ def test_transcript_jobs_record_completion_failures_and_restart_recovery():
     assert first == {"status": "running", "attempts": 1, "created": True}
     assert duplicate == {"status": "running", "attempts": 1, "created": False}
 
+    store._jobs[job_id]["lease_expires_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    ).isoformat()
     recovered = asyncio.run(store.recover_interrupted())
     interrupted = asyncio.run(store.get_job(job_id))
     assert recovered == 1
     assert interrupted["status"] == "interrupted"
-    assert "Process restarted" in interrupted["last_error"]
+    assert "lease expired" in interrupted["last_error"]
 
     retry = asyncio.run(store.start_job(
         job_id, "source-1", "revision-1", "project", "transcript.jsonl",
@@ -180,3 +189,96 @@ def test_transcript_jobs_record_completion_failures_and_restart_recovery():
     assert completed["result"] == {"inserted": 2}
     assert asyncio.run(store.get_job(job_id))["status"] == "completed"
     assert asyncio.run(store.list_jobs(10))[0]["job_id"] == job_id
+
+
+def test_transcript_lease_prevents_live_job_recovery_and_stale_owner_completion():
+    store = InMemoryTranscriptCheckpointStore()
+    job_id = "d" * 64
+    digest = hashlib.sha256(b"slice").hexdigest()
+    owner_a, owner_b = "a" * 32, "b" * 32
+
+    first = asyncio.run(store.start_job(
+        job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+        64, digest, owner_a,
+    ))
+    duplicate = asyncio.run(store.start_job(
+        job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+        64, digest, owner_b,
+    ))
+    assert first["created"] is True
+    assert duplicate["created"] is False
+    assert asyncio.run(store.heartbeat_job(job_id, owner_a)) is True
+    assert asyncio.run(store.heartbeat_job(job_id, owner_b)) is False
+    assert asyncio.run(store.recover_interrupted()) == 0
+    assert asyncio.run(store.get_job(job_id))["status"] == "running"
+
+    store._jobs[job_id]["lease_expires_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    ).isoformat()
+    assert asyncio.run(store.recover_interrupted()) == 1
+    retry = asyncio.run(store.start_job(
+        job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+        64, digest, owner_b,
+    ))
+    assert retry == {"status": "running", "attempts": 2, "created": True}
+
+    with pytest.raises(ValueError, match="lease ownership was lost"):
+        asyncio.run(store.complete_job(job_id, 96, {"inserted": 1}, owner_a))
+    completed = asyncio.run(store.complete_job(job_id, 96, {"inserted": 1}, owner_b))
+    assert completed["status"] == "completed"
+
+
+def test_sqlite_transcript_leases_are_persistent_and_exclusive(tmp_path):
+    async def exercise():
+        database_url = f"sqlite+aiosqlite:///{tmp_path / 'transcript-leases.db'}"
+        first_store = SqliteTranscriptCheckpointStore(database_url)
+        second_store = SqliteTranscriptCheckpointStore(database_url)
+        job_id = "e" * 64
+        digest = hashlib.sha256(b"sqlite-slice").hexdigest()
+        owner_a, owner_b = "c" * 32, "f" * 32
+        try:
+            async with first_store.engine.begin() as connection:
+                await connection.run_sync(transcript_metadata.create_all)
+            await first_store.initialize()
+            await second_store.initialize()
+
+            first = await first_store.start_job(
+                job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+                64, digest, owner_a,
+            )
+            duplicate = await second_store.start_job(
+                job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+                64, digest, owner_b,
+            )
+            assert first["created"] is True
+            assert duplicate["created"] is False
+            assert await second_store.heartbeat_job(job_id, owner_a) is True
+            assert await second_store.heartbeat_job(job_id, owner_b) is False
+            assert await second_store.recover_interrupted() == 0
+            assert (await second_store.get_job(job_id))["status"] == "running"
+
+            expired = datetime.now(timezone.utc) - timedelta(seconds=1)
+            async with first_store.engine.begin() as connection:
+                await connection.execute(update(jobs).where(
+                    jobs.c.job_id == job_id,
+                ).values(lease_expires_at=expired))
+            assert await second_store.recover_interrupted() == 1
+            assert (await second_store.get_job(job_id))["status"] == "interrupted"
+
+            retry = await second_store.start_job(
+                job_id, "source-1", "revision-1", "project", "transcript.jsonl",
+                64, digest, owner_b,
+            )
+            assert retry == {"status": "running", "attempts": 2, "created": True}
+            with pytest.raises(ValueError, match="lease ownership was lost"):
+                await first_store.complete_job(job_id, 96, {"inserted": 1}, owner_a)
+            completed = await second_store.complete_job(
+                job_id, 96, {"inserted": 1}, owner_b,
+            )
+            assert completed["status"] == "completed"
+            assert (await first_store.get_job(job_id))["status"] == "completed"
+        finally:
+            await first_store.close()
+            await second_store.close()
+
+    asyncio.run(exercise())
