@@ -40,7 +40,7 @@ This is a source-backed first pass, not a completed transitive dependency lock a
 2. Map every direct dependency to the POC modules and tests that exercise it.
 3. Compare against Ensemble's declared dependencies, optional extras, imports, runtime selection, and tests.
 4. Classify each entry as same library, missing, explicit approved exception, POC-only integration dependency, or not yet assessed.
-5. Verify ChromaDB persistent collection compatibility, cosine scoring, partition isolation, source tombstones, generation mirroring/cutover, and migration behavior before claiming vector parity. The first CI suite now covers collection persistence, metadata, source lifecycle, partition isolation, and the DocumentService generation-mirror path; see [ChromaDB storage and migration](chroma-migration.md).
+5. Verify ChromaDB persistent collection compatibility, cosine scoring, partition isolation, source tombstones, generation mirroring/cutover, and migration behavior before claiming vector parity. The CI suite now covers collection persistence, exact NumPy ranking, incremental cache updates, snapshot pagination/resume, metadata, source lifecycle, partition isolation, and the DocumentService generation-mirror path; see [ChromaDB storage and migration](chroma-migration.md).
 6. Add a CI check that fails when a POC runtime dependency is absent from Ensemble's dependency inventory without an explicit approved exception.
 
 No dependency substitution is accepted merely because a replacement has a similar API.
