@@ -104,7 +104,7 @@ Branch `integration/source-lifecycle-mainline-2026-11-04` is in progress and not
 - Activation rejects incomplete checkpoints. Injected failure during the activation transaction preserves the previous active pointer, generation state, epoch, and write fence.
 - Memory generation snapshots reconcile updates and deletions during rebuild and continue mirroring writes and deletes after activation.
 - Vector generation mirroring reflects the persisted base Vector state. A failed active-generation mirror leaves the Index journal unacknowledged for retry; non-embedded revisions remove stale vectors from both stores.
-- The source-lifecycle integration snapshot previously passed **271 tests, 1 skipped, 1 warning**. The latest PR workflow has since passed the full suite after the partition-aware crawl recovery and robots crawl-delay fixes.
+- Verified integration branch head `f505dfd26146878418c8802f7b1726b9f0070181`: GitHub Actions passed **365 tests, 1 skipped, 1 warning**. The skipped test is the pinned Nomic ONNX model integration test because its model graph is not installed on the GitHub runner. The warning is Starlette's deprecation notice for using `httpx` with `starlette.testclient`; installer shell syntax and Control Center JavaScript validation also passed.
 
 ## Partition isolation implementation
 
