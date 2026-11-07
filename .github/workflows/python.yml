@@ -32,6 +32,8 @@ jobs:
         run: node --check ensemble/control.js
       - name: Audit POC dependency retention
         run: python -m parity.dependency_audit
+      - name: Smoke-test judged retrieval evaluator
+        run: python -m parity.retrieval_metrics parity/corpora/synthetic-smoke.json --report /tmp/retrieval-parity-report.json
       - name: Test parity harness
         run: python -m pytest tests/test_parity_harness.py
       - name: Test
