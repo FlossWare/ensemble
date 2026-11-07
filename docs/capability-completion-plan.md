@@ -40,7 +40,7 @@ These items are implemented foundations, not claims that every operational requi
 - Make partial-success and degraded-dependency behavior explicit. Search responses now distinguish healthy, partial, and unavailable retrieval, preserve a healthy channel when its peer fails, and report vector collection failures separately from usable document-chunk vectors.
 - Ensure a failed or partial retrieval is never represented as a successful empty result. The response now includes per-channel status, availability, candidate counts, and stable degraded dependency identifiers.
 - Add bounded retrieval deadlines and cancellation behavior. Per-channel deadlines are implemented with `ENSEMBLE_RETRIEVAL_CHANNEL_TIMEOUT` (default 5 seconds, clamped to 50 ms–60 seconds). Graph expansion has its own `ENSEMBLE_RETRIEVAL_GRAPH_TIMEOUT` (default 2 seconds, clamped to 50 ms–30 seconds). Timed-out channels degrade independently and preserve usable peer-channel results. Channel diagnostics now report elapsed time, including embedding, external vector lookup, local document-vector scan, and Graph expansion.
-- Ensure retrieval scope is enforced consistently across all channels (requires authentication/partition enforcement).
+- Retrieval scope is enforced by bearer-token principal-to-partition authorization and physically isolated SQLite stores. Internal REST composition forwards the authenticated scope. Regression coverage now verifies Graph-expanded Hybrid candidates, reranker inputs, and Knowledge vector retrieval cannot cross partitions; the REST response assertions are paired with direct store isolation tests. Remaining work is adversarial coverage for diagnostic metadata and degraded-channel edge cases.
 
 ### 2. Complete transcript ingestion lifecycle
 
@@ -65,7 +65,7 @@ Remaining:
 
 ### 4. Complete Memory as a usable shared capability
 
-- Finish scoped source import/reconciliation with explicit authorization and safe path handling.
+- Scoped source import/reconciliation uses canonical caller-supplied paths, rejects traversal and symlink aliases, constrains stale marking to the requested source and scope, and never scans server-side filesystems. REST integration tests now verify reconciliation in one scope does not affect another scope or another authenticated partition. Event lifecycle coverage includes idempotent event IDs, conflicting payload rejection, expiry exclusion from recall while retaining ledger history, and explicit deletion.
 - Complete execution-context-aware recall and useful retrieval ranking.
 - Memory keyword and semantic search now share the provider-neutral RRF implementation rather than combining incomparable raw scores. Results retain each channel's rank, raw score, and RRF contribution for inspection.
 - Context assembly now supports exact model-tokenizer budgeting when `ENSEMBLE_CONTEXT_TOKENIZER_PATH` points to a configured Hugging Face `tokenizers` JSON file (install the `context-tokenizer` extra). Without that explicit configuration, it retains the deterministic character/4 approximation and reports that it is approximate. Both paths use the selected counter for the complete assembled context and preserve source provenance during extractive compression.
@@ -264,3 +264,18 @@ Latest verified code/test head: `29362779405a0890fc5d274bbadf77813522fd3c`, with
 
 See [generic-contract-audit.md](generic-contract-audit.md) for the implemented Python generic strategy/decorator contracts, the foundational store protocol audit, and the explicit Java-source boundary. No Java implementation is invented because this repository contains no Java source or build module.
 
+
+
+## Issue #48 retrieval-scope audit update (2026-11-07)
+
+Verified on branch `integration/source-lifecycle-mainline-2026-11-04`, commit `92152414daee80d862463a3ac987b591add0b82a`:
+
+- Hybrid Graph expansion is tested with exact entities and source/chunk candidates scoped to the authenticated partition.
+- Hybrid reranking is tested with two authenticated partitions that intentionally reuse a source ID. Every reranker invocation receives only candidates from its request partition.
+- Knowledge hybrid vector retrieval is tested end to end through REST with the same source ID in two physically isolated SQLite partitions.
+- Memory REST coverage verifies source imports, same event IDs with independent payloads, scope-bounded reconciliation, and semantic retrieval remain partition- and scope-local.
+- Full CI: **356 passed, 1 skipped, 1 warning, 0 failed**. Installer shell syntax and Control Center JavaScript validation passed.
+
+This completes the first retrieval-scope pass across lexical/vector retrieval, Graph expansion, Knowledge retrieval, and reranker inputs. The next audit pass must assert result and diagnostic metadata boundaries under degraded dependencies, then continue the durable operation lifecycle work.
+
+Memory retrieval evaluation remains limited to the explicitly labeled synthetic smoke fixture. No relevance judgments have been invented. Representative judged fixtures and measured Memory lexical/semantic/hybrid recall remain outstanding until genuine relevance labels are available.
