@@ -25,6 +25,15 @@ A production qrels set should record:
 
 Keep evaluation runs separate from qrels so multiple retrieval systems can be compared against the same judgments.
 
+Start a real benchmark from `production-qrels.template.json`. This file is intentionally blank: no query, relevance grade, or reviewer identity is pre-filled. Populate:
+
+- `benchmark` with a stable corpus snapshot/revision, embedding model, written judgment policy, judgment scale, and actual reviewers/dates.
+- `queries` with stable query IDs and the privacy-reviewed query text and sampling provenance.
+- `qrels` with one mapping per judged query from stable source/chunk IDs to human-assigned grades. Include explicit zero grades only when the judgment policy calls for them; absence of an ID must not be silently interpreted as a negative judgment.
+- `runs` with independent ranked IDs from lexical, vector, hybrid/RRF, and reranked systems, using the same query IDs and corpus snapshot.
+
+After the judgments are complete, run `python scripts/evaluate-retrieval.py path/to/production-qrels.json`. Keep the original judgment file immutable and versioned; create a new snapshot when judgments or corpus identity change. Do not score an empty or partially judged template as a production benchmark.
+
 
 ## Memory channel smoke comparison
 
