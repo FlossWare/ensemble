@@ -138,6 +138,15 @@ def test_hybrid_exposes_deterministic_rrf_contributions_and_configured_k(monkeyp
         assert first["contributions"]["lexical"] == round(1 / 21, 8)
         assert first["contributions"]["vector"] == round(1 / 21, 8)
         assert first["score"] == round(2 / 21, 8)
+        lexical_candidates = fusion["channels"]["lexical"]["candidates"]
+        vector_candidates = fusion["channels"]["vector"]["candidates"]
+        assert lexical_candidates[0]["rank"] == 1
+        assert vector_candidates[0]["rank"] == 1
+        assert lexical_candidates[0]["source_id"] == "diagnostic-source"
+        assert lexical_candidates[0]["chunk_id"] == vector_candidates[0]["chunk_id"]
+        assert lexical_candidates[0]["revision"] == 1
+        assert lexical_candidates[0]["score"] > 0
+        assert len(lexical_candidates) <= 100
 
 
 def test_hybrid_rrf_uses_stable_identifier_ties():
