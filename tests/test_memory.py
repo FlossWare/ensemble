@@ -738,3 +738,46 @@ def test_memory_lexical_semantic_and_hybrid_retrieval_smoke_metrics():
         assert 0.0 <= macro["recall@3"] <= 1.0
         assert 0.0 <= macro["mrr@3"] <= 1.0
         assert 0.0 <= macro["ndcg@3"] <= 1.0
+
+
+
+def test_memory_source_reconciliation_isolated_to_exact_scope():
+    import hashlib
+
+    workspace_content = "Workspace-only material about retrieval provenance."
+    archive_content = "Archive-only material about durable checkpoints."
+    with client() as http:
+        for path, content, scope in (
+            ("/workspace/search.md", workspace_content, "/workspace"),
+            ("/archive/operations.md", archive_content, "/archive"),
+        ):
+            response = http.post(
+                "/api/v1/memory/sources/import",
+                json={
+                    "path": path,
+                    "content": content,
+                    "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    "metadata": {"scope": scope},
+                },
+            )
+            assert response.status_code == 200
+
+        reconciled = http.post(
+            "/api/v1/memory/sources/reconcile",
+            json={"source": "claude-code", "scope": "/workspace", "paths": []},
+        )
+        assert reconciled.status_code == 200
+        assert reconciled.json()["stale"] == ["/workspace/search.md"]
+
+        workspace_results = http.post(
+            "/api/v1/memory/search/semantic",
+            json={"query": "retrieval provenance", "source": "claude-code"},
+        ).json()["results"]
+        archive_results = http.post(
+            "/api/v1/memory/search/semantic",
+            json={"query": "durable checkpoints", "source": "claude-code"},
+        ).json()["results"]
+
+        assert all(item["source_path"] != "/workspace/search.md" for item in workspace_results)
+        assert any(item["source_path"] == "/archive/operations.md" for item in archive_results)
+        assert http.get("/api/v1/memory/sources/status").json()["indexed_document_count"] == 1
