@@ -4861,7 +4861,7 @@ def create_app(
             degraded = []
             for message in messages:
                 if heartbeat is not None and not await heartbeat():
-                    raise RuntimeError("transcript worker lease was lost")
+                    raise HTTPException(status_code=409, detail="transcript worker lease was lost")
                 kind = message.get("kind", "text")
                 content_revision = hashlib.sha256(message["text"].encode("utf-8")).hexdigest()
                 event_id = hashlib.sha256(
