@@ -408,7 +408,7 @@ class ChromaVectorStore:
         try:
             result = await asyncio.to_thread(run)
             if result:
-                self._update_cached_metadata(name, items)
+                self._invalidate_vector_cache(name)
             return result
         except Exception as exc:
             if self._is_missing_collection(exc):
@@ -584,7 +584,7 @@ class ChromaVectorStore:
             return len(selected)
         result = await asyncio.to_thread(run)
         if result:
-            self._update_cached_metadata(name, items, generation_id)
+            self._invalidate_vector_cache(name, generation_id)
         return result
 
     async def delete_generation_source(self, generation_id: str, source_id: str, name: str | None = None) -> int:
