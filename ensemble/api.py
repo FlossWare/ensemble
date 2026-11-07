@@ -4479,7 +4479,17 @@ def create_app(
                         reranked_hits, key=lambda hit: hit.rerank_score, reverse=True
                     ) + result["results"][len(candidates):]
                     result["reranked"] = True
+                    result["ranking"] = {
+                        "status": "reranked",
+                        "provider": reranked.get("provider"),
+                        "candidate_count": len(candidates),
+                    }
                 except Exception:
+                    result["ranking"] = {
+                        "status": "fallback", "provider": None,
+                        "candidate_count": len(candidates),
+                        "reason": "provider_error",
+                    }
                     result["degraded"].append("reranking")
 
             related = []
