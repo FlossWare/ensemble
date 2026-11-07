@@ -18,6 +18,7 @@ dependencies = [
   "pypdf>=5.4,<7",
   "chromadb>=1.0,<2",
   "networkx>=3.4,<4",
+  "numpy>=2.0,<3",
   "networkx>=3.4,<4",
 ]
 
