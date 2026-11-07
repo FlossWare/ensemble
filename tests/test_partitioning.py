@@ -559,3 +559,109 @@ def test_hybrid_knowledge_retrieval_is_partition_isolated(tmp_path, monkeypatch)
         assert all("beta confidential" in item["document"] for item in beta_results)
         assert all("alpha confidential" not in item["document"] for item in beta_results)
 
+
+def test_memory_rest_partition_and_scope_reconciliation_are_isolated(tmp_path, monkeypatch):
+    alpha_token, beta_token = "alpha-memory-secret", "beta-memory-secret"
+    token_map = {
+        hashlib.sha256(alpha_token.encode()).hexdigest(): {
+            "subject": "alpha-client", "partitions": ["alpha"],
+        },
+        hashlib.sha256(beta_token.encode()).hexdigest(): {
+            "subject": "beta-client", "partitions": ["beta"],
+        },
+    }
+    monkeypatch.setenv("ENSEMBLE_PARTITION_TOKENS", json.dumps(token_map))
+    monkeypatch.setenv("ENSEMBLE_AUTH_REQUIRED", "1")
+    base = f"sqlite+aiosqlite:///{tmp_path / 'memory-partitions.db'}"
+    asyncio.run(asyncio.to_thread(_ensure_partition_schema, base, "default"))
+    app = create_app(database_url=base, run_reclamation_worker=False)
+    alpha_headers = {
+        "Authorization": f"Bearer {alpha_token}",
+        "X-Ensemble-Partition": "alpha",
+    }
+    beta_headers = {
+        "Authorization": f"Bearer {beta_token}",
+        "X-Ensemble-Partition": "beta",
+    }
+
+    def import_source(client, headers, path, scope, content):
+        import hashlib
+        response = client.post(
+            "/api/v1/memory/sources/import", headers=headers,
+            json={
+                "path": path, "content": content,
+                "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                "metadata": {"scope": scope, "title": path.rsplit("/", 1)[-1]},
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "ingested"
+
+    with TestClient(app) as client:
+        import_source(
+            client, alpha_headers, "/workspace/skills/search.md", "/workspace",
+            "alpha confidential memory source",
+        )
+        import_source(
+            client, beta_headers, "/workspace/skills/search.md", "/workspace",
+            "beta confidential memory source",
+        )
+        import_source(
+            client, beta_headers, "/workspace/other/file.md", "/workspace/other",
+            "beta nested scope memory source",
+        )
+
+        for headers, event_text in (
+            (alpha_headers, "alpha event payload"),
+            (beta_headers, "beta event payload"),
+        ):
+            stored = client.put(
+                "/api/v1/memory/memories/session/entries/shared-event",
+                headers=headers, json={"entry": {"result": event_text}},
+            )
+            assert stored.status_code == 200, stored.text
+
+        alpha_reconcile = client.post(
+            "/api/v1/memory/sources/reconcile", headers=alpha_headers,
+            json={"source": "claude-code", "scope": "/workspace", "paths": []},
+        )
+        assert alpha_reconcile.status_code == 200
+        assert alpha_reconcile.json()["count"] == 1
+        assert client.get(
+            "/api/v1/memory/sources/status", headers=alpha_headers,
+        ).json()["indexed_document_count"] == 0
+        assert client.get(
+            "/api/v1/memory/sources/status", headers=beta_headers,
+        ).json()["indexed_document_count"] == 2
+
+        beta_reconcile = client.post(
+            "/api/v1/memory/sources/reconcile", headers=beta_headers,
+            json={"source": "claude-code", "scope": "/workspace", "paths": []},
+        )
+        assert beta_reconcile.status_code == 200
+        assert beta_reconcile.json()["count"] == 1
+        assert client.get(
+            "/api/v1/memory/sources/status", headers=beta_headers,
+        ).json()["indexed_document_count"] == 1
+
+        alpha_events = client.get(
+            "/api/v1/memory/memories/session/entries", headers=alpha_headers,
+        ).json()["entries"]
+        beta_events = client.get(
+            "/api/v1/memory/memories/session/entries", headers=beta_headers,
+        ).json()["entries"]
+        assert [item["result"] for item in alpha_events] == ["alpha event payload"]
+        assert [item["result"] for item in beta_events] == ["beta event payload"]
+
+        alpha_search = client.post(
+            "/api/v1/memory/search/semantic", headers=alpha_headers,
+            json={"query": "confidential memory source", "source": "claude-code"},
+        ).json()["results"]
+        beta_search = client.post(
+            "/api/v1/memory/search/semantic", headers=beta_headers,
+            json={"query": "nested scope memory source", "source": "claude-code"},
+        ).json()["results"]
+        assert alpha_search == []
+        assert beta_search
+        assert all(item["source"] == "claude-code" for item in beta_search)
+
