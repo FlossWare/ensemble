@@ -1361,8 +1361,9 @@ def test_context_assembly_works_without_search_or_memory_dependencies(tmp_path):
         assert result["degraded"] == []
 
 
-def test_federated_task_inbox_accepts_idempotently_and_survives_restart(tmp_path):
+def test_federated_task_inbox_accepts_idempotently_and_survives_restart(tmp_path, monkeypatch):
     import uuid
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
 
     task_id = str(uuid.uuid4())
     payload = {
@@ -1395,8 +1396,9 @@ def test_federated_task_inbox_accepts_idempotently_and_survives_restart(tmp_path
         assert [item["task_id"] for item in listed.json()["tasks"]] == [task_id]
 
 
-def test_federated_task_inbox_rejects_unsupported_capability(tmp_path):
+def test_federated_task_inbox_rejects_unsupported_capability(tmp_path, monkeypatch):
     import uuid
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
 
     with _client(tmp_path) as client:
         response = client.post("/federation/tasks", json={
