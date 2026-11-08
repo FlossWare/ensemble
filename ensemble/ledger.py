@@ -68,6 +68,8 @@ def utc_now() -> str:
 def parse_time(value: str | None) -> datetime | None:
     if value is None:
         return None
+    if not isinstance(value, str):
+        raise ValueError("timestamps must be ISO-8601 strings")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (TypeError, ValueError) as exc:
@@ -113,6 +115,32 @@ def envelope_for(ledger_id: str, sequence: int, event: dict[str, Any], captured_
     }
     record["entry_sha256"] = entry_hash(record)
     return record
+
+def validate_envelope(record: dict[str, Any], expected_ledger_id: str | None = None) -> None:
+    required = {"schema_version", "ledger_id", "sequence", "event_id", "event_type", "source",
+                "timestamp", "captured_at", "correlation_id", "payload", "payload_sha256",
+                "previous_entry_sha256", "entry_sha256", "provenance"}
+    if not isinstance(record, dict) or not required.issubset(record):
+        raise ValueError("invalid ledger envelope: required field missing")
+    if record["schema_version"] != 1 or not isinstance(record["sequence"], int) or isinstance(record["sequence"], bool) or record["sequence"] < 1:
+        raise ValueError("invalid ledger envelope version or sequence")
+    if expected_ledger_id is not None and record["ledger_id"] != expected_ledger_id:
+        raise ValueError("ledger envelope identity mismatch")
+    for field, maximum in (("event_id", 256), ("event_type", 256), ("source", 512)):
+        value = record[field]
+        if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+            raise ValueError("invalid ledger envelope field: " + field)
+    if record["timestamp"] is not None:
+        parse_time(record["timestamp"])
+    parse_time(record["captured_at"])
+    if record["correlation_id"] is not None and not isinstance(record["correlation_id"], str):
+        raise ValueError("invalid ledger envelope correlation_id")
+    if not isinstance(record["provenance"], dict):
+        raise ValueError("invalid ledger envelope provenance")
+    if record["payload_sha256"] != digest(record["payload"]):
+        raise ValueError("payload hash mismatch")
+    if not isinstance(record["entry_sha256"], str) or not hmac.compare_digest(record["entry_sha256"], entry_hash(record)):
+        raise ValueError("entry hash mismatch")
 
 
 class SqliteLedgerStore:
@@ -179,8 +207,8 @@ class SqliteLedgerStore:
         if after_sequence > head:
             raise ValueError("after_sequence exceeds head_sequence")
         upper = head if through_sequence is None else through_sequence
-        if isinstance(upper, bool) or not isinstance(upper, int) or upper < 0 or upper > head:
-            raise ValueError("through_sequence must be between 0 and head_sequence")
+        if isinstance(upper, bool) or not isinstance(upper, int) or upper < 0 or upper > head or upper < after_sequence:
+            raise ValueError("through_sequence must be between after_sequence and head_sequence")
         since, until = parse_time(filters.get("since")), parse_time(filters.get("until"))
         if since and until and since > until:
             raise ValueError("since must not be later than until")
@@ -203,6 +231,12 @@ class SqliteLedgerStore:
         has_more = scanned < upper
         return {"entries": entries, "next_after_sequence": scanned, "head_sequence": head, "has_more": has_more}
 
+    async def replay(self, after_sequence=0, through_sequence=None, limit=1000):
+        return await self.pull(after_sequence, through_sequence, limit)
+
+    async def export(self, after_sequence=0, through_sequence=None, limit=1000):
+        return await self.pull(after_sequence, through_sequence, limit)
+
     async def get(self, event_id):
         async with self.engine.connect() as conn:
             row = (await conn.execute(select(ledger_entries).where(ledger_entries.c.event_id == event_id))).mappings().first()
@@ -211,8 +245,10 @@ class SqliteLedgerStore:
     async def verify(self, from_sequence=1, through_sequence=None, checkpoint=None):
         state = await self.status()
         end = state["head_sequence"] if through_sequence is None else through_sequence
-        if not 1 <= from_sequence <= max(1, end) or end > state["head_sequence"]:
+        if isinstance(from_sequence, bool) or not isinstance(from_sequence, int) or from_sequence < 1 or isinstance(end, bool) or not isinstance(end, int) or end > state["head_sequence"] or end < 0 or (end > 0 and end < from_sequence):
             raise ValueError("invalid verification range")
+        if end == 0 and from_sequence == 1:
+            return {"ok": True, "from_sequence": 1, "through_sequence": 0, "verified_count": 0, "assurance": "empty_ledger"}
         async with self.engine.connect() as conn:
             rows = (await conn.execute(select(ledger_entries).where(
                 and_(ledger_entries.c.sequence >= from_sequence, ledger_entries.c.sequence <= end)
@@ -230,6 +266,11 @@ class SqliteLedgerStore:
             item = dict(row)
             seq = item["sequence"]
             if seq != expected: return {"ok": False, "first_failing_sequence": expected, "failure_category": "sequence_gap", "assurance": "hash_chain", "verified_count": expected-from_sequence}
+            try:
+                validate_envelope(item, state["ledger_id"])
+            except ValueError as exc:
+                category = "payload_hash_mismatch" if "payload hash" in str(exc) else ("entry_hash_mismatch" if "entry hash" in str(exc) else "invalid_envelope")
+                return {"ok": False, "first_failing_sequence": seq, "failure_category": category, "assurance": "hash_chain", "verified_count": seq-from_sequence}
             if item["event_id"] in seen: return {"ok": False, "first_failing_sequence": seq, "failure_category": "duplicate_event_id", "assurance": "hash_chain", "verified_count": seq-from_sequence}
             seen.add(item["event_id"])
             if not hmac.compare_digest(item["payload_sha256"], digest(item["payload"])):
@@ -273,8 +314,7 @@ class SqliteLedgerStore:
                         raise ValueError("import payload hash mismatch")
                     source_assurance = "payload_hash_verified"
                 if incoming.get("entry_sha256") is not None:
-                    if incoming["entry_sha256"] != entry_hash(incoming):
-                        raise ValueError("import entry hash mismatch")
+                    validate_envelope(incoming, source_ledger_id)
                     source_assurance = "entry_hash_verified"
                 existing = (await conn.execute(select(ledger_entries).where(ledger_entries.c.event_id == event["event_id"]))).mappings().first()
                 if existing:
