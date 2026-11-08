@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Protocol
 from uuid import UUID
 
-from .task_store import TaskRecord, TaskRequest, TaskSubmission
+from .task_store import DelegatedTaskReference, TaskRecord, TaskRequest, TaskSubmission
 
 
 TaskHandler = Callable[[TaskRecord], Awaitable[dict[str, Any]]]
@@ -26,6 +26,15 @@ class TaskStore(Protocol):
     def recover_interrupted(self) -> int: ...
     def get(self, task_id: UUID) -> TaskRecord | None: ...
     def list(self, limit: int = 100) -> list[TaskRecord]: ...
+    def record_delegated_child(
+        self, parent_task_id: UUID, peer_instance_id: str,
+        submission: TaskSubmission, local_instance_id: str,
+    ) -> DelegatedTaskReference: ...
+    def update_delegated_child(
+        self, peer_instance_id: str, task_id: UUID, *,
+        state: str, error: str | None = None,
+    ) -> DelegatedTaskReference | None: ...
+    def list_delegated_children(self, parent_task_id: UUID) -> list[DelegatedTaskReference]: ...
 
 
 class Orchestrator:
@@ -108,6 +117,28 @@ class Orchestrator:
 
     async def list(self, limit: int = 100) -> list[TaskRecord]:
         return await asyncio.to_thread(self.store.list, limit)
+
+    async def record_delegated_child(
+        self, parent_task_id: UUID, peer_instance_id: str, submission: TaskSubmission,
+    ) -> DelegatedTaskReference:
+        return await asyncio.to_thread(
+            self.store.record_delegated_child,
+            parent_task_id, peer_instance_id, submission, self.instance_id,
+        )
+
+    async def update_delegated_child(
+        self, peer_instance_id: str, task_id: UUID, *,
+        state: str, error: str | None = None,
+    ) -> DelegatedTaskReference | None:
+        return await asyncio.to_thread(
+            self.store.update_delegated_child,
+            peer_instance_id, task_id, state=state, error=error,
+        )
+
+    async def list_delegated_children(
+        self, parent_task_id: UUID,
+    ) -> list[DelegatedTaskReference]:
+        return await asyncio.to_thread(self.store.list_delegated_children, parent_task_id)
 
     async def start(self) -> int:
         if self._started:
