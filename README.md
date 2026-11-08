@@ -21,7 +21,7 @@ Ensemble is the product and implementation boundary. It does not depend on any c
 
 The REST boundary is the architectural rule. The current review implementation still has orchestration paths that call stores and services directly; those paths must be moved behind internal REST clients before claiming full capability-boundary compliance. See [Architecture](docs/architecture.md), [Federation](docs/federation.md), and [review readiness](docs/review-readiness.md).
 
-See [Federation](docs/federation.md), [REST contract conventions](docs/rest-contracts.md), [REST route inventory and naming audit](docs/rest-route-audit.md), [capability completion plan](docs/capability-completion-plan.md), [Control Center requirements](docs/control-center-requirements.md), [Control Center API mapping](docs/control-center-api-mapping.md), and [current implementation status](docs/implementation-status.md).
+See [Federation](docs/federation.md), [Worker Runtime](docs/worker-runtime.md), [REST contract conventions](docs/rest-contracts.md), [REST route inventory and naming audit](docs/rest-route-audit.md), [capability completion plan](docs/capability-completion-plan.md), [Control Center requirements](docs/control-center-requirements.md), [Control Center API mapping](docs/control-center-api-mapping.md), and [current implementation status](docs/implementation-status.md).
 
 ## Current implementation
 
@@ -57,6 +57,10 @@ pytest
 ```
 
 All source ingestion uses the canonical /api/v1/ingest/... namespace: documents, files, URLs (including preview), and transcripts. The browser Control Center is available at /control. It includes live capability health/readiness checks, a retrieval explorer with optional reranking, structured transcript-session ingestion, Index and Vector inspection, Memory and Knowledge inspection, source lookup and confirmed permanent tombstoning, URI preview/explicit-ingest, PDF upload ingestion, raw JSONL transcript ingestion, GA run/history/candidate inspection and approval-to-export, Thompson model inspection/selection/reset, and Learning report/outcome/artifact inspection with confirmed reset. GA candidates are not applied to live settings. Discovered URI links are displayed but not crawled. API documentation is available at /docs; the OpenAPI document is at /openapi.json.
+
+## Worker runtime
+
+A standalone, stateless worker runtime is available through `ensemble-worker`. It loads operator-installed capability adapters, exposes health/status/capability endpoints, and executes bounded direct request/response invocations without initializing Ensemble persistence or Control Center subsystems. Automatic federation registration and built-in provider adapters are not yet implemented. See [Worker Runtime](docs/worker-runtime.md).
 
 ## Federation status
 
