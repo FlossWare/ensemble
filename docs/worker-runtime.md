@@ -69,3 +69,22 @@ The worker runtime currently exposes its own HTTP catalogue and invocation endpo
 For the R9000, firmware and package availability are the deployment gate. The runtime requires Python 3.12 or newer plus FastAPI, Uvicorn, and Pydantic. Do not assume stock router firmware can host it. Validate the target firmware, Python ABI, writable storage, process supervision, and available RAM before building an image. Raspberry Pi 3B is also a lightweight target; use low concurrency and keep provider credentials centralized.
 
 Federation endpoints and worker endpoints assume an operator-controlled network. Do not expose them to untrusted networks. This runtime adds no authentication or secret-sharing mechanism.
+
+
+## Embedding a worker adapter in the Full runtime
+
+The existing `module:register` adapter contract remains supported. Set
+`ENSEMBLE_WORKER_ADAPTER=package.module:register` when launching the Full API
+runtime to load that trusted adapter in-process. Each registered operation is
+exposed as a Full-profile capability named
+`worker-adapter.<capability>.<operation>` and is available to other runtime
+capabilities through `RuntimeContext.services["worker_operations"]`, keyed by
+`<capability>.<operation>`. Call its async `invoke(payload)` method to reuse
+the worker's concurrency limit, deadline handling, and response validation.
+
+This does not start a second HTTP listener, introduce a message broker, or
+change the standalone Worker profile. Standard deliberately does not load
+configured worker adapters. Adapter modules are executable trusted code and
+must be supplied by the deployment operator; do not point this setting at
+untrusted modules. The operation registry is an in-process extension point,
+not a new public invocation endpoint.
