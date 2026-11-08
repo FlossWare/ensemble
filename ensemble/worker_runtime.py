@@ -96,6 +96,10 @@ class WorkerRuntime:
             contract_version=contract_version,
         )
 
+    def registered_operations(self) -> tuple[WorkerOperation, ...]:
+        """Return registered operations in deterministic catalogue order."""
+        return tuple(self._operations[key] for key in sorted(self._operations))
+
     def catalogue(self) -> list[dict[str, Any]]:
         return [
             {
