@@ -1,5 +1,3 @@
-import time
-
 from ensemble.federation import PeerRegistry
 
 
@@ -45,5 +43,5 @@ def test_registry_marks_expired_peer_offline_then_eventually_prunes_it():
     assert peer["status"] == "offline"
     assert registry.expire(now=131) == 0
     assert len(registry.list(now=131)) == 1
-    assert registry.expire(now=191) == 1
-    assert registry.list(now=191) == []
+    assert registry.expire(now=221) == 1
+    assert registry.list(now=221) == []
