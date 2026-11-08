@@ -14,7 +14,7 @@ from ensemble.store import metadata
 from ensemble.vector_store import vector_metadata
 from ensemble.index_store import index_metadata
 from ensemble.knowledge_store import knowledge_metadata
-from ensemble.memory_store import memory_metadata
+from ensemble.memory_store import memory_metadata\nfrom ensemble.ledger import ledger_metadata
 from ensemble.ga_store import ga_metadata
 from ensemble.thompson_store import thompson_metadata
 from ensemble.learning_store import learning_metadata
@@ -38,7 +38,7 @@ if database_url.database not in (None, "", ":memory:"):
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = [metadata, vector_metadata, index_metadata, knowledge_metadata, memory_metadata, ga_metadata, thompson_metadata, learning_metadata, transcript_metadata]
+target_metadata = [metadata, vector_metadata, index_metadata, knowledge_metadata, memory_metadata, ga_metadata, thompson_metadata, learning_metadata, transcript_metadata, ledger_metadata]
 
 
 def run_migrations_offline() -> None:
