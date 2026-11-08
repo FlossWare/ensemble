@@ -97,8 +97,11 @@ class FederatedTaskStore:
             """)
             db.execute("CREATE INDEX IF NOT EXISTS ix_federated_tasks_created ON federated_tasks(created_at)")
 
-    def accept(self, request: FederatedTaskRequest, local_instance_id: str) -> tuple[FederatedTaskRecord, bool]:
-        if request.origin_instance_id == local_instance_id:
+    def accept(
+        self, request: FederatedTaskRequest, local_instance_id: str,
+        *, allow_local_origin: bool = False,
+    ) -> tuple[FederatedTaskRecord, bool]:
+        if request.origin_instance_id == local_instance_id and not allow_local_origin:
             raise ValueError("origin_instance_id must identify a remote instance")
         body = request.model_dump(mode="json")
         fingerprint = {key: value for key, value in body.items() if key != "created_at"}
