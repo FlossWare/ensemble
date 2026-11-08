@@ -671,6 +671,8 @@ def create_app(
     federation_endpoint = f"http://{federation_host}:{federation_settings.port}"
     federation_ttl = int(os.getenv("ENSEMBLE_FEDERATION_TTL_SECONDS", "90"))
     federation_heartbeat = int(os.getenv("ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS", "30"))
+    federation_group = os.getenv("ENSEMBLE_FEDERATION_GROUP", "239.255.76.76").strip()
+    federation_port = int(os.getenv("ENSEMBLE_FEDERATION_PORT", "47676"))
     federation_registry = PeerRegistry(federation_instance_id, federation_ttl)
     federation_discovery = MulticastDiscovery(
         federation_registry,
@@ -680,6 +682,8 @@ def create_app(
         capabilities=["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning"],
         heartbeat_seconds=federation_heartbeat,
         ttl_seconds=federation_ttl,
+        group=federation_group,
+        port=federation_port,
     )
     app.state.federation_registry = federation_registry
     app.state.federation_discovery = federation_discovery
