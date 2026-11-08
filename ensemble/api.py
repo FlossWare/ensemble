@@ -11,6 +11,7 @@ import os
 import socket
 import math
 import time
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID, uuid4
@@ -54,6 +55,7 @@ from .partitioning import partition_scope_middleware
 from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id, host_metrics, inspect_peer
 from .task_store import TaskRequest, TaskSubmission, SqliteTaskStore
 from .orchestration import Orchestrator
+from .service_delegation import ServiceRequest, ServiceResponse
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -786,6 +788,84 @@ def create_app(
     @app.get("/federation/peers", tags=["federation"])
     async def federation_peers():
         return {"instance": federation_instance, "peers": federation_registry.list()}
+
+    @app.post("/federation/peers/{peer_id}/services", tags=["federation"])
+    async def invoke_peer_service(peer_id: str, service_request: ServiceRequest):
+        if not federation_enabled:
+            raise HTTPException(status_code=503, detail="federation is disabled")
+        peer = next((item for item in federation_registry.list() if item["instance_id"] == peer_id), None)
+        if peer is None:
+            raise HTTPException(status_code=404, detail="federation peer not found")
+        if peer["status"] != "online":
+            raise HTTPException(status_code=503, detail="federation peer is offline")
+        if service_request.target_capability not in peer["capabilities"]:
+            raise HTTPException(status_code=409, detail="peer does not advertise the requested capability")
+        if service_request.target_capability != "search" or service_request.operation != "search.retrieve":
+            raise HTTPException(status_code=409, detail="service operation is not supported for peer delegation")
+        query = service_request.payload.get("query")
+        limit = service_request.payload.get("limit", 10)
+        rerank = service_request.payload.get("rerank", False)
+        if not isinstance(query, str) or not query.strip():
+            raise HTTPException(status_code=422, detail="search.retrieve requires a non-empty payload.query")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise HTTPException(status_code=422, detail="search.retrieve payload.limit must be between 1 and 100")
+        if not isinstance(rerank, bool):
+            raise HTTPException(status_code=422, detail="search.retrieve payload.rerank must be a boolean")
+        outbound = service_request.model_copy(update={"requester_instance_id": federation_instance_id})
+        timeout = 15.0
+        if outbound.deadline is not None:
+            remaining = (outbound.deadline - datetime.now(timezone.utc)).total_seconds()
+            if remaining <= 0:
+                raise HTTPException(status_code=408, detail="service request deadline has expired")
+            timeout = min(timeout, remaining)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    peer["endpoint"].rstrip("/") + "/federation/services",
+                    json=outbound.model_dump(mode="json"),
+                )
+        except httpx.TimeoutException as exc:
+            raise HTTPException(status_code=504, detail="peer service request timed out; outcome is not known") from exc
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail="peer service request failed") from exc
+        if response.status_code >= 400:
+            status = response.status_code if response.status_code < 500 else 502
+            raise HTTPException(status_code=status, detail="peer service request was rejected")
+        try:
+            return ServiceResponse.model_validate(response.json()).model_dump(mode="json")
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=502, detail="peer returned an invalid service response") from exc
+
+    @app.post("/federation/services", tags=["federation"])
+    async def invoke_local_federated_service(service_request: ServiceRequest):
+        if not federation_enabled:
+            raise HTTPException(status_code=503, detail="federation is disabled")
+        if service_request.target_capability != "search" or service_request.operation != "search.retrieve":
+            raise HTTPException(status_code=409, detail="service operation is not supported")
+        if service_request.deadline is not None and service_request.deadline <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=408, detail="service request deadline has expired")
+        query = service_request.payload.get("query")
+        limit = service_request.payload.get("limit", 10)
+        rerank = service_request.payload.get("rerank", False)
+        if not isinstance(query, str) or not query.strip():
+            raise HTTPException(status_code=422, detail="search.retrieve requires a non-empty payload.query")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise HTTPException(status_code=422, detail="search.retrieve payload.limit must be between 1 and 100")
+        if not isinstance(rerank, bool):
+            raise HTTPException(status_code=422, detail="search.retrieve payload.rerank must be a boolean")
+        try:
+            result = await search.search_with_status(query, limit, rerank=rerank)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="local search service failed") from exc
+        response = ServiceResponse(
+            request_id=service_request.request_id,
+            provider_instance_id=federation_instance_id,
+            operation=service_request.operation,
+            result=result,
+        )
+        return response.model_dump(mode="json")
 
     @app.post("/federation/peers/{peer_id}/tasks", status_code=202, tags=["federation"])
     async def submit_peer_task(peer_id: str, submission: TaskSubmission):
