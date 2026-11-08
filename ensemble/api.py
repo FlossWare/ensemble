@@ -881,8 +881,6 @@ def create_app(
             raise HTTPException(status_code=503, detail="federation peer is offline")
         if invocation.target_capability not in peer["capabilities"]:
             raise HTTPException(status_code=409, detail="peer does not advertise the requested capability")
-        if service_operations.resolve(invocation.target_capability, invocation.operation) is None:
-            raise HTTPException(status_code=409, detail="service operation is not supported by this Ensemble version")
         outbound = ServiceRequest(
             **invocation.model_dump(mode="python"),
             requester_instance_id=federation_instance_id,
@@ -895,10 +893,27 @@ def create_app(
             timeout = min(timeout, remaining)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
+                catalogue_response = await client.get(
+                    peer["endpoint"].rstrip("/") + "/federation/services"
+                )
+                if catalogue_response.status_code >= 400:
+                    raise HTTPException(status_code=502, detail="peer service catalogue is unavailable")
+                catalogue = catalogue_response.json()
+                advertised = catalogue.get("operations", []) if isinstance(catalogue, dict) else []
+                supported = any(
+                    isinstance(item, dict)
+                    and item.get("capability") == invocation.target_capability
+                    and item.get("operation") == invocation.operation
+                    for item in advertised
+                )
+                if not supported:
+                    raise HTTPException(status_code=409, detail="peer does not advertise the requested service operation")
                 response = await client.post(
                     peer["endpoint"].rstrip("/") + "/federation/services",
                     json=outbound.model_dump(mode="json"),
                 )
+        except HTTPException:
+            raise
         except httpx.TimeoutException as exc:
             raise HTTPException(status_code=504, detail="peer service request timed out; outcome is not known") from exc
         except httpx.RequestError as exc:
