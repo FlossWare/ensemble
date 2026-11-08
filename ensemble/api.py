@@ -7,6 +7,7 @@ import re
 import secrets
 import random
 import os
+import socket
 import math
 import time
 from contextlib import asynccontextmanager
@@ -49,6 +50,7 @@ from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryRecla
 from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
 from .partitioning import partition_scope_middleware
+from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -285,9 +287,12 @@ def create_app(
             await active_transcript_store.recover_interrupted()
             await active_reclamation_store.initialize()
             worker_task = asyncio.create_task(reclamation_worker())
+            if federation_enabled:
+                await federation_discovery.start()
             try:
                 yield
             finally:
+                await federation_discovery.stop()
                 worker_task.cancel()
                 try:
                     await worker_task
@@ -658,6 +663,32 @@ def create_app(
     app.state.learning_store = active_learning_store
     app.state.transcript_store = active_transcript_store
     app.state.settings = settings_from_env(database_url)
+    federation_settings = app.state.settings
+    federation_instance_id = _instance_id(federation_settings.persistence_root)
+    federation_name = os.getenv("ENSEMBLE_NAME", socket.gethostname()).strip() or socket.gethostname()
+    federation_enabled = os.getenv("ENSEMBLE_FEDERATION_ENABLED", "true").strip().casefold() not in {"0", "false", "no", "off"}
+    federation_host = _advertise_host(federation_settings.host)
+    federation_endpoint = f"http://{federation_host}:{federation_settings.port}"
+    federation_ttl = int(os.getenv("ENSEMBLE_FEDERATION_TTL_SECONDS", "90"))
+    federation_heartbeat = int(os.getenv("ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS", "30"))
+    federation_registry = PeerRegistry(federation_instance_id, federation_ttl)
+    federation_discovery = MulticastDiscovery(
+        federation_registry,
+        instance_id=federation_instance_id,
+        name=federation_name,
+        endpoint=federation_endpoint,
+        capabilities=["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning"],
+        heartbeat_seconds=federation_heartbeat,
+        ttl_seconds=federation_ttl,
+    )
+    app.state.federation_registry = federation_registry
+    app.state.federation_discovery = federation_discovery
+    app.state.federation_instance = {
+        "instance_id": federation_instance_id,
+        "name": federation_name,
+        "endpoint": federation_endpoint,
+        "protocol_version": "1",
+    }
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
@@ -684,6 +715,24 @@ def create_app(
     @app.get("/health", tags=["operations"])
     async def health():
         return {"status": "ok", "service": "ensemble"}
+
+    @app.get("/federation/status", tags=["federation"])
+    async def federation_status():
+        peers = federation_registry.list()
+        return {
+            "enabled": federation_enabled,
+            "discovery": "multicast" if federation_enabled and federation_discovery._started else "disabled" if not federation_enabled else "unavailable",
+            "discovery_error": federation_discovery.last_error,
+            "instance": federation_instance,
+            "peer_count": len(peers),
+            "peers": peers,
+            "heartbeat_seconds": federation_heartbeat,
+            "ttl_seconds": federation_ttl,
+        }
+
+    @app.get("/federation/peers", tags=["federation"])
+    async def federation_peers():
+        return {"instance": federation_instance, "peers": federation_registry.list()}
 
     @app.get("/ready", tags=["operations"])
     async def ready():
