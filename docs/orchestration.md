@@ -26,7 +26,7 @@ For inbound delegation:
 2. The adapter maps the envelope to the canonical orchestration submission contract, preserving origin instance, remote task ID, correlation/causation, deadline, requested capability and delegation constraints.
 3. The orchestrator admits or rejects the task under local policy.
 4. The orchestrator schedules and dispatches work to registered local capability handlers/workers.
-5. The adapter publishes accepted, progress, terminal and result events back to the requesting peer using reliable messaging.
+5. The provider exposes the persisted task resource for status and result lookup. The requester queries it when needed; guaranteed push delivery is not required.
 6. The provider's orchestrator remains authoritative for the delegated execution. The requester retains authority over its parent task.
 
 For outbound delegation, the local orchestrator creates and owns the parent task and delegated-child relationship. Federation submits the child request and exposes the provider's task resource for lookup. A network timeout is an ambiguous submission outcome, not remote task failure; retry or lookup must reuse the same child task ID and idempotency key.
