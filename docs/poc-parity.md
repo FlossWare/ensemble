@@ -2,7 +2,7 @@
 
 Reference: FlossWare/poc-claude-ensemble
 Target: FlossWare/ensemble
-Target deployment: one application, one REST listener, independently addressable capability endpoint groups, plus a browser-based Control Center.
+Target deployment: independently deployable Ensemble peer instances, each with its own application, persistence, orchestration authority, versioned REST/MCP/GraphQL/gRPC interfaces, and browser-based operator Control Center. Federation is required; see [Federation](federation.md).
 Persistence boundary: SQLite is Ensemble's own persistence implementation. PostgreSQL and alternative/shared persistence implementations belong to FlossWare proper and are not Ensemble deliverables.
 
 ## Reference policy
