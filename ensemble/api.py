@@ -680,6 +680,7 @@ def create_app(
     app.state.settings = settings_from_env(database_url)
     federation_settings = app.state.settings
     active_task_store = SqliteTaskStore(federation_settings.persistence_root)
+    app.state.task_store = active_task_store
     app.state.federated_task_store = active_task_store
     federation_instance_id = _instance_id(federation_settings.persistence_root)
     active_orchestrator = Orchestrator(
