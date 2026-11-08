@@ -783,6 +783,8 @@ def create_app(
             raise HTTPException(status_code=422, detail="search.query requires a non-empty payload.query")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise HTTPException(status_code=422, detail="search.query payload.limit must be between 1 and 100")
+        if submission.parent_task_id is None:
+            raise HTTPException(status_code=422, detail="delegated tasks require a parent_task_id")
         request_body = TaskRequest(
             **submission.model_dump(mode="python"),
             origin_instance_id=federation_instance_id,
