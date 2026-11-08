@@ -1,6 +1,6 @@
 # Ensemble Federation
 
-**Status:** Accepted architectural requirement; implementation is not yet present.
+**Status:** LAN discovery, heartbeat presence, in-memory peer registry, and Control Center visibility are implemented. Reliable peer messaging, trust establishment, delegation, and artifact exchange remain planned.
 **Scope:** Discovery, presence, trust establishment, peer communication, delegation, and exchange between independently operated Ensemble instances.
 
 ## 1. Purpose and operating model
@@ -14,6 +14,12 @@ An instance may run on a workstation, laptop, home server, or remote server. Dep
 Ensemble is the platform and orchestration authority, not an AI client. Client-specific runtimes and interaction loops remain in separate `ensemble-*` projects.
 
 ## 2. Discovery and automatic presence
+
+### Implemented LAN discovery slice
+
+The current application broadcasts a small JSON presence announcement over IPv4 multicast by default, listens on the same group, ignores its own instance ID, and maintains an in-memory peer registry. The Control Center polls `/federation/status` and renders discovered peers, capabilities, endpoints, last-seen age, and online/offline status. Expired peers remain visible as offline for a bounded retention period before being pruned. This is discovery only: it does not yet establish peer sessions or enable remote task execution.
+
+Current defaults: multicast group `239.255.76.76`, UDP port `47676`, heartbeat 30 seconds, and presence TTL 90 seconds. Configure with `ENSEMBLE_FEDERATION_ENABLED`, `ENSEMBLE_FEDERATION_GROUP`, `ENSEMBLE_FEDERATION_PORT`, `ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS`, and `ENSEMBLE_FEDERATION_TTL_SECONDS`. The UDP group and port are configurable; multicast is link-local and best effort.
 
 When federation is enabled, every running instance MUST both listen for peer announcements and broadcast its own presence by default.
 
