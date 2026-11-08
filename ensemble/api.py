@@ -50,7 +50,7 @@ from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryRecla
 from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
 from .partitioning import partition_scope_middleware
-from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id, inspect_peer
+from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id, host_metrics, inspect_peer
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -738,6 +738,10 @@ def create_app(
     @app.get("/federation/peers", tags=["federation"])
     async def federation_peers():
         return {"instance": federation_instance, "peers": federation_registry.list()}
+
+    @app.get("/federation/metrics", tags=["federation"])
+    async def federation_metrics():
+        return host_metrics(federation_settings.persistence_root)
 
     @app.get("/federation/overview", tags=["federation"])
     async def federation_overview():
