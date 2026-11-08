@@ -80,6 +80,20 @@ class TaskRecord(BaseModel):
     attempt: int = 0
 
 
+class DelegatedTaskReference(BaseModel):
+    contract_version: Literal[1] = 1
+    parent_task_id: UUID
+    peer_instance_id: str = Field(min_length=1, max_length=128)
+    task_id: UUID
+    idempotency_key: str = Field(min_length=1, max_length=256)
+    target_capability: str = Field(min_length=1, max_length=128)
+    task_type: str = Field(min_length=1, max_length=128)
+    state: Literal["submitted", "accepted", "rejected"] = "submitted"
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class SqliteTaskStore:
     """Durable per-instance task persistence and single-owner state transitions."""
 
@@ -114,6 +128,20 @@ class SqliteTaskStore:
                 )
             """)
             db.execute("CREATE INDEX IF NOT EXISTS ix_ensemble_tasks_created ON ensemble_tasks(created_at)")
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS ensemble_delegated_tasks (
+                    peer_instance_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    parent_task_id TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    record_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(peer_instance_id, task_id),
+                    UNIQUE(parent_task_id, peer_instance_id, idempotency_key)
+                )
+            """)
+            db.execute("CREATE INDEX IF NOT EXISTS ix_delegated_tasks_parent ON ensemble_delegated_tasks(parent_task_id, created_at)")
 
     def accept(
         self, request: TaskRequest, local_instance_id: str,
@@ -233,6 +261,95 @@ class SqliteTaskStore:
                 )
                 recovered += 1
         return recovered
+
+    def record_delegated_child(
+        self,
+        parent_task_id: UUID,
+        peer_instance_id: str,
+        submission: TaskSubmission,
+        local_instance_id: str,
+    ) -> DelegatedTaskReference:
+        now = datetime.now(timezone.utc)
+        reference = DelegatedTaskReference(
+            parent_task_id=parent_task_id,
+            peer_instance_id=peer_instance_id,
+            task_id=submission.task_id,
+            idempotency_key=submission.idempotency_key,
+            target_capability=submission.target_capability,
+            task_type=submission.task_type,
+            state="submitted",
+            created_at=now,
+            updated_at=now,
+        )
+        with sqlite3.connect(self.path, timeout=10) as db:
+            db.execute("BEGIN IMMEDIATE")
+            parent_row = db.execute(
+                "SELECT record_json FROM ensemble_tasks WHERE task_id=?",
+                (str(parent_task_id),),
+            ).fetchone()
+            if parent_row is None:
+                raise ValueError("parent task does not exist on this instance")
+            parent = TaskRecord.model_validate_json(parent_row[0])
+            if parent.origin_instance_id != local_instance_id:
+                raise ValueError("parent task is not owned by this instance")
+            existing = db.execute(
+                "SELECT record_json FROM ensemble_delegated_tasks WHERE peer_instance_id=? AND task_id=?",
+                (peer_instance_id, str(submission.task_id)),
+            ).fetchone()
+            if existing:
+                current = DelegatedTaskReference.model_validate_json(existing[0])
+                if (
+                    current.parent_task_id != parent_task_id
+                    or current.idempotency_key != submission.idempotency_key
+                    or current.target_capability != submission.target_capability
+                    or current.task_type != submission.task_type
+                ):
+                    raise ValueError("delegated task identity was reused with different parent or request metadata")
+                return current
+            encoded = reference.model_dump_json()
+            db.execute(
+                "INSERT INTO ensemble_delegated_tasks(peer_instance_id,task_id,parent_task_id,idempotency_key,record_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                (
+                    peer_instance_id, str(submission.task_id), str(parent_task_id),
+                    submission.idempotency_key, encoded, now.isoformat(), now.isoformat(),
+                ),
+            )
+        return reference
+
+    def update_delegated_child(
+        self,
+        peer_instance_id: str,
+        task_id: UUID,
+        *,
+        state: Literal["accepted", "rejected"],
+        error: str | None = None,
+    ) -> DelegatedTaskReference | None:
+        with sqlite3.connect(self.path, timeout=10) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT record_json FROM ensemble_delegated_tasks WHERE peer_instance_id=? AND task_id=?",
+                (peer_instance_id, str(task_id)),
+            ).fetchone()
+            if row is None:
+                return None
+            reference = DelegatedTaskReference.model_validate_json(row[0])
+            reference.state = state
+            reference.error = error[:1024] if error else None
+            reference.updated_at = datetime.now(timezone.utc)
+            encoded = reference.model_dump_json()
+            db.execute(
+                "UPDATE ensemble_delegated_tasks SET record_json=?, updated_at=? WHERE peer_instance_id=? AND task_id=?",
+                (encoded, reference.updated_at.isoformat(), peer_instance_id, str(task_id)),
+            )
+            return reference
+
+    def list_delegated_children(self, parent_task_id: UUID) -> list[DelegatedTaskReference]:
+        with sqlite3.connect(self.path, timeout=10) as db:
+            rows = db.execute(
+                "SELECT record_json FROM ensemble_delegated_tasks WHERE parent_task_id=? ORDER BY created_at, peer_instance_id, task_id",
+                (str(parent_task_id),),
+            ).fetchall()
+        return [DelegatedTaskReference.model_validate_json(row[0]) for row in rows]
 
     def get(self, task_id: UUID) -> TaskRecord | None:
         with sqlite3.connect(self.path, timeout=10) as db:
