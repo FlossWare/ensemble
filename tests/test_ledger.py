@@ -2,9 +2,9 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import delete, update\nfrom sqlalchemy.ext.asyncio import create_async_engine
 
-from ensemble.ledger import SqliteLedgerStore, envelope_for
+from ensemble.ledger import SqliteLedgerStore, envelope_for, ledger_entries
 
 
 def event(event_id, payload=None, **extra):
@@ -110,5 +110,66 @@ def test_ledger_import_is_idempotent_and_conflict_safe(tmp_path):
         assert (await store.status())["head_sequence"] == 1
         imported = await store.get("source-1")
         assert imported["provenance"]["source_sequence"] == 8
+        await engine.dispose()
+    asyncio.run(run())
+
+def test_ledger_detects_payload_hash_entry_hash_chain_and_sequence_corruption(tmp_path):
+    async def run():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'tamper.db'}")
+        store = SqliteLedgerStore(engine)
+        await store.initialize()
+        await store.append(event("one"))
+        await store.append(event("two"))
+        async with engine.begin() as conn:
+            await conn.execute(update(ledger_entries).where(ledger_entries.c.sequence == 1).values(payload={"tampered": True}))
+        result = await store.verify()
+        assert not result["ok"] and result["failure_category"] == "payload_hash_mismatch"
+        await engine.dispose()
+
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'entry-hash.db'}")
+        store = SqliteLedgerStore(engine)
+        await store.initialize()
+        await store.append(event("one"))
+        async with engine.begin() as conn:
+            await conn.execute(update(ledger_entries).where(ledger_entries.c.sequence == 1).values(entry_sha256="f" * 64))
+        result = await store.verify()
+        assert not result["ok"] and result["failure_category"] == "entry_hash_mismatch"
+        await engine.dispose()
+
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'chain.db'}")
+        store = SqliteLedgerStore(engine)
+        await store.initialize()
+        await store.append(event("one"))
+        await store.append(event("two"))
+        async with engine.begin() as conn:
+            await conn.execute(update(ledger_entries).where(ledger_entries.c.sequence == 2).values(previous_entry_sha256="e" * 64))
+        result = await store.verify()
+        assert not result["ok"] and result["failure_category"] == "broken_hash_chain"
+        await engine.dispose()
+
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'gap.db'}")
+        store = SqliteLedgerStore(engine)
+        await store.initialize()
+        await store.append(event("one"))
+        await store.append(event("two"))
+        async with engine.begin() as conn:
+            await conn.execute(delete(ledger_entries).where(ledger_entries.c.sequence == 1))
+        result = await store.verify()
+        assert not result["ok"] and result["failure_category"] == "sequence_gap"
+        await engine.dispose()
+    asyncio.run(run())
+
+
+def test_ledger_empty_status_and_external_checkpoint(tmp_path):
+    async def run():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'checkpoint.db'}")
+        store = SqliteLedgerStore(engine)
+        await store.initialize()
+        assert (await store.verify())["assurance"] == "empty_ledger"
+        first = (await store.append(event("one")))["entry"]
+        await store.append(event("two"))
+        assert (await store.verify(from_sequence=2))["failure_category"] == "missing_checkpoint"
+        checkpoint = {"ledger_id": first["ledger_id"], "sequence": 1, "entry_sha256": first["entry_sha256"]}
+        assert (await store.verify(from_sequence=2, checkpoint=checkpoint))["ok"]
         await engine.dispose()
     asyncio.run(run())
