@@ -10,7 +10,7 @@ Ensemble is one codebase and one application identity with multiple deployment p
 | `standard` | General-purpose host | Core application, retrieval, Memory, Knowledge, Graph, Thompson and collaboration. GA and Learning are omitted. |
 | `full` | Server/workstation | Standard capabilities plus GA and Learning, including optional analytics and model-training dependencies. |
 
-Standard and Full now have a real first capability boundary: Standard does not construct or initialize GA or Learning stores, and those route groups are not exposed. The analytics and GA-configuration dependencies are imported lazily and are installed only with Full. Both profiles still share the existing core application and its persistence, ingestion, retrieval, Memory, Knowledge, Graph and Thompson composition. Further capability groups will be migrated incrementally behind the shared lifecycle contracts.
+Standard and Full have a real profile boundary: Standard does not construct or initialize GA or Learning stores, and those route groups are not exposed. The analytics and GA-configuration dependencies are imported lazily and are installed only with Full. Both profiles still share the existing API composition and its persistence, ingestion and retrieval routes. Memory, Knowledge, Graph and Thompson stores, plus GA and Learning in Full, are now initialized, health-checked and closed through the shared capability lifecycle. Their route handlers remain part of the shared API module; route/service extraction is still future work.
 
 ## Run
 
@@ -46,7 +46,7 @@ The registry resolves profile eligibility and dependencies before startup. The l
 - `GET /api/v1/runtime/capabilities`
 - `GET /api/v1/runtime/capabilities/health`
 
-The current migration has made GA and Learning profile-specific. Further built-in capability groups will move behind this lifecycle incrementally; the shared contracts do not imply that every legacy subsystem has already been extracted.
+The current built-in lifecycle-managed stores are Memory, Knowledge, Graph and Thompson in Standard and Full, plus GA and Learning in Full. The trusted worker adapter bridge can load an existing `module:register` adapter in Full with `ENSEMBLE_WORKER_ADAPTER=package.module:register`; each operation is exposed in `RuntimeContext.services["worker_operations"]`. Standard does not load these adapters. This is an in-process extension point, not a public invocation route or a second worker server. Route handlers and the remaining persistence/ingestion/retrieval composition are not yet independently packaged capabilities.
 
 ## Upgrade path
 
