@@ -233,20 +233,33 @@ class SqliteLedgerStore:
         if not isinstance(source_ledger_id, str) or not source_ledger_id or not isinstance(entries, list) or len(entries) > 1000:
             raise ValueError("source_ledger_id and up to 1000 entries are required")
         imported, duplicates = [], []
+        previous_source_sequence = 0
         async with self.engine.begin() as conn:
             state = (await conn.execute(select(ledger_state).where(ledger_state.c.singleton_id == 1))).mappings().one()
             seq, previous = state["head_sequence"], state["head_hash"]
             for incoming in entries:
                 event = validate_event(incoming)
-                if incoming.get("payload_sha256") != digest(event["payload"]):
-                    raise ValueError("import payload hash mismatch")
+                source_sequence = incoming.get("sequence")
+                if source_sequence is not None:
+                    if isinstance(source_sequence, bool) or not isinstance(source_sequence, int) or source_sequence <= previous_source_sequence:
+                        raise ValueError("import source sequences must be positive and strictly ascending")
+                    previous_source_sequence = source_sequence
+                source_assurance = "legacy_unverified"
+                if incoming.get("payload_sha256") is not None:
+                    if incoming["payload_sha256"] != digest(event["payload"]):
+                        raise ValueError("import payload hash mismatch")
+                    source_assurance = "payload_hash_verified"
+                if incoming.get("entry_sha256") is not None:
+                    if incoming["entry_sha256"] != entry_hash(incoming):
+                        raise ValueError("import entry hash mismatch")
+                    source_assurance = "entry_hash_verified"
                 existing = (await conn.execute(select(ledger_entries).where(ledger_entries.c.event_id == event["event_id"]))).mappings().first()
                 if existing:
-                    if digest(existing["payload"]) == digest(event["payload"]) and existing["event_type"] == event["event_type"] and existing["source"] == event["source"]:
+                    if digest(existing["payload"]) == digest(event["payload"]) and all(existing[key] == event[key] for key in ("event_type", "source", "timestamp", "correlation_id")):
                         duplicates.append(event["event_id"]); continue
                     raise ValueError("import conflict: event_id already exists with different content")
                 seq += 1
-                provenance = {"source_ledger_id": source_ledger_id, "source_sequence": incoming.get("sequence"), "source_entry_sha256": incoming.get("entry_sha256"), "source_provenance": incoming.get("provenance", {})}
+                provenance = {"source_ledger_id": source_ledger_id, "source_sequence": source_sequence, "source_entry_sha256": incoming.get("entry_sha256"), "source_assurance": source_assurance, "source_provenance": incoming.get("provenance", {})}
                 record = envelope_for(state["ledger_id"], seq, event, incoming.get("captured_at") or utc_now(), previous, provenance)
                 await conn.execute(insert(ledger_entries).values(**record))
                 previous = record["entry_sha256"]
