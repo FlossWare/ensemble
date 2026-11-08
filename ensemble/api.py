@@ -289,7 +289,7 @@ def create_app(
             await active_transcript_store.initialize()
             await active_transcript_store.recover_interrupted()
             await active_reclamation_store.initialize()
-            await asyncio.to_thread(active_federated_task_store.initialize)
+            await asyncio.to_thread(active_task_store.initialize)
             await active_orchestrator.start()
             worker_task = asyncio.create_task(reclamation_worker())
             if federation_enabled:
@@ -679,11 +679,11 @@ def create_app(
     app.state.transcript_store = active_transcript_store
     app.state.settings = settings_from_env(database_url)
     federation_settings = app.state.settings
-    active_federated_task_store = SqliteTaskStore(federation_settings.persistence_root)
-    app.state.federated_task_store = active_federated_task_store
+    active_task_store = SqliteTaskStore(federation_settings.persistence_root)
+    app.state.federated_task_store = active_task_store
     federation_instance_id = _instance_id(federation_settings.persistence_root)
     active_orchestrator = Orchestrator(
-        active_federated_task_store, federation_instance_id,
+        active_task_store, federation_instance_id,
         poll_interval=0.5, worker_count=1,
     )
     active_orchestrator.register("search.query", execute_search_task)
