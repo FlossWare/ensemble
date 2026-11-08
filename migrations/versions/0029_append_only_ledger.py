@@ -20,6 +20,8 @@ def upgrade() -> None:
     )
     op.create_table(
         "ensemble_ledger_entries",
+        sa.Column("schema_version", sa.Integer(), nullable=False),
+        sa.Column("ledger_id", sa.String(length=64), nullable=False),
         sa.Column("sequence", sa.BigInteger(), primary_key=True),
         sa.Column("event_id", sa.String(length=256), nullable=False, unique=True),
         sa.Column("event_type", sa.String(length=256), nullable=False),
