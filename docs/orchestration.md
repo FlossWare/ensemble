@@ -1,6 +1,6 @@
 # Ensemble Orchestration
 
-**Status:** Initial core Orchestrator and handler dispatch are implemented. The first registered handler is `search.query`. Both local `POST /api/v1/tasks` and federated `POST /federation/tasks` submissions now enter the same Orchestrator and handler dispatch path. The canonical `TaskRequest`, `TaskSubmission`, `TaskRecord`, and `SqliteTaskStore` now replace federation-specific types in the runtime. The store uses `tasks.sqlite3` and migrates the former `federated-tasks.sqlite3` database/table in place. Existing GA runs and transcript jobs retain their domain-specific lifecycle stores.
+**Status:** Initial core Orchestrator and handler dispatch are implemented. The first registered handlers are `search.query` and `ga.run`. Both local `POST /api/v1/tasks` and federated `POST /federation/tasks` submissions now enter the same Orchestrator and handler dispatch path. The canonical `TaskRequest`, `TaskSubmission`, `TaskRecord`, and `SqliteTaskStore` now replace federation-specific types in the runtime. The store uses `tasks.sqlite3` and migrates the former `federated-tasks.sqlite3` database/table in place. Existing GA runs and transcript jobs retain their domain-specific lifecycle stores.
 
 ## 1. Ownership
 
@@ -64,7 +64,7 @@ All client and transport interfaces invoke the same application services. Do not
 ## 5. Existing implementation assessment
 
 The current code has useful domain-specific lifecycle foundations:
-- GA runs persist pending/running/completed/failed state in `GAStore`.
+- GA runs persist their domain-specific result and promotion data in `GAStore`; execution is now scheduled by the core Orchestrator through the `ga.run` handler.
 - Transcript ingestion jobs persist attempts, status, results and interrupted-job recovery in `TranscriptCheckpointStore`.
 - Generation and indexing workflows have their own durable lifecycle and recovery rules.
 - The initial federation implementation used `FederatedTaskStore` and an API-owned worker loop. The worker loop has been moved into the core `Orchestrator`, which owns handler registration, scheduling, dispatch, execution, and worker lifecycle. `SqliteTaskStore` now owns canonical task persistence in `tasks.sqlite3`; startup migrates the former federation-specific database and table. The old `ensemble.federated_tasks` module remains only as compatibility aliases.
@@ -76,7 +76,7 @@ These are not yet one fully coherent orchestration system. GA and transcript lif
 1. Add task schema versioning, partition-aware persistence, and migration/rollback coverage for the canonical task store.
 2. Inventory and map existing GA, transcript, generation and indexing lifecycle behavior. Preserve domain-specific state and recovery semantics; do not blindly replace mature stores with a generic blob.
 3. Add explicit task events, progress, cancellation, deadlines, bounded retry policy, and parent/child lineage to the canonical lifecycle.
-4. Adapt GA and transcript operations through registered handlers where appropriate, retaining domain-specific checkpoint stores for their own work units.
+4. Adapt transcript ingestion through a registered handler where appropriate, retaining domain-specific checkpoint stores for their own work units. GA execution already uses the `ga.run` handler and retains `GAStore` for domain-specific results.
 5. Add requester-side parent/child tracking and reliable lifecycle/result delivery over messaging.
 6. Move Control Center task views to canonical orchestrator APIs.
 7. Add further handlers only after the shared lifecycle works end to end.
