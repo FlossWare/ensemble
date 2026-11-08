@@ -123,5 +123,4 @@ def test_full_api_loads_configured_worker_adapter_into_capability_context(monkey
     with TestClient(app):
         assert "worker-adapter.embeddings.encode" in app.state.capability_lifecycle.started
         operation = app.state.runtime_context.services["worker_operations"]["embeddings.encode"]
-        import asyncio
         assert asyncio.run(operation.invoke({"text": "FlossWare"})) == {"length": 9}
