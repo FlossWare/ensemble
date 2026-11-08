@@ -1,6 +1,6 @@
 # Ensemble Orchestration
 
-**Status:** Initial core Orchestrator and handler dispatch are implemented. The first registered handler is `search.query`. Both local `POST /api/v1/tasks` and federated `POST /federation/tasks` submissions now enter the same Orchestrator and handler dispatch path. Task persistence and request/record types still use the legacy federation-specific implementation and are the next migration target. Existing GA runs and transcript jobs retain their domain-specific lifecycle stores.
+**Status:** Initial core Orchestrator and handler dispatch are implemented. The first registered handler is `search.query`. Both local `POST /api/v1/tasks` and federated `POST /federation/tasks` submissions now enter the same Orchestrator and handler dispatch path. The canonical `TaskRequest`, `TaskSubmission`, `TaskRecord`, and `SqliteTaskStore` now replace federation-specific types in the runtime. The store uses `tasks.sqlite3` and migrates the former `federated-tasks.sqlite3` database/table in place. Existing GA runs and transcript jobs retain their domain-specific lifecycle stores.
 
 ## 1. Ownership
 
