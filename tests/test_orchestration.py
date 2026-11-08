@@ -23,8 +23,10 @@ def test_orchestrator_dispatches_registered_handler_and_persists_result(tmp_path
         orchestrator.register("test.double", handler)
         await orchestrator.start()
         try:
+            parent_task_id = uuid4()
             request = TaskRequest(
                 task_id=uuid4(),
+                parent_task_id=parent_task_id,
                 idempotency_key="double-1",
                 origin_instance_id="remote-instance",
                 target_capability="compute",
@@ -46,6 +48,8 @@ def test_orchestrator_dispatches_registered_handler_and_persists_result(tmp_path
             assert result is not None
             assert result.state == "succeeded"
             assert result.result == {"answer": 42}
+            assert result.parent_task_id == parent_task_id
+            assert result.contract_version == 1
             assert invoked == [request.task_id]
         finally:
             await orchestrator.stop()
@@ -121,3 +125,18 @@ def test_task_store_migrates_legacy_federation_database_without_losing_tasks(tmp
     assert migrated.payload == {"query": "legacy task"}
     assert (tmp_path / "tasks.sqlite3").exists()
     assert not legacy_path.exists()
+
+
+
+def test_task_contract_rejects_unsupported_version():
+    from pydantic import ValidationError
+    from ensemble.task_store import TaskRequest
+
+    with pytest.raises(ValidationError):
+        TaskRequest(
+            contract_version=2,
+            idempotency_key="unsupported-version",
+            origin_instance_id="remote-instance",
+            target_capability="search",
+            task_type="search.query",
+        )
