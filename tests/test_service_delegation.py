@@ -67,6 +67,14 @@ def test_requester_invokes_peer_service_with_direct_request_response(tmp_path, m
                 "result": {"results": [], "retrieval": "lexical"},
             }
 
+    class FakeCatalogueResponse:
+        status_code = 200
+
+        def json(self):
+            return {"contract_version": 1, "operations": [{
+                "capability": "search", "operation": "search.retrieve",
+            }]}
+
     class FakeClient:
         def __init__(self, *args, **kwargs):
             captured["timeout"] = kwargs.get("timeout")
@@ -76,6 +84,10 @@ def test_requester_invokes_peer_service_with_direct_request_response(tmp_path, m
 
         async def __aexit__(self, *args):
             return False
+
+        async def get(self, url):
+            captured["catalogue_url"] = url
+            return FakeCatalogueResponse()
 
         async def post(self, url, json):
             captured["url"] = url
@@ -100,6 +112,7 @@ def test_requester_invokes_peer_service_with_direct_request_response(tmp_path, m
         })
 
         assert response.status_code == 200, response.text
+        assert captured["catalogue_url"] == "http://192.0.2.20:8090/federation/services"
         assert captured["url"] == "http://192.0.2.20:8090/federation/services"
         assert captured["body"]["requester_instance_id"] == client.app.state.federation_instance["instance_id"]
         assert captured["body"]["operation"] == "search.retrieve"
@@ -147,8 +160,12 @@ def test_requester_rejects_response_from_unselected_peer(tmp_path, monkeypatch):
         async def __aexit__(self, *args):
             return False
 
+        async def get(self, url):
+            return FakeCatalogueResponse()
+
         async def post(self, url, json):
             return FakeResponse()
+
 
     monkeypatch.setattr(api_module.httpx, "AsyncClient", FakeClient)
     request_id = str(uuid.uuid4())
