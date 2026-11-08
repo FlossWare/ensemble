@@ -1,23 +1,27 @@
 # Ensemble
 
-Ensemble is a standalone, REST-first platform for reusable intelligence capabilities. It provides shared Memory, Knowledge, Graph, ingestion, indexing, retrieval, and context capabilities to applications and AI clients.
+Ensemble is a standalone, client-neutral platform for reusable intelligence capabilities. REST is the canonical resource API; MCP, GraphQL, and gRPC are required interfaces over the same core application/domain services. It provides shared Memory, Knowledge, Graph, ingestion, indexing, retrieval, and context capabilities to applications and AI clients.
 
 Ensemble is the product and implementation boundary. It does not depend on any client application or optional model provider to run.
 
 ## Architecture
 
-- One application and one REST server initially, with multiple versioned endpoint groups.
-- REST is the canonical contract for external consumers and capability-to-capability communication.
+- One application with versioned REST, MCP, GraphQL, and gRPC interfaces over shared core services.
+- REST is the canonical resource/operation contract; the other interfaces are adapters, not separate business-logic or persistence implementations.
+- Each independently deployed Ensemble instance owns its own orchestration, policy, persistence, capabilities, and workers.
+- Federation connects explicitly trusted peers without a global coordinator or shared database.
+- Federation discovery/presence broadcasts are enabled by default when federation is enabled; discovery does not establish trust or authorize data sharing.
 - Capabilities are independently addressable through REST contracts, even when co-located in one deployment.
 - Implementations are composed and decorated behind stable contracts.
 - Providers are pluggable; embedding and ranking implementations do not define the API contract.
 - Retrieval is independently usable; generation is optional and provider-backed.
-- MCP is an optional adapter over REST capabilities. It contains no duplicate business logic.
+- MCP, GraphQL, and gRPC are required interfaces over the same core contracts; none contains duplicate business logic.
+- Federation discovery uses mDNS/DNS-SD and scoped UDP presence where available; reliable peer operations use authenticated gRPC. SSH remains the constrained remote-worker transport.
 - Ensemble uses SQLite for its own persistence. Alternative persistence implementations and shared infrastructure belong to FlossWare proper.
 
-The REST boundary is the architectural rule. The current review implementation still has orchestration paths that call stores and services directly; those paths must be moved behind internal REST clients before claiming full capability-boundary compliance. See [Architecture](docs/architecture.md) and [review readiness](docs/review-readiness.md).
+The REST boundary is the architectural rule. The current review implementation still has orchestration paths that call stores and services directly; those paths must be moved behind internal REST clients before claiming full capability-boundary compliance. See [Architecture](docs/architecture.md), [Federation](docs/federation.md), and [review readiness](docs/review-readiness.md).
 
-See [REST contract conventions](docs/rest-contracts.md), [REST route inventory and naming audit](docs/rest-route-audit.md), [capability completion plan](docs/capability-completion-plan.md), [Control Center requirements](docs/control-center-requirements.md), [Control Center API mapping](docs/control-center-api-mapping.md), and [current implementation status](docs/implementation-status.md).
+See [Federation](docs/federation.md), [REST contract conventions](docs/rest-contracts.md), [REST route inventory and naming audit](docs/rest-route-audit.md), [capability completion plan](docs/capability-completion-plan.md), [Control Center requirements](docs/control-center-requirements.md), [Control Center API mapping](docs/control-center-api-mapping.md), and [current implementation status](docs/implementation-status.md).
 
 ## Current implementation
 
@@ -53,6 +57,10 @@ pytest
 ```
 
 All source ingestion uses the canonical /api/v1/ingest/... namespace: documents, files, URLs (including preview), and transcripts. The browser Control Center is available at /control. It includes live capability health/readiness checks, a retrieval explorer with optional reranking, structured transcript-session ingestion, Index and Vector inspection, Memory and Knowledge inspection, source lookup and confirmed permanent tombstoning, URI preview/explicit-ingest, PDF upload ingestion, raw JSONL transcript ingestion, GA run/history/candidate inspection and approval-to-export, Thompson model inspection/selection/reset, and Learning report/outcome/artifact inspection with confirmed reset. GA candidates are not applied to live settings. Discovered URI links are displayed but not crawled. API documentation is available at /docs; the OpenAPI document is at /openapi.json.
+
+## Federation status
+
+Federation is an accepted required capability. Its discovery, presence, trust, peer transport, delegation, messaging, federated RAG, and derived-artifact exchange contracts are documented in [Federation](docs/federation.md). These capabilities are not yet implemented; do not interpret the architecture documentation as an operational feature claim.
 
 ## Scope
 
