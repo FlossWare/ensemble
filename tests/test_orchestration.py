@@ -57,7 +57,7 @@ def test_orchestrator_requires_registered_handler_and_single_registration(tmp_pa
     async def handler(task):
         return {"ok": True}
 
-    store = FederatedTaskStore(tmp_path)
+    store = SqliteTaskStore(tmp_path)
     orchestrator = Orchestrator(store, "local-instance")
     orchestrator.register("test.operation", handler)
     with pytest.raises(ValueError, match="already registered"):
@@ -68,7 +68,7 @@ def test_orchestrator_requires_registered_handler_and_single_registration(tmp_pa
 
 def test_orchestrator_rejects_invalid_worker_configuration(tmp_path: Path):
     with pytest.raises(ValueError, match="worker_count"):
-        Orchestrator(FederatedTaskStore(tmp_path), "local-instance", worker_count=0)
+        Orchestrator(SqliteTaskStore(tmp_path), "local-instance", worker_count=0)
 
 
 def test_task_store_migrates_legacy_federation_database_without_losing_tasks(tmp_path: Path):
