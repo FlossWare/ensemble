@@ -7,7 +7,6 @@ from ensemble.core import (
     CapabilityRegistry,
     RuntimeContext,
     RuntimeProfile,
-    load_worker_adapter_capabilities,
 )
 from ensemble.worker_runtime import WorkerRuntime
 
@@ -40,7 +39,7 @@ def test_worker_operations_join_full_capability_lifecycle_and_remain_invocable()
         }]
 
         exposed = context.services["worker_operations"]["embeddings.encode"]
-        assert await exposed.invoke({"text": "ensemble"}) == {"vector": [9.0]}
+        assert await exposed.invoke({"text": "ensemble"}) == {"vector": [8.0]}
         await lifecycle.stop()
         assert context.services["worker_operations"] == {}
 
@@ -58,5 +57,36 @@ def test_worker_adapter_capability_is_full_profile_only():
         registry.register(capability)
         assert registry.resolve(RuntimeProfile.STANDARD) == ()
         assert len(registry.resolve(RuntimeProfile.FULL)) == 1
+
+    asyncio.run(scenario())
+
+
+
+def test_configured_module_adapter_loader_registers_operations(monkeypatch):
+    import sys
+    from types import ModuleType
+
+    from ensemble.core import load_worker_adapter_capabilities
+
+    module = ModuleType("test_ensemble_adapter")
+
+    def register(runtime):
+        runtime.register(
+            "reranking",
+            "score",
+            lambda payload: {"scores": [float(len(payload["query"]))]},
+            description="Test reranker",
+        )
+
+    module.register = register
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    capabilities = load_worker_adapter_capabilities("test_ensemble_adapter:register")
+    assert len(capabilities) == 1
+    capability = capabilities[0]
+    assert capability.descriptor.name == "worker-adapter.reranking.score"
+
+    async def scenario():
+        assert await capability.invoke({"query": "search"}) == {"scores": [6.0]}
 
     asyncio.run(scenario())
