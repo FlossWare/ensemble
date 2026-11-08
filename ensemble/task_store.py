@@ -77,7 +77,7 @@ class TaskRecord(BaseModel):
 
 
 class SqliteTaskStore:
-    """Durable per-instance task inbox and single-owner task state transitions."""
+    """Durable per-instance task persistence and single-owner state transitions."""
 
     def __init__(self, persistence_root: Path) -> None:
         self.path = Path(persistence_root) / "tasks.sqlite3"
@@ -95,10 +95,10 @@ class SqliteTaskStore:
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ensemble_tasks'"
             ).fetchone()
             legacy_table = db.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='federated_tasks'"
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ensemble_tasks'"
             ).fetchone()
             if existing is None and legacy_table is not None:
-                db.execute("ALTER TABLE federated_tasks RENAME TO ensemble_tasks")
+                db.execute("ALTER TABLE ensemble_tasks RENAME TO ensemble_tasks")
             db.execute("""
                 CREATE TABLE IF NOT EXISTS ensemble_tasks (
                     task_id TEXT PRIMARY KEY,
@@ -109,19 +109,19 @@ class SqliteTaskStore:
                     updated_at TEXT NOT NULL
                 )
             """)
-            db.execute("CREATE INDEX IF NOT EXISTS ix_federated_tasks_created ON federated_tasks(created_at)")
+            db.execute("CREATE INDEX IF NOT EXISTS ix_ensemble_tasks_created ON ensemble_tasks(created_at)")
 
     def accept(
-        self, request: FederatedTaskRequest, local_instance_id: str,
+        self, request: TaskRequest, local_instance_id: str,
         *, allow_local_origin: bool = False,
-    ) -> tuple[FederatedTaskRecord, bool]:
+    ) -> tuple[TaskRecord, bool]:
         if request.origin_instance_id == local_instance_id and not allow_local_origin:
             raise ValueError("origin_instance_id must identify a remote instance")
         body = request.model_dump(mode="json")
         fingerprint = {key: value for key, value in body.items() if key != "created_at"}
         digest = hashlib.sha256(_canonical(fingerprint).encode("utf-8")).hexdigest()
         now = _now()
-        record = FederatedTaskRecord(
+        record = TaskRecord(
             **body, state="accepted",
             accepted_at=now, updated_at=now,
         )
@@ -129,29 +129,29 @@ class SqliteTaskStore:
         with sqlite3.connect(self.path, timeout=10) as db:
             db.execute("BEGIN IMMEDIATE")
             existing = db.execute(
-                "SELECT request_sha256, record_json FROM federated_tasks WHERE idempotency_key=? OR task_id=?",
+                "SELECT request_sha256, record_json FROM ensemble_tasks WHERE idempotency_key=? OR task_id=?",
                 (request.idempotency_key, str(request.task_id)),
             ).fetchone()
             if existing:
                 if existing[0] != digest:
                     raise ValueError("task identity or idempotency key was reused with a different request")
-                return FederatedTaskRecord.model_validate_json(existing[1]), False
+                return TaskRecord.model_validate_json(existing[1]), False
             db.execute(
-                "INSERT INTO federated_tasks(task_id,idempotency_key,request_sha256,record_json,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                "INSERT INTO ensemble_tasks(task_id,idempotency_key,request_sha256,record_json,created_at,updated_at) VALUES(?,?,?,?,?,?)",
                 (str(request.task_id), request.idempotency_key, digest, encoded, now, now),
             )
         return record, True
 
-    def claim_next(self, worker_id: str, task_types: list[str]) -> FederatedTaskRecord | None:
+    def claim_next(self, worker_id: str, task_types: list[str]) -> TaskRecord | None:
         if not task_types:
             return None
         with sqlite3.connect(self.path, timeout=10) as db:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute(
-                "SELECT task_id, record_json FROM federated_tasks ORDER BY created_at, task_id"
+                "SELECT task_id, record_json FROM ensemble_tasks ORDER BY created_at, task_id"
             ).fetchall()
             for task_id, encoded in rows:
-                record = FederatedTaskRecord.model_validate_json(encoded)
+                record = TaskRecord.model_validate_json(encoded)
                 if record.state != "accepted" or record.task_type not in task_types:
                     continue
                 record.state = "running"
@@ -159,7 +159,7 @@ class SqliteTaskStore:
                 record.attempt += 1
                 record.updated_at = datetime.now(timezone.utc)
                 db.execute(
-                    "UPDATE federated_tasks SET record_json=?, updated_at=? WHERE task_id=?",
+                    "UPDATE ensemble_tasks SET record_json=?, updated_at=? WHERE task_id=?",
                     (record.model_dump_json(), _now(), task_id),
                 )
                 return record
@@ -170,11 +170,11 @@ class SqliteTaskStore:
         with sqlite3.connect(self.path, timeout=10) as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT record_json FROM federated_tasks WHERE task_id=?", (str(task_id),)
+                "SELECT record_json FROM ensemble_tasks WHERE task_id=?", (str(task_id),)
             ).fetchone()
             if row is None:
                 return False
-            record = FederatedTaskRecord.model_validate_json(row[0])
+            record = TaskRecord.model_validate_json(row[0])
             if record.state != "running" or record.worker_id != worker_id:
                 return False
             record.state = "succeeded"
@@ -183,7 +183,7 @@ class SqliteTaskStore:
             record.worker_id = None
             record.updated_at = datetime.now(timezone.utc)
             db.execute(
-                "UPDATE federated_tasks SET record_json=?, updated_at=? WHERE task_id=?",
+                "UPDATE ensemble_tasks SET record_json=?, updated_at=? WHERE task_id=?",
                 (record.model_dump_json(), _now(), str(task_id)),
             )
             return True
@@ -192,11 +192,11 @@ class SqliteTaskStore:
         with sqlite3.connect(self.path, timeout=10) as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT record_json FROM federated_tasks WHERE task_id=?", (str(task_id),)
+                "SELECT record_json FROM ensemble_tasks WHERE task_id=?", (str(task_id),)
             ).fetchone()
             if row is None:
                 return False
-            record = FederatedTaskRecord.model_validate_json(row[0])
+            record = TaskRecord.model_validate_json(row[0])
             if record.state != "running" or record.worker_id != worker_id:
                 return False
             record.state = "failed"
@@ -204,7 +204,7 @@ class SqliteTaskStore:
             record.worker_id = None
             record.updated_at = datetime.now(timezone.utc)
             db.execute(
-                "UPDATE federated_tasks SET record_json=?, updated_at=? WHERE task_id=?",
+                "UPDATE ensemble_tasks SET record_json=?, updated_at=? WHERE task_id=?",
                 (record.model_dump_json(), _now(), str(task_id)),
             )
             return True
@@ -214,35 +214,35 @@ class SqliteTaskStore:
         with sqlite3.connect(self.path, timeout=10) as db:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute(
-                "SELECT task_id, record_json FROM federated_tasks"
+                "SELECT task_id, record_json FROM ensemble_tasks"
             ).fetchall()
             for task_id, encoded in rows:
-                record = FederatedTaskRecord.model_validate_json(encoded)
+                record = TaskRecord.model_validate_json(encoded)
                 if record.state != "running":
                     continue
                 record.state = "accepted"
                 record.worker_id = None
                 record.updated_at = datetime.now(timezone.utc)
                 db.execute(
-                    "UPDATE federated_tasks SET record_json=?, updated_at=? WHERE task_id=?",
+                    "UPDATE ensemble_tasks SET record_json=?, updated_at=? WHERE task_id=?",
                     (record.model_dump_json(), _now(), task_id),
                 )
                 recovered += 1
         return recovered
 
-    def get(self, task_id: UUID) -> FederatedTaskRecord | None:
+    def get(self, task_id: UUID) -> TaskRecord | None:
         with sqlite3.connect(self.path, timeout=10) as db:
-            row = db.execute("SELECT record_json FROM federated_tasks WHERE task_id=?", (str(task_id),)).fetchone()
-        return FederatedTaskRecord.model_validate_json(row[0]) if row else None
+            row = db.execute("SELECT record_json FROM ensemble_tasks WHERE task_id=?", (str(task_id),)).fetchone()
+        return TaskRecord.model_validate_json(row[0]) if row else None
 
-    def list(self, limit: int = 100) -> list[FederatedTaskRecord]:
+    def list(self, limit: int = 100) -> list[TaskRecord]:
         bounded = max(1, min(int(limit), 500))
         with sqlite3.connect(self.path, timeout=10) as db:
             rows = db.execute(
-                "SELECT record_json FROM federated_tasks ORDER BY created_at DESC, task_id LIMIT ?",
+                "SELECT record_json FROM ensemble_tasks ORDER BY created_at DESC, task_id LIMIT ?",
                 (bounded,),
             ).fetchall()
-        return [FederatedTaskRecord.model_validate_json(row[0]) for row in rows]
+        return [TaskRecord.model_validate_json(row[0]) for row in rows]
 
 
 class TaskSubmission(BaseModel):
