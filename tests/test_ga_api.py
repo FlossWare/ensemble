@@ -1,7 +1,21 @@
+import time
+
 from fastapi.testclient import TestClient
 
 from ensemble.api import create_app
 from ensemble.store import InMemoryDocumentStore
+
+
+def _wait_for_run(http, run_id: str):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        response = http.get(f"/api/v1/ga/runs/{run_id}")
+        assert response.status_code == 200, response.text
+        run = response.json()["run"]
+        if run["status"] in {"completed", "failed"}:
+            return run
+        time.sleep(0.02)
+    raise AssertionError(f"GA run {run_id} did not reach a terminal state")
 
 
 def test_ga_run_is_persisted_and_exposes_five_evaluators():
@@ -19,9 +33,7 @@ def test_ga_run_is_persisted_and_exposes_five_evaluators():
         assert started.status_code == 202
         run_id = started.json()["run"]["id"]
 
-        fetched = http.get(f"/api/v1/ga/runs/{run_id}")
-        assert fetched.status_code == 200
-        run = fetched.json()["run"]
+        run = _wait_for_run(http, run_id)
         assert run["status"] == "completed"
         assert run["result"]["total_evaluations"] == 24
         assert run["result"]["evaluation_scope"]["externally_validated"] is False
@@ -37,6 +49,7 @@ def test_ga_promotion_requires_explicit_approval_and_never_applies_live_settings
             json={"population_size": 15, "generations": 1, "seed": 4321},
         )
         run_id = started.json()["run"]["id"]
+        _wait_for_run(http, run_id)
 
         denied = http.post(
             f"/api/v1/ga/runs/{run_id}/promote",
