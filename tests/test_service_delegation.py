@@ -27,6 +27,8 @@ def test_provider_executes_direct_search_service_without_creating_task(tmp_path)
         })
         assert ingested.status_code == 201
 
+        tasks_before = client.get("/federation/tasks").json()["tasks"]
+        task_ids_before = {task["task_id"] for task in tasks_before}
         request_id = str(uuid.uuid4())
         response = client.post("/federation/services", json={
             "request_id": request_id,
@@ -43,7 +45,8 @@ def test_provider_executes_direct_search_service_without_creating_task(tmp_path)
         assert body["operation"] == "search.retrieve"
         assert body["result"]["results"]
         assert body["result"]["results"][0]["source_id"] == "peer-service-source"
-        assert client.get("/federation/tasks").json()["tasks"] == []
+        tasks_after = client.get("/federation/tasks").json()["tasks"]
+        assert {task["task_id"] for task in tasks_after} == task_ids_before
 
 
 def test_requester_invokes_peer_service_with_direct_request_response(tmp_path, monkeypatch):
