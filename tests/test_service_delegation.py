@@ -150,6 +150,14 @@ def test_requester_rejects_response_from_unselected_peer(tmp_path, monkeypatch):
                 "result": {"results": []},
             }
 
+    class FakeCatalogueResponse:
+        status_code = 200
+
+        def json(self):
+            return {"contract_version": 1, "operations": [{
+                "capability": "search", "operation": "search.retrieve",
+            }]}
+
     class FakeClient:
         def __init__(self, *args, **kwargs):
             pass
