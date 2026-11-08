@@ -61,7 +61,7 @@ from .context_tokens import ContextTokenCounter, ApproximateContextTokenCounter,
 from .source_schedule_store import SourceScheduleStore, SqliteSourceScheduleStore, InMemorySourceScheduleStore
 from .execution_trace_store import ExecutionTraceStore, SqliteExecutionTraceStore, InMemoryExecutionTraceStore, traces as execution_traces
 from .collaboration import CollaborationStore, SynthesisStrategy, SqliteCollaborationStore, InMemoryCollaborationStore, create_collaboration_router
-from .core import CapabilityLifecycle, CapabilityRegistry, RuntimeContext, RuntimeProfile
+from .core import CapabilityDescriptor, CapabilityLifecycle, CapabilityRegistry, RuntimeContext, RuntimeProfile, StoreCapability
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -348,6 +348,28 @@ def create_app(
         InMemoryExecutionTraceStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteExecutionTraceStore(database_url)
     )
+
+    if active_ga_store is not None:
+        async def check_ga_store() -> dict[str, Any]:
+            await active_ga_store.list_runs(1)
+            return {"status": "ready"}
+
+        registry.register(StoreCapability(
+            CapabilityDescriptor("ga", profiles=(RuntimeProfile.FULL,)),
+            active_ga_store,
+            after_initialize=active_ga_store.recover_interrupted_runs,
+            health_check=check_ga_store,
+        ))
+    if active_learning_store is not None:
+        async def check_learning_store() -> dict[str, Any]:
+            await active_learning_store.recent_outcomes(1)
+            return {"status": "ready"}
+
+        registry.register(StoreCapability(
+            CapabilityDescriptor("learning", profiles=(RuntimeProfile.FULL,)),
+            active_learning_store,
+            health_check=check_learning_store,
+        ))
 
     # Serialize permanent source reclamation against creation of a new generation.
     generation_lifecycle_lock = asyncio.Lock()
@@ -666,12 +688,7 @@ def create_app(
             await active_knowledge_store.initialize()
             await active_graph_store.initialize()
             await active_memory_store.initialize()
-            if active_ga_store is not None:
-                await active_ga_store.initialize()
-                await active_ga_store.recover_interrupted_runs()
             await active_thompson_store.initialize()
-            if active_learning_store is not None:
-                await active_learning_store.initialize()
             await active_transcript_store.initialize()
             await active_reclamation_store.initialize()
             await active_crawl_store.initialize()
@@ -716,11 +733,7 @@ def create_app(
                 finally:
                     await capability_lifecycle.stop()
         finally:
-            if active_learning_store is not None:
-                await active_learning_store.close()
             await active_thompson_store.close()
-            if active_ga_store is not None:
-                await active_ga_store.close()
             await active_memory_store.close()
             await active_graph_store.close()
             await active_knowledge_store.close()
