@@ -25,9 +25,9 @@ def create_runtime(profile: RuntimeProfile | str | None = None) -> FastAPI:
     """
     selected = RuntimeProfile(profile or os.getenv("ENSEMBLE_PROFILE", "full"))
     if selected is RuntimeProfile.WORKER:
-        from .worker_runtime import create_worker_app
+        from .worker_runtime import configured_worker_runtime, create_worker_app
 
-        return create_worker_app()
+        return create_worker_app(configured_worker_runtime())
 
     # Importing api is deliberately deferred so worker deployments do not import
     # SQLAlchemy, Chroma, graph, memory, GA, Thompson, or learning subsystems.
