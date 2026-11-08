@@ -14,9 +14,9 @@ def create_runtime(
 ) -> FastAPI:
     """Compose the selected runtime without importing full subsystems for workers.
 
-    Standard and full currently share the existing full application composition.
-    Their subsystem-level composition is intentionally not faked: splitting those
-    dependencies is a follow-on refactor. Worker remains independently importable.
+    Standard excludes the optional GA and Learning stores and route groups; Full
+    adds them. Other legacy subsystems remain shared pending further extraction.
+    Worker remains independently importable and never imports the full API.
     """
     selected = RuntimeProfile(profile or os.getenv("ENSEMBLE_PROFILE", "full"))
     if selected is RuntimeProfile.WORKER:
