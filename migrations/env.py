@@ -14,7 +14,8 @@ from ensemble.store import metadata
 from ensemble.vector_store import vector_metadata
 from ensemble.index_store import index_metadata
 from ensemble.knowledge_store import knowledge_metadata
-from ensemble.memory_store import memory_metadata\nfrom ensemble.ledger import ledger_metadata
+from ensemble.memory_store import memory_metadata
+from ensemble.ledger import ledger_metadata
 from ensemble.ga_store import ga_metadata
 from ensemble.thompson_store import thompson_metadata
 from ensemble.learning_store import learning_metadata
