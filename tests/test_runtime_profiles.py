@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 
 from ensemble.runtime import RuntimeProfile, create_runtime
-from ensemble.api import create_app
 
 
 def test_worker_profile_composes_without_importing_full_api():
@@ -19,6 +18,8 @@ def test_runtime_profile_names_are_stable():
 
 
 def test_standard_profile_omits_optional_ga_and_learning_capabilities():
+    from ensemble.api import create_app
+
     app = create_app(profile=RuntimeProfile.STANDARD, run_reclamation_worker=False)
     assert app.state.runtime_profile == "standard"
     assert app.state.ga_store is None
