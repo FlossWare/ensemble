@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import socket
 import time
 import urllib.error
@@ -288,19 +289,53 @@ def _read_peer_endpoint(endpoint: str, path: str, timeout: float) -> dict[str, A
         return {"reachable": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def host_metrics(persistence_root: str | Path) -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "cpu_count": os.cpu_count(),
+        "load_average": list(os.getloadavg()) if hasattr(os, "getloadavg") else None,
+    }
+    try:
+        memory: dict[str, int] = {}
+        with open("/proc/meminfo", encoding="ascii") as stream:
+            for line in stream:
+                key, value = line.split(":", 1)
+                if key in {"MemTotal", "MemAvailable"}:
+                    memory[key] = int(value.strip().split()[0]) * 1024
+        if "MemTotal" in memory:
+            metrics["memory"] = {
+                "total_bytes": memory["MemTotal"],
+                "available_bytes": memory.get("MemAvailable"),
+                "used_bytes": memory["MemTotal"] - memory.get("MemAvailable", memory["MemTotal"]),
+            }
+    except (OSError, ValueError, IndexError):
+        metrics["memory"] = None
+    try:
+        disk = shutil.disk_usage(persistence_root)
+        metrics["persistence_disk"] = {
+            "total_bytes": disk.total,
+            "used_bytes": disk.used,
+            "free_bytes": disk.free,
+        }
+    except OSError:
+        metrics["persistence_disk"] = None
+    return metrics
+
+
 async def inspect_peer(peer: dict[str, Any], timeout: float = 2.0) -> dict[str, Any]:
     """Fetch live operational details from a discovered peer without blocking the event loop."""
     endpoint = peer.get("endpoint", "")
     if not isinstance(endpoint, str) or not endpoint.startswith(("http://", "https://")):
         return {**peer, "health": {"reachable": False, "error": "invalid endpoint"}}
-    health, ready = await asyncio.gather(
+    health, ready, metrics = await asyncio.gather(
         asyncio.to_thread(_read_peer_endpoint, endpoint, "/health", timeout),
         asyncio.to_thread(_read_peer_endpoint, endpoint, "/ready", timeout),
+        asyncio.to_thread(_read_peer_endpoint, endpoint, "/federation/metrics", timeout),
     )
     return {
         **peer,
         "health": health,
         "readiness": ready,
+        "metrics": metrics.get("data") if metrics.get("reachable") else None,
         "remote_status": (
             "ready" if health.get("reachable") and ready.get("reachable")
             and ready.get("data", {}).get("status") == "ready"
