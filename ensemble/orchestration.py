@@ -16,6 +16,7 @@ class TaskStore(Protocol):
 
     def accept(
         self, request: TaskRequest, local_instance_id: str,
+        *, allow_local_origin: bool = False,
     ) -> tuple[TaskRecord, bool]: ...
     def claim_next(
         self, worker_id: str, task_types: list[str],
