@@ -354,6 +354,14 @@ def create_app(
 
     registry.register(StoreCapability(
         CapabilityDescriptor(
+            "memory",
+            profiles=(RuntimeProfile.STANDARD, RuntimeProfile.FULL),
+        ),
+        active_memory_store,
+    ))
+
+    registry.register(StoreCapability(
+        CapabilityDescriptor(
             "thompson",
             profiles=(RuntimeProfile.STANDARD, RuntimeProfile.FULL),
         ),
@@ -705,7 +713,6 @@ def create_app(
                 await recover_fence()
             await active_knowledge_store.initialize()
             await active_graph_store.initialize()
-            await active_memory_store.initialize()
             await active_transcript_store.initialize()
             await active_reclamation_store.initialize()
             await active_crawl_store.initialize()
@@ -750,7 +757,6 @@ def create_app(
                 finally:
                     await capability_lifecycle.stop()
         finally:
-            await active_memory_store.close()
             await active_graph_store.close()
             await active_knowledge_store.close()
             await active_index_store.close()
