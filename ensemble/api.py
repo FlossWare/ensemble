@@ -748,8 +748,11 @@ def create_app(
         peers = federation_registry.list()
         inspected = await asyncio.gather(*(inspect_peer(peer) for peer in peers))
         return {
+            "enabled": federation_enabled,
             "instance": federation_instance,
             "discovery": "multicast" if federation_enabled and federation_discovery._started else "disabled" if not federation_enabled else "unavailable",
+            "discovery_error": federation_discovery.last_error,
+            "local_metrics": host_metrics(federation_settings.persistence_root),
             "peer_count": len(inspected),
             "peers": inspected,
         }
