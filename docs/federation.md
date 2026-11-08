@@ -111,11 +111,13 @@ The first task-delegation slice defines a versioned-by-API JSON contract and dur
 - `POST /federation/tasks` accepts a task request and returns HTTP 202 with its stable task ID and `accepted` state.
 - `GET /federation/tasks/{task_id}` retrieves the durable record.
 - `GET /federation/tasks?limit=...` lists a bounded recent inbox.
+- `POST /federation/peers/{instance_id}/tasks` submits a supported task to an online discovered peer; the local instance supplies its own origin identity.
+- `GET /federation/peers/{instance_id}/tasks/{task_id}` proxies status retrieval from that peer.
 - Requests carry origin instance, target capability, task type, JSON payload, idempotency key, timestamps, optional deadline, and correlation/causation IDs.
 - The receiver rejects a request targeting an unavailable advertised capability, a self-originated request, oversized payloads, and reuse of an idempotency key with different content.
 - Repeated identical submissions return the original accepted record rather than creating duplicate work.
 
-The current worker claims `search.query` tasks with a single-owner SQLite transition, invokes the existing local `SearchService`, and persists a succeeded result containing serialized search hits and provenance. Failed executions are recorded as failed with a bounded error description. On process startup, interrupted running tasks are returned to the accepted queue for recovery. The first worker is intentionally narrow: it does not yet provide arbitrary tool execution, planning, child-task orchestration, progress streaming, cancellation, or a durable requester-side parent-task record.
+The current worker claims `search.query` tasks with a single-owner SQLite transition, invokes the existing local `SearchService`, and persists a succeeded result containing serialized search hits and provenance. Failed executions are recorded as failed with a bounded error description. On process startup, interrupted running tasks are returned to the accepted queue for recovery. The first worker is intentionally narrow: it does not yet provide arbitrary tool execution, planning, child-task orchestration, progress streaming, cancellation, or a durable requester-side parent-task record. The peer submission and status-proxy routes provide the first end-to-end remote request path, but the caller remains responsible for retaining the returned task ID until durable parent-task tracking is implemented.
 
 ### 5.3 Federated RAG
 
