@@ -92,20 +92,30 @@ sudo bash scripts/restore-persistence.sh /path/to/backups/ensemble.tar.gz
 The backup script prints a SHA-256 checksum. The restore script validates archive paths, checks SQLite integrity and partition identity markers before replacing anything, and retains the previous persistence root as a rollback directory. If using a custom persistence root or service name, set `ENSEMBLE_PERSISTENCE_ROOT` and `ENSEMBLE_SERVICE_NAME` for the command. Keep backups outside the persistence root.
 
 
-## Federation deployment (planned capability)
+## Federation deployment
 
-Federation is an accepted required capability, but peer discovery, presence broadcasting, trust management, and peer transports are not implemented in the current application. The following is deployment guidance for the target architecture, not a set of currently supported configuration options.
+LAN peer discovery and presence broadcasting are implemented and enabled by default. Each instance announces its identity, HTTP endpoint, protocol version, and capability identifiers over IPv4 multicast. The Control Center displays discovered peers and retains recently expired peers as offline.
 
-Each Ensemble host will remain independently usable and retain its own persistence root. Do not share SQLite database files between instances and do not expose a database directory over a network filesystem. Federation transfers authorized resources and versioned derived artifacts through application contracts; it does not replicate live database files.
+Configure each LAN instance with a reachable listener. For example:
 
-When federation is implemented:
+```ini
+ENSEMBLE_HOST=0.0.0.0
+ENSEMBLE_PORT=8090
+ENSEMBLE_NAME=server-01
+ENSEMBLE_FEDERATION_ENABLED=true
+ENSEMBLE_FEDERATION_GROUP=239.255.76.76
+ENSEMBLE_FEDERATION_PORT=47676
+ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS=30
+ENSEMBLE_FEDERATION_TTL_SECONDS=90
+```
 
-- Enable peer discovery/presence by default in federation-enabled deployments, with operator controls to disable or scope it.
-- Use mDNS/DNS-SD and scoped UDP multicast for LAN discovery where multicast is supported. Multicast normally does not cross routers or VLAN boundaries.
-- Use explicitly configured peers, DNS records, or a rendezvous mechanism for routed/VPN deployments.
-- Permit only the required discovery traffic on the selected interfaces. UDP announcements are non-sensitive hints, not authentication.
-- Configure authenticated peer communication separately from discovery. Unknown peers must not be trusted automatically.
-- Use authenticated gRPC for reliable peer operations; use SSH only for constrained remote execution workers.
-- Configure firewall rules for the actual advertised endpoints and discovery scope once the implementation defines its ports. No UDP or gRPC port is declared by this document as currently active.
+A non-loopback listener currently requires the existing partition-token configuration. Use a distinct `ENSEMBLE_NAME` per instance. Ensure the host firewall permits the configured UDP multicast traffic and the advertised HTTP endpoint between the instances. Multicast normally does not cross routers or VLAN boundaries; routed/VPN peer configuration is not implemented yet.
 
-The initial design proposes a 30-second presence heartbeat and a TTL of three heartbeat intervals. These are configurable design defaults, not implemented settings. See [Federation](federation.md) for protocol and security requirements.
+The local identity is generated once and stored as `instance-id` beneath the persistence root. Do not copy that file when cloning an instance; each deployment needs its own identity. The discovery registry is currently in memory, so peers are rediscovered after restart.
+
+Implemented endpoints:
+
+- `GET /federation/status` returns local identity, discovery state, and the peer list.
+- `GET /federation/peers` returns the local identity and discovered peers.
+
+This milestone does not yet implement reliable peer messaging, authenticated sessions, remote task delegation, federated RAG, or derived-artifact transfer. UDP is only for discovery and presence, never task or data delivery. See [Federation](federation.md) for the target architecture.
