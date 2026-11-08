@@ -29,7 +29,7 @@ For inbound delegation:
 5. The adapter publishes accepted, progress, terminal and result events back to the requesting peer using reliable messaging.
 6. The provider's orchestrator remains authoritative for the delegated execution. The requester retains authority over its parent task.
 
-For outbound delegation, the local orchestrator creates and owns the parent task and delegated-child relationship. Federation sends the child request and delivers remote lifecycle updates. A network timeout must not be confused with remote task failure; the remote task may have been accepted even when the response was lost.
+For outbound delegation, the local orchestrator creates and owns the parent task and delegated-child relationship. Federation submits the child request and exposes the provider's task resource for lookup. A network timeout is an ambiguous submission outcome, not remote task failure; retry or lookup must reuse the same child task ID and idempotency key.
 
 Discovery announcements are hints, not authorization. A peer's advertised capability is not proof that a particular task is permitted or executable.
 
@@ -46,7 +46,7 @@ The core contract should be transport-neutral and versioned. At minimum it carri
 - State, attempt, worker, progress and checkpoint references.
 - Structured error or result/artifact references with provenance.
 
-Keep task identity separate from delivery/message identity. Retries of message delivery must not create new tasks. Re-submitting the same task identity with different immutable request content is a conflict.
+Keep task identity separate from an individual HTTP/gRPC request attempt. Repeating a submission after an ambiguous timeout must reuse the same task ID and idempotency key; reusing either with different immutable request content is a conflict.
 
 ## 4. Core boundaries
 
