@@ -61,7 +61,10 @@ from .context_tokens import ContextTokenCounter, ApproximateContextTokenCounter,
 from .source_schedule_store import SourceScheduleStore, SqliteSourceScheduleStore, InMemorySourceScheduleStore
 from .execution_trace_store import ExecutionTraceStore, SqliteExecutionTraceStore, InMemoryExecutionTraceStore, traces as execution_traces
 from .collaboration import CollaborationStore, SynthesisStrategy, SqliteCollaborationStore, InMemoryCollaborationStore, create_collaboration_router
-from .core import CapabilityDescriptor, CapabilityLifecycle, CapabilityRegistry, RuntimeContext, RuntimeProfile, StoreCapability
+from .core import (
+    CapabilityDescriptor, CapabilityLifecycle, CapabilityRegistry, RuntimeContext,
+    RuntimeProfile, StoreCapability, load_worker_adapter_capabilities,
+)
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -370,6 +373,13 @@ def create_app(
             active_learning_store,
             health_check=check_learning_store,
         ))
+
+    # Trusted worker adapter modules can participate in the Full capability
+    # lifecycle without running a second HTTP server or changing their register(runtime) API.
+    adapter_spec = os.getenv("ENSEMBLE_WORKER_ADAPTER", "").strip()
+    if adapter_spec and selected_profile is RuntimeProfile.FULL:
+        for capability in load_worker_adapter_capabilities(adapter_spec):
+            registry.register(capability)
 
     # Serialize permanent source reclamation against creation of a new generation.
     generation_lifecycle_lock = asyncio.Lock()
