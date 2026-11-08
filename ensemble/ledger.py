@@ -230,7 +230,11 @@ class SqliteLedgerStore:
                 if until and (stamp is None or stamp > until): continue
                 entries.append(item)
         scanned = rows[-1]["sequence"] if rows else after_sequence
-        has_more = scanned < upper
+        async with self.engine.connect() as conn:
+            more = (await conn.execute(select(ledger_entries.c.sequence).where(
+                and_(ledger_entries.c.sequence > scanned, ledger_entries.c.sequence <= upper)
+            ).order_by(ledger_entries.c.sequence).limit(1))).first()
+        has_more = more is not None
         return {"entries": entries, "next_after_sequence": scanned, "head_sequence": head, "has_more": has_more}
 
     async def replay(self, after_sequence=0, through_sequence=None, limit=1000):
