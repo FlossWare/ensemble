@@ -852,7 +852,8 @@ def create_app(
         if not 1 <= limit <= 500:
             raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
         records = await active_orchestrator.list(limit)
-        return {"tasks": [record.model_dump(mode="json") for record in records]}
+        local_records = [record for record in records if record.origin_instance_id == federation_instance_id]
+        return {"tasks": [record.model_dump(mode="json") for record in local_records]}
 
     @app.get("/api/v1/tasks/{task_id}", tags=["orchestration"])
     async def get_local_task(task_id: str):
