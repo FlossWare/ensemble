@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from typing import Any
+from uuid import uuid4
 
 from ..worker_runtime import WorkerOperation, WorkerRequest, WorkerRuntime
 from .contracts import CapabilityDescriptor, RuntimeContext, RuntimeProfile
@@ -49,7 +50,7 @@ class WorkerOperationCapability:
         deadline_unix_ms: int | None = None,
     ) -> dict[str, Any]:
         response = await self.runtime.invoke(WorkerRequest(
-            request_id=request_id or __import__("uuid").uuid4().hex,
+            request_id=request_id or uuid4().hex,
             capability=self.operation.capability,
             operation=self.operation.operation,
             payload=payload,
