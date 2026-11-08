@@ -1410,3 +1410,41 @@ def test_federated_task_inbox_rejects_unsupported_capability(tmp_path, monkeypat
             "payload": {},
         })
         assert response.status_code == 409
+
+
+def test_federated_search_task_executes_and_returns_provenance(tmp_path, monkeypatch):
+    import time
+    import uuid
+
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/ingest/documents", json={
+            "source_id": "federated-search-source",
+            "revision": 1,
+            "title": "Federated search fixture",
+            "content": "Federated task execution uses the local hybrid search service.",
+        })
+        assert ingested.status_code == 201
+        task_id = str(uuid.uuid4())
+        accepted = client.post("/federation/tasks", json={
+            "task_id": task_id,
+            "idempotency_key": "federated-search-1",
+            "origin_instance_id": "remote-instance",
+            "target_capability": "search",
+            "task_type": "search.query",
+            "payload": {"query": "hybrid search service", "limit": 5},
+        })
+        assert accepted.status_code == 202, accepted.text
+
+        result = None
+        for _ in range(60):
+            response = client.get(f"/federation/tasks/{task_id}")
+            assert response.status_code == 200
+            result = response.json()
+            if result["state"] in {"succeeded", "failed"}:
+                break
+            time.sleep(0.05)
+
+        assert result["state"] == "succeeded", result
+        assert result["result"]["count"] >= 1
+        assert result["result"]["hits"][0]["source_id"] == "federated-search-source"
