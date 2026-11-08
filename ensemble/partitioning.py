@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import hashlib
-import ipaddress
 import logging
 import json
 import os
@@ -103,19 +102,6 @@ def _problem(status: int, title: str, detail: str, code: str) -> JSONResponse:
 
 def _is_public_path(path: str) -> bool:
     return path in {"/health", "/ready", "/openapi.json", "/docs", "/redoc", "/control", "/control.js"}
-
-
-def _is_loopback_client(request: Request) -> bool:
-    client = request.client
-    if client is None:
-        return False
-    host = client.host.casefold()
-    if host in {"testclient", "localhost"}:
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
 
 
 async def partition_scope_middleware(request: Request, call_next):
