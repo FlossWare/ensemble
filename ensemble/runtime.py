@@ -4,10 +4,14 @@ import argparse
 import os
 from fastapi import FastAPI
 
-from .core import RuntimeProfile
+from .core import CapabilityRegistry, RuntimeProfile
 
 
-def create_runtime(profile: RuntimeProfile | str | None = None) -> FastAPI:
+def create_runtime(
+    profile: RuntimeProfile | str | None = None,
+    *,
+    capability_registry: CapabilityRegistry | None = None,
+) -> FastAPI:
     """Compose the selected runtime without importing full subsystems for workers.
 
     Standard and full currently share the existing full application composition.
@@ -24,7 +28,7 @@ def create_runtime(profile: RuntimeProfile | str | None = None) -> FastAPI:
     # SQLAlchemy, Chroma, graph, memory, GA, Thompson, or learning subsystems.
     from .api import create_app
 
-    app = create_app(profile=selected)
+    app = create_app(profile=selected, capability_registry=capability_registry)
     app.state.runtime_profile = selected.value
     return app
 
