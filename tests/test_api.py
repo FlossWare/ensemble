@@ -42,6 +42,8 @@ def test_federation_status_exposes_local_instance_and_discovered_peers(tmp_path)
         overview = client.get("/federation/overview")
         assert overview.status_code == 200
         assert overview.json()["peer_count"] == 0
+        assert "local_metrics" in overview.json()
+        assert overview.json()["enabled"] is True
         assert overview.json()["peers"] == []
         peers = client.get("/federation/peers")
         assert peers.status_code == 200
