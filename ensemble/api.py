@@ -835,9 +835,16 @@ def create_app(
             status = response.status_code if response.status_code < 500 else 502
             raise HTTPException(status_code=status, detail="peer service request was rejected")
         try:
-            return ServiceResponse.model_validate(response.json()).model_dump(mode="json")
+            service_response = ServiceResponse.model_validate(response.json())
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=502, detail="peer returned an invalid service response") from exc
+        if (
+            service_response.request_id != outbound.request_id
+            or service_response.provider_instance_id != peer_id
+            or service_response.operation != outbound.operation
+        ):
+            raise HTTPException(status_code=502, detail="peer service response does not match the request or selected peer")
+        return service_response.model_dump(mode="json")
 
     @app.post("/federation/services", tags=["federation"])
     async def invoke_local_federated_service(service_request: ServiceRequest):
