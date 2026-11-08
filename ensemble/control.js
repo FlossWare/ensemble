@@ -647,18 +647,24 @@ document.getElementById("context-form").addEventListener("submit",async event=>{
 async function refreshFederation(){
  const summary=document.getElementById("federation-summary");
  const rows=document.getElementById("federation-rows");
+ const taskRows=document.getElementById("federated-task-rows");
  const details=document.getElementById("federation-details");
  try{
-  const response=await fetch("/federation/overview");
+  const [response,taskResponse]=await Promise.all([
+   fetch("/federation/overview"),
+   fetch("/federation/tasks?limit=25")
+  ]);
   const result=await response.json();
+  const taskResult=await taskResponse.json();
   if(!response.ok)throw new Error(result.detail||response.statusText);
+  if(!taskResponse.ok)throw new Error(taskResult.detail||taskResponse.statusText);
   summary.textContent=result.enabled
    ? (result.discovery==="multicast"?"LAN discovery active":"LAN discovery "+result.discovery)+(result.discovery_error?": "+result.discovery_error:"")+" · "+result.peer_count+" peers"
    : "Federation discovery disabled";
   rows.replaceChildren();
   for(const peer of result.peers||[]){
    const row=document.createElement("tr");
-   for(const value of [peer.name,peer.endpoint,(peer.remote_status||peer.status), (peer.capabilities||[]).join(", "),peer.seconds_since_seen+"s ago", (peer.metrics&&peer.metrics.memory ? Math.round(peer.metrics.memory.used_bytes/1048576)+" / "+Math.round(peer.metrics.memory.total_bytes/1048576)+" MiB RAM" : "Metrics unavailable")]){
+   for(const value of [peer.name,peer.endpoint,(peer.remote_status||peer.status),(peer.capabilities||[]).join(", "),peer.seconds_since_seen+"s ago",(peer.metrics&&peer.metrics.memory?Math.round(peer.metrics.memory.used_bytes/1048576)+" / "+Math.round(peer.metrics.memory.total_bytes/1048576)+" MiB RAM":"Metrics unavailable")]){
     const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);
    }
    row.addEventListener("click",()=>{details.textContent=JSON.stringify(peer,null,2);});
@@ -670,7 +676,22 @@ async function refreshFederation(){
    cell.colSpan=6;cell.textContent="No other Ensemble instances discovered yet.";
    row.append(cell);rows.append(row);
   }
-  details.textContent=JSON.stringify({local:result.instance,discovery:result.discovery,peer_count:result.peer_count,peers:result.peers},null,2);
+  taskRows.replaceChildren();
+  for(const task of taskResult.tasks||[]){
+   const row=document.createElement("tr");
+   for(const value of [String(task.task_id).slice(0,8),task.origin_instance_id,task.task_type,task.state,task.attempt,task.updated_at]){
+    const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);
+   }
+   row.addEventListener("click",()=>{details.textContent=JSON.stringify(task,null,2);});
+   row.style.cursor="pointer";
+   taskRows.append(row);
+  }
+  if(!(taskResult.tasks||[]).length){
+   const row=document.createElement("tr"),cell=document.createElement("td");
+   cell.colSpan=6;cell.textContent="No delegated tasks received.";
+   row.append(cell);taskRows.append(row);
+  }
+  details.textContent=JSON.stringify({local:result.instance,discovery:result.discovery,peer_count:result.peer_count,peers:result.peers,tasks:taskResult.tasks},null,2);
  }catch(error){
   summary.textContent="Federation status unavailable: "+error.message;
   details.textContent=error.stack||error.message;
