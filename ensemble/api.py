@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import httpx
 import hashlib
 import json
 import re
@@ -51,7 +52,7 @@ from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
 from .partitioning import partition_scope_middleware
 from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id, host_metrics, inspect_peer
-from .federated_tasks import FederatedTaskRequest, FederatedTaskStore
+from .federated_tasks import FederatedTaskRequest, FederatedTaskSubmission, FederatedTaskStore
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -784,6 +785,76 @@ def create_app(
     @app.get("/federation/peers", tags=["federation"])
     async def federation_peers():
         return {"instance": federation_instance, "peers": federation_registry.list()}
+
+    @app.post("/federation/peers/{peer_id}/tasks", status_code=202, tags=["federation"])
+    async def submit_peer_task(peer_id: str, submission: FederatedTaskSubmission):
+        if not federation_enabled:
+            raise HTTPException(status_code=503, detail="federation is disabled")
+        peer = next((item for item in federation_registry.list() if item["instance_id"] == peer_id), None)
+        if peer is None:
+            raise HTTPException(status_code=404, detail="federation peer not found")
+        if peer["status"] != "online":
+            raise HTTPException(status_code=503, detail="federation peer is offline")
+        if submission.target_capability not in peer["capabilities"]:
+            raise HTTPException(status_code=409, detail="peer does not advertise the requested capability")
+        if submission.task_type != "search.query" or submission.target_capability != "search":
+            raise HTTPException(status_code=409, detail="task type is not supported for peer delegation")
+        query = submission.payload.get("query")
+        limit = submission.payload.get("limit", 10)
+        if not isinstance(query, str) or not query.strip():
+            raise HTTPException(status_code=422, detail="search.query requires a non-empty payload.query")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise HTTPException(status_code=422, detail="search.query payload.limit must be between 1 and 100")
+        request_body = FederatedTaskRequest(
+            **submission.model_dump(mode="python"),
+            origin_instance_id=federation_instance_id,
+        )
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(
+                    peer["endpoint"].rstrip("/") + "/federation/tasks",
+                    json=request_body.model_dump(mode="json"),
+                )
+        except httpx.TimeoutException as exc:
+            raise HTTPException(status_code=504, detail="peer task submission timed out") from exc
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail="peer task submission failed") from exc
+        if response.status_code >= 400:
+            status = response.status_code if response.status_code < 500 else 502
+            raise HTTPException(status_code=status, detail="peer rejected delegated task")
+        try:
+            remote = response.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail="peer returned an invalid task response") from exc
+        return {
+            "accepted": True,
+            "peer": {"instance_id": peer["instance_id"], "name": peer["name"], "endpoint": peer["endpoint"]},
+            "task": remote.get("task"),
+        }
+
+    @app.get("/federation/peers/{peer_id}/tasks/{task_id}", tags=["federation"])
+    async def get_peer_task(peer_id: str, task_id: str):
+        peer = next((item for item in federation_registry.list() if item["instance_id"] == peer_id), None)
+        if peer is None:
+            raise HTTPException(status_code=404, detail="federation peer not found")
+        if peer["status"] != "online":
+            raise HTTPException(status_code=503, detail="federation peer is offline")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    peer["endpoint"].rstrip("/") + f"/federation/tasks/{task_id}",
+                )
+        except httpx.TimeoutException as exc:
+            raise HTTPException(status_code=504, detail="peer task lookup timed out") from exc
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail="peer task lookup failed") from exc
+        if response.status_code >= 400:
+            status = response.status_code if response.status_code < 500 else 502
+            raise HTTPException(status_code=status, detail="peer task lookup was rejected")
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail="peer returned an invalid task response") from exc
 
     @app.get("/federation/metrics", tags=["federation"])
     async def federation_metrics():
