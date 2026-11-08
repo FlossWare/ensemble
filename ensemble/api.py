@@ -354,6 +354,21 @@ def create_app(
 
     registry.register(StoreCapability(
         CapabilityDescriptor(
+            "graph",
+            profiles=(RuntimeProfile.STANDARD, RuntimeProfile.FULL),
+        ),
+        active_graph_store,
+    ))
+    registry.register(StoreCapability(
+        CapabilityDescriptor(
+            "knowledge",
+            profiles=(RuntimeProfile.STANDARD, RuntimeProfile.FULL),
+        ),
+        active_knowledge_store,
+    ))
+
+    registry.register(StoreCapability(
+        CapabilityDescriptor(
             "memory",
             profiles=(RuntimeProfile.STANDARD, RuntimeProfile.FULL),
         ),
@@ -711,8 +726,6 @@ def create_app(
             recover_fence = getattr(active_index_store, "recover_generation_write_fence", None)
             if callable(recover_fence):
                 await recover_fence()
-            await active_knowledge_store.initialize()
-            await active_graph_store.initialize()
             await active_transcript_store.initialize()
             await active_reclamation_store.initialize()
             await active_crawl_store.initialize()
@@ -757,8 +770,6 @@ def create_app(
                 finally:
                     await capability_lifecycle.stop()
         finally:
-            await active_graph_store.close()
-            await active_knowledge_store.close()
             await active_index_store.close()
             await active_vector_store.close()
             await document_store.close()
