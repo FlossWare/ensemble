@@ -669,8 +669,8 @@ def create_app(
     federation_enabled = os.getenv("ENSEMBLE_FEDERATION_ENABLED", "true").strip().casefold() not in {"0", "false", "no", "off"}
     federation_host = _advertise_host(federation_settings.host)
     federation_endpoint = f"http://{federation_host}:{federation_settings.port}"
-    federation_ttl = int(os.getenv("ENSEMBLE_FEDERATION_TTL_SECONDS", "90"))
-    federation_heartbeat = int(os.getenv("ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS", "30"))
+    federation_heartbeat = max(5, int(os.getenv("ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS", "30")))
+    federation_ttl = max(federation_heartbeat * 2, int(os.getenv("ENSEMBLE_FEDERATION_TTL_SECONDS", "90")) )
     federation_group = os.getenv("ENSEMBLE_FEDERATION_GROUP", "239.255.76.76").strip()
     federation_port = int(os.getenv("ENSEMBLE_FEDERATION_PORT", "47676"))
     federation_registry = PeerRegistry(federation_instance_id, federation_ttl)
