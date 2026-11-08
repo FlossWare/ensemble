@@ -83,7 +83,7 @@ def validate_event(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("entry must be an object")
     event_id = value.get("event_id", str(uuid.uuid4()))
-    event_type, source = value.get("event_type"), value.get("source")
+    event_type, source = value.get("event_type", value.get("kind")), value.get("source", value.get("producer"))
     payload = value.get("payload")
     if not isinstance(event_id, str) or not event_id.strip() or len(event_id) > 256:
         raise ValueError("event_id must be 1-256 characters")
@@ -312,7 +312,7 @@ class SqliteLedgerStore:
                 if incoming.get("payload_sha256") is not None:
                     if incoming["payload_sha256"] != digest(event["payload"]):
                         raise ValueError("import payload hash mismatch")
-                    source_assurance = "payload_hash_verified"
+                    source_assurance = "legacy_unverified" if incoming.get("schema_version") == 0 or incoming.get("provenance", {}).get("assurance") == "legacy_unverified" else "payload_hash_verified"
                 if incoming.get("entry_sha256") is not None:
                     validate_envelope(incoming, source_ledger_id)
                     source_assurance = "entry_hash_verified"
