@@ -1,6 +1,6 @@
 # Ensemble Federation
 
-**Status:** LAN discovery, heartbeat presence, live peer inspection, and Control Center visibility are implemented. A durable, idempotent task inbox and the first executable delegated task type (`search.query`) are implemented. General orchestration, requester-side peer submission/tracking, reliable messaging, trust establishment, and artifact exchange remain incomplete.
+**Status:** LAN discovery, heartbeat presence, live peer inspection, and Control Center visibility are implemented. Delegated task execution is currently a narrow experimental spike built around a federation-specific inbox and API-owned worker. It is not the target orchestration architecture. Canonical orchestration, reliable messaging, trust establishment, and artifact exchange remain incomplete. See [Orchestration](orchestration.md).
 **Scope:** Discovery, presence, trust establishment, peer communication, delegation, and exchange between independently operated Ensemble instances.
 
 ## 1. Purpose and operating model
@@ -17,7 +17,7 @@ Ensemble is the platform and orchestration authority, not an AI client. Client-s
 
 ### Implemented LAN discovery slice
 
-The current application broadcasts a small JSON presence announcement over IPv4 multicast by default, listens on the same group, ignores its own instance ID, and maintains an in-memory peer registry. The Control Center polls `/federation/status` and renders discovered peers, capabilities, endpoints, last-seen age, and online/offline status. Expired peers remain visible as offline for a bounded retention period before being pruned. This is discovery only: it does not establish peer trust. A separate durable task inbox and local worker execute the initial `search.query` task type; general-purpose remote orchestration is not yet implemented.
+The current application broadcasts a small JSON presence announcement over IPv4 multicast by default, listens on the same group, ignores its own instance ID, and maintains an in-memory peer registry. The Control Center polls `/federation/status` and renders discovered peers, capabilities, endpoints, last-seen age, and online/offline status. Expired peers remain visible as offline for a bounded retention period before being pruned. This is discovery only: it does not establish peer trust. The current `search.query` delegation spike is experimental and must be replaced by a thin adapter to the canonical orchestrator before task delegation is considered architecturally complete.
 
 Current defaults: multicast group `239.255.76.76`, UDP port `47676`, heartbeat 30 seconds, and presence TTL 90 seconds. Configure with `ENSEMBLE_FEDERATION_ENABLED`, `ENSEMBLE_FEDERATION_GROUP`, `ENSEMBLE_FEDERATION_PORT`, `ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS`, and `ENSEMBLE_FEDERATION_TTL_SECONDS`. The UDP group and port are configurable; multicast is link-local and best effort.
 
@@ -104,20 +104,17 @@ A requester may invoke a specific versioned service on an authorized peer while 
 
 A requester may assign a bounded task to another Ensemble. The receiving peer owns planning and execution of that delegated task under its own policies. The requester retains ownership of the parent task and overall outcome. Preserve task identity and lineage, scope, policy constraints, checkpoints, evidence, artifacts, status, cancellation, recovery, and result provenance.
 
-#### Current task-inbox implementation
+#### Current experimental delegation spike
 
-The first task-delegation slice defines a versioned-by-API JSON contract and durable per-instance SQLite inbox:
+The branch currently contains a narrow end-to-end `search.query` proof of concept:
+- A peer can submit a search request to another discovered peer.
+- The receiving API persists it in a federation-specific SQLite inbox.
+- An API-lifespan worker claims the request, invokes the local search service, and records a result.
+- The Control Center can inspect recent delegated task records.
 
-- `POST /federation/tasks` accepts a task request and returns HTTP 202 with its stable task ID and `accepted` state.
-- `GET /federation/tasks/{task_id}` retrieves the durable record.
-- `GET /federation/tasks?limit=...` lists a bounded recent inbox.
-- `POST /federation/peers/{instance_id}/tasks` submits a supported task to an online discovered peer; the local instance supplies its own origin identity.
-- `GET /federation/peers/{instance_id}/tasks/{task_id}` proxies status retrieval from that peer.
-- Requests carry origin instance, target capability, task type, JSON payload, idempotency key, timestamps, optional deadline, and correlation/causation IDs.
-- The receiver rejects a request targeting an unavailable advertised capability, a self-originated request, oversized payloads, and reuse of an idempotency key with different content.
-- Repeated identical submissions return the original accepted record rather than creating duplicate work.
+This proves a basic peer-to-peer request path, but it is not the intended architecture. The federation-specific store owns task states and the API starts a separate worker loop. That duplicates responsibilities which belong to the core orchestrator. Do not add task types, scheduling features, retries, cancellation, or more lifecycle behavior to this spike.
 
-The current worker claims `search.query` tasks with a single-owner SQLite transition, invokes the existing local `SearchService`, and persists a succeeded result containing serialized search hits and provenance. Failed executions are recorded as failed with a bounded error description. On process startup, interrupted running tasks are returned to the accepted queue for recovery. The first worker is intentionally narrow: it does not yet provide arbitrary tool execution, planning, child-task orchestration, progress streaming, cancellation, or a durable requester-side parent-task record. The peer submission and status-proxy routes provide the first end-to-end remote request path, but the caller remains responsible for retaining the returned task ID until durable parent-task tracking is implemented.
+The implementation is temporary scaffolding and must be refactored. The target is specified in [docs/orchestration.md](orchestration.md): federation validates/transports a request and maps it into the receiving instance's canonical orchestrator; the orchestrator owns admission, policy, scheduling, execution, state, recovery and results. Requester-side parent/child tracking and reliable lifecycle/result delivery belong in the shared orchestration and messaging contracts, not in a federation-only inbox.
 
 ### 5.3 Federated RAG
 
