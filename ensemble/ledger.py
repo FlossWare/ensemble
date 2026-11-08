@@ -268,6 +268,8 @@ class SqliteLedgerStore:
             item = dict(row)
             seq = item["sequence"]
             if seq != expected: return {"ok": False, "first_failing_sequence": expected, "failure_category": "sequence_gap", "assurance": "hash_chain", "verified_count": expected-from_sequence}
+            if item["previous_entry_sha256"] != previous:
+                return {"ok": False, "first_failing_sequence": seq, "failure_category": "broken_hash_chain", "assurance": "hash_chain", "verified_count": seq-from_sequence}
             try:
                 validate_envelope(item, state["ledger_id"])
             except ValueError as exc:
@@ -275,10 +277,6 @@ class SqliteLedgerStore:
                 return {"ok": False, "first_failing_sequence": seq, "failure_category": category, "assurance": "hash_chain", "verified_count": seq-from_sequence}
             if item["event_id"] in seen: return {"ok": False, "first_failing_sequence": seq, "failure_category": "duplicate_event_id", "assurance": "hash_chain", "verified_count": seq-from_sequence}
             seen.add(item["event_id"])
-            if not hmac.compare_digest(item["payload_sha256"], digest(item["payload"])):
-                return {"ok": False, "first_failing_sequence": seq, "failure_category": "payload_hash_mismatch", "assurance": "hash_chain", "verified_count": seq-from_sequence}
-            if item["previous_entry_sha256"] != previous:
-                return {"ok": False, "first_failing_sequence": seq, "failure_category": "broken_hash_chain", "assurance": "hash_chain", "verified_count": seq-from_sequence}
             if not hmac.compare_digest(item["entry_sha256"], entry_hash(item)):
                 return {"ok": False, "first_failing_sequence": seq, "failure_category": "entry_hash_mismatch", "assurance": "hash_chain", "verified_count": seq-from_sequence}
             previous, expected = item["entry_sha256"], expected + 1
