@@ -40,6 +40,10 @@ def test_ga_run_is_persisted_and_exposes_five_evaluators():
         assert set(run["result"]["best_by_system"]) == {
             "compression", "thompson", "caching", "matrix", "dashboard"
         }
+        task = http.get(f"/api/v1/tasks/{run_id}")
+        assert task.status_code == 200
+        assert task.json()["task_type"] == "ga.run"
+        assert task.json()["state"] == "succeeded"
 
 
 def test_ga_promotion_requires_explicit_approval_and_never_applies_live_settings():
