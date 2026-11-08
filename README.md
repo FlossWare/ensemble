@@ -16,7 +16,7 @@ Ensemble is the product and implementation boundary. It does not depend on any c
 - Providers are pluggable; embedding and ranking implementations do not define the API contract.
 - Retrieval is independently usable; generation is optional and provider-backed.
 - MCP, GraphQL, and gRPC are required interfaces over the same core contracts; none contains duplicate business logic.
-- Federation discovery uses mDNS/DNS-SD and scoped UDP presence where available; reliable peer operations use authenticated gRPC. SSH remains the constrained remote-worker transport.
+- LAN federation discovery currently uses IPv4 UDP multicast presence. Reliable peer operations, authenticated gRPC, and SSH worker transport remain planned.
 - Ensemble uses SQLite for its own persistence. Alternative persistence implementations and shared infrastructure belong to FlossWare proper.
 
 The REST boundary is the architectural rule. The current review implementation still has orchestration paths that call stores and services directly; those paths must be moved behind internal REST clients before claiming full capability-boundary compliance. See [Architecture](docs/architecture.md), [Federation](docs/federation.md), and [review readiness](docs/review-readiness.md).
@@ -60,7 +60,7 @@ All source ingestion uses the canonical /api/v1/ingest/... namespace: documents,
 
 ## Federation status
 
-Federation is an accepted required capability. Its discovery, presence, trust, peer transport, delegation, messaging, federated RAG, and derived-artifact exchange contracts are documented in [Federation](docs/federation.md). These capabilities are not yet implemented; do not interpret the architecture documentation as an operational feature claim.
+LAN discovery and presence are implemented: instances announce themselves, maintain a live peer registry, and display peers in the Control Center. Reliable peer transport, trust/session establishment, delegation, messaging, federated RAG, and derived-artifact exchange remain planned. See [Federation](docs/federation.md) for the implementation boundary and target architecture.
 
 ## Scope
 
