@@ -37,6 +37,17 @@ ensemble-runtime --profile full --host 0.0.0.0 --port 8080
 
 The profile can also be selected with `ENSEMBLE_PROFILE=worker|standard|full`. The base package contains only FastAPI and Uvicorn; database, vector, graph, document, and local intelligence dependencies are optional extras. The existing `ensemble` and `ensemble-worker` commands remain available for compatibility.
 
+## Capability lifecycle
+
+Extensions implement the shared `Capability` contract in `ensemble.core`: a descriptor, asynchronous initialization and shutdown, and a health report. Register implementations in a `CapabilityRegistry` and pass that registry to `create_runtime(..., capability_registry=...)` or `create_app(..., capability_registry=...)`.
+
+The registry resolves profile eligibility and dependencies before startup. The lifecycle starts dependencies first, rolls back a partial startup on failure, and shuts down in reverse order. Runtime discovery is exposed at:
+
+- `GET /api/v1/runtime/capabilities`
+- `GET /api/v1/runtime/capabilities/health`
+
+The current migration has made GA and Learning profile-specific. Further built-in capability groups will move behind this lifecycle incrementally; the shared contracts do not imply that every legacy subsystem has already been extracted.
+
 ## Upgrade path
 
 A deployment can change its selected profile and install the corresponding package dependencies. Moving from Standard to Full enables the GA and Learning routes and initializes their stores on startup. Moving from Full to Standard stops exposing those routes and skips their stores; existing database records are retained. Profile changes do not run schema migrations automatically.
