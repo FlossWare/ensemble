@@ -658,7 +658,7 @@ async function refreshFederation(){
   rows.replaceChildren();
   for(const peer of result.peers||[]){
    const row=document.createElement("tr");
-   for(const value of [peer.name,peer.endpoint,(peer.remote_status||peer.status), (peer.capabilities||[]).join(", "),peer.seconds_since_seen+"s ago"]){
+   for(const value of [peer.name,peer.endpoint,(peer.remote_status||peer.status), (peer.capabilities||[]).join(", "),peer.seconds_since_seen+"s ago", (peer.metrics&&peer.metrics.memory ? Math.round(peer.metrics.memory.used_bytes/1048576)+" / "+Math.round(peer.metrics.memory.total_bytes/1048576)+" MiB RAM" : "Metrics unavailable")]){
     const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);
    }
    row.addEventListener("click",()=>{details.textContent=JSON.stringify(peer,null,2);});
@@ -667,7 +667,7 @@ async function refreshFederation(){
   }
   if(!(result.peers||[]).length){
    const row=document.createElement("tr"),cell=document.createElement("td");
-   cell.colSpan=5;cell.textContent="No other Ensemble instances discovered yet.";
+   cell.colSpan=6;cell.textContent="No other Ensemble instances discovered yet.";
    row.append(cell);rows.append(row);
   }
   details.textContent=JSON.stringify({local:result.instance,discovery:result.discovery,peer_count:result.peer_count,peers:result.peers},null,2);
