@@ -1448,3 +1448,57 @@ def test_federated_search_task_executes_and_returns_provenance(tmp_path, monkeyp
         assert result["state"] == "succeeded", result
         assert result["result"]["count"] >= 1
         assert result["result"]["hits"][0]["source_id"] == "federated-search-source"
+
+
+def test_peer_task_submission_forwards_local_identity_and_contract(tmp_path, monkeypatch):
+    import uuid
+
+    from ensemble import api as api_module
+
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
+    captured = {}
+
+    class FakeResponse:
+        status_code = 202
+
+        def json(self):
+            return {"accepted": True, "created": True, "task": {"state": "accepted"}}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json):
+            captured["url"] = url
+            captured["body"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(api_module.httpx, "AsyncClient", FakeClient)
+    with _client(tmp_path) as client:
+        client.app.state.federation_registry.observe({
+            "kind": "ensemble.presence",
+            "protocol_version": "1",
+            "instance_id": "remote-peer",
+            "name": "remote-server",
+            "endpoint": "http://192.0.2.20:8090",
+            "capabilities": ["search"],
+        })
+        response = client.post("/federation/peers/remote-peer/tasks", json={
+            "task_id": str(uuid.uuid4()),
+            "idempotency_key": "outbound-1",
+            "target_capability": "search",
+            "task_type": "search.query",
+            "payload": {"query": "remote search", "limit": 3},
+        })
+
+        assert response.status_code == 202, response.text
+        assert response.json()["peer"]["instance_id"] == "remote-peer"
+        assert captured["url"] == "http://192.0.2.20:8090/federation/tasks"
+        assert captured["body"]["origin_instance_id"] == client.app.state.federation_instance["instance_id"]
+        assert captured["body"]["task_type"] == "search.query"
