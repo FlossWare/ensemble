@@ -35,12 +35,12 @@ def test_host_and_port_are_configurable_and_validated(tmp_path, monkeypatch):
         settings_from_env()
 
 
-def test_non_loopback_listener_requires_partition_credentials(tmp_path, monkeypatch):
+def test_non_loopback_listener_can_run_without_partition_credentials_for_local_federation(tmp_path, monkeypatch):
     monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
     monkeypatch.setenv("ENSEMBLE_HOST", "0.0.0.0")
     monkeypatch.delenv("ENSEMBLE_PARTITION_TOKENS", raising=False)
-    with pytest.raises(ValueError, match="ENSEMBLE_PARTITION_TOKENS"):
-        settings_from_env()
+    settings = settings_from_env()
+    assert settings.host == "0.0.0.0"
 
 
 def test_database_url_override_must_remain_sqlite(tmp_path, monkeypatch):
