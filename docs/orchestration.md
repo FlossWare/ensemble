@@ -55,7 +55,6 @@ Keep task identity separate from an individual HTTP/gRPC request attempt. Repeat
 - **Worker registry:** reports executable handlers, versions, capacity and health.
 - **Execution handler:** implements one capability operation and returns structured progress/results.
 - **Persistence:** stores canonical task state, events and checkpoints per instance.
-- **Messaging:** reliable transport, acknowledgements, delivery retries and subscriptions. It does not own task state.
 - **Federation adapter:** maps peer protocol envelopes/events to and from the orchestrator.
 - **Control Center:** reads orchestrator APIs and issues authorized operator commands. It does not inspect task databases directly.
 
