@@ -128,6 +128,68 @@ def test_task_store_migrates_legacy_federation_database_without_losing_tasks(tmp
 
 
 
+def test_delegated_child_reference_is_durable_and_idempotent(tmp_path: Path):
+    from uuid import uuid4
+    from ensemble.task_store import TaskSubmission
+
+    store = SqliteTaskStore(tmp_path)
+    store.initialize()
+    parent_request = TaskRequest(
+        idempotency_key="parent-for-delegation",
+        origin_instance_id="local-instance",
+        target_capability="search",
+        task_type="search.query",
+        payload={"query": "parent"},
+    )
+    parent, created = store.accept(
+        parent_request, "local-instance", allow_local_origin=True,
+    )
+    assert created is True
+
+    submission = TaskSubmission(
+        task_id=uuid4(),
+        parent_task_id=parent.task_id,
+        idempotency_key="delegated-child-1",
+        target_capability="search",
+        task_type="search.query",
+        payload={"query": "child"},
+    )
+    first = store.record_delegated_child(
+        parent.task_id, "remote-instance", submission, "local-instance",
+    )
+    assert first.state == "submitted"
+
+    restarted = SqliteTaskStore(tmp_path)
+    restarted.initialize()
+    persisted = restarted.list_delegated_children(parent.task_id)
+    assert persisted == [first]
+
+    duplicate = restarted.record_delegated_child(
+        parent.task_id, "remote-instance", submission, "local-instance",
+    )
+    assert duplicate.task_id == first.task_id
+    assert len(restarted.list_delegated_children(parent.task_id)) == 1
+
+    updated = restarted.update_delegated_child(
+        "remote-instance", submission.task_id, state="accepted",
+    )
+    assert updated is not None
+    assert updated.state == "accepted"
+
+    conflicting = TaskSubmission(
+        task_id=uuid4(),
+        parent_task_id=parent.task_id,
+        idempotency_key="delegated-child-1",
+        target_capability="search",
+        task_type="search.query",
+        payload={"query": "different child"},
+    )
+    with pytest.raises(ValueError, match="reused"):
+        restarted.record_delegated_child(
+            parent.task_id, "remote-instance", conflicting, "local-instance",
+        )
+
+
 def test_task_contract_rejects_unsupported_version():
     from pydantic import ValidationError
     from ensemble.task_store import TaskRequest
