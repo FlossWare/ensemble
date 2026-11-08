@@ -1,7 +1,7 @@
 # Ensemble Federation
 
-**Status:** LAN discovery, heartbeat presence, live peer inspection, and Control Center visibility are implemented. Delegated task execution now dispatches through the core per-instance Orchestrator and registered task handlers. Task execution and persistence now use transport-neutral `TaskRequest`, `TaskSubmission`, `TaskRecord`, `Orchestrator`, and `SqliteTaskStore` contracts. Startup migrates the old federation-named database and table. Reliable lifecycle/result messaging, trust establishment, and artifact exchange remain incomplete. Reliable lifecycle/result messaging, trust establishment, and artifact exchange remain incomplete. See [Orchestration](orchestration.md).
-**Scope:** Discovery, presence, trust establishment, peer communication, delegation, and exchange between independently operated Ensemble instances.
+**Status:** LAN discovery, heartbeat presence, live peer inspection, and Control Center visibility are implemented. Delegated task execution now dispatches through the core per-instance Orchestrator and registered task handlers. Task execution and persistence now use transport-neutral `TaskRequest`, `TaskSubmission`, `TaskRecord`, `Orchestrator`, and `SqliteTaskStore` contracts. Startup migrates the old federation-named database and table. Trust establishment and artifact exchange remain incomplete. Federation does not require a general-purpose reliable messaging subsystem; delegated tasks are persisted by the receiving instance and their status/results are queried from that instance when reachable. See [Orchestration](orchestration.md).
+**Scope:** Discovery, presence, trust establishment, direct peer communication, delegation, and exchange between independently operated Ensemble instances.
 
 ## 1. Purpose and operating model
 
@@ -87,7 +87,7 @@ The exact certificate provisioning, rotation, and revocation mechanism remains a
 
 The peer transport is separate from discovery:
 
-- **gRPC over authenticated TLS** is the initial preferred peer-to-peer transport for typed service calls, task coordination, streaming, acknowledgements, and long-running operations.
+- **gRPC over authenticated TLS** is the initial preferred peer-to-peer transport for typed service calls and task operations. Use streaming only where it materially improves a specific operation; it is not a durable messaging guarantee.
 - **REST/HTTP** remains available for resource-oriented operations, administration, diagnostics, and compatibility.
 - **SSH** is the standard transport for constrained remote execution workers. SSH is not the federation protocol, peer discovery mechanism, or authorization model.
 - MCP and GraphQL remain supported external interfaces to the same core application/domain services; they do not create separate federation business logic.
@@ -98,11 +98,11 @@ Transport adapters must delegate to the same application/domain contracts and en
 
 ### 5.1 Service delegation
 
-A requester may invoke a specific versioned service on an authorized peer while retaining ownership of its parent task. The provider owns the execution lifecycle of the service request. Contracts include typed inputs/outputs, idempotency, correlation, deadlines, cancellation, structured errors, usage metadata, bounded retries, circuit breakers, fallback, provenance, and hop/depth limits.
+A requester may invoke a specific versioned service on an authorized peer while retaining ownership of its parent task. The provider owns the execution lifecycle of the service request. Contracts include typed inputs/outputs, idempotency, correlation, deadlines, cancellation, structured errors, usage metadata, bounded retries for safe operations, circuit breakers, fallback, provenance, and hop/depth limits.
 
 ### 5.2 Task delegation
 
-A requester may assign a bounded task to another Ensemble. The receiving peer owns planning and execution of that delegated task under its own policies. The requester retains ownership of the parent task and overall outcome. Preserve task identity and lineage, scope, policy constraints, checkpoints, evidence, artifacts, status, cancellation, recovery, and result provenance.
+A requester may assign a bounded task to another Ensemble. The receiving peer owns planning and execution of that delegated task under its own policies. The requester retains ownership of the parent task and overall outcome. Preserve task identity and lineage, scope, policy constraints, checkpoints, evidence, artifacts, status, cancellation, recovery, and result provenance. The receiving instance persists its task lifecycle; the requester queries that instance for status and results when reachable. A lost response is an ambiguous outcome, not proof that execution failed.
 
 #### Current experimental delegation spike
 
@@ -114,17 +114,17 @@ The branch currently contains a narrow end-to-end `search.query` proof of concep
 
 This proves a basic peer-to-peer request path. The core Orchestrator now owns worker scheduling and handler dispatch, and the FastAPI lifecycle starts/stops the orchestrator as a service. Task persistence now uses the transport-neutral `SqliteTaskStore` and canonical task models. Existing federation-named database files and tables are migrated to the canonical task store on startup. Do not reintroduce worker loops into federation or API routes.
 
-The remaining migration is to add reliable lifecycle/result delivery, parent/child tracking, policy enforcement, and richer execution controls described in [docs/orchestration.md](orchestration.md). Federation must remain a thin adapter. Requester-side parent/child tracking and reliable lifecycle/result delivery belong in the shared orchestration and messaging contracts.
+The remaining migration is to add requester-side parent/child tracking, policy enforcement, and richer execution controls described in [docs/orchestration.md](orchestration.md). Federation must remain a thin adapter. The requester can query the provider's persisted task resource for status and results; there is no requirement for guaranteed push delivery or a separate messaging subsystem.
 
 ### 5.3 Federated RAG
 
 An instance may retrieve from authorized peers. Source-level authorization and partition filtering must occur before remote candidates can influence local fusion, reranking, or context assembly. Preserve source identity, revision, provider instance, provenance, and evidence. Remote unavailability must have explicit degraded behavior.
 
-### 5.4 Messaging
+### 5.4 Communication and task status
 
-Messaging supports peer-to-peer, task, and event use cases: point-to-point, publish/subscribe, request/reply, and streaming. Durable messages use acknowledged reliable transport and local durable state. Support idempotency, acknowledgements, scoped ordering, correlation/causation, expiry, bounded retries, dead letters, backpressure, authorization, audit, and offline retention/reconnect delivery. No separately deployed broker is mandatory.
+Federation does not require a general-purpose messaging subsystem, durable message queues, publish/subscribe, dead-letter handling, or guaranteed event delivery. Use direct authenticated service/task requests over the peer transport. The receiving instance persists accepted tasks in its own task store and exposes task status and results through its task API. The requester may poll while the peer is reachable. If a request times out or its response is lost, the requester uses the same task identity/idempotency key when checking or resubmitting; it must not assume the remote operation failed.
 
-UDP is restricted to discovery, presence, and suitable small best-effort announcements.
+UDP remains limited to best-effort discovery and presence announcements. It must not carry task payloads or commands.
 
 ### 5.5 Derived-data and artifact exchange
 
@@ -158,7 +158,7 @@ The Control Center is the operator interface to federation, not an AI client. It
 - Peer identity, trust status, endpoint, protocol compatibility, and last-seen/expiry.
 - Availability and capability inventory with version information.
 - Active service and task delegations, progress, deadlines, and outcomes.
-- Messaging and artifact-transfer status, checkpoints, retries, and failures.
+- Artifact-transfer status, checkpoints, retries, and failures.
 - Revocation and explicit trust-management operations with confirmation.
 - Audit/provenance links and clear disconnected/degraded states.
 
@@ -170,10 +170,10 @@ Prefer Python-native components and avoid mandatory infrastructure:
 
 - Python `asyncio` and standard `socket` support for UDP discovery and presence.
 - `zeroconf` for mDNS/DNS-SD.
-- `grpcio` and `grpcio-tools` for typed reliable peer communication.
+- `grpcio` and `grpcio-tools` for typed peer communication.
 - Existing FastAPI contracts for REST.
 - `cryptography` and established TLS facilities for peer identity and trust.
-- SQLite per instance for local peer registry, trust metadata, message state, and transfer checkpoints where appropriate.
+- SQLite per instance for local peer registry, trust metadata, task state, and transfer checkpoints where appropriate.
 
 Do not introduce ZooKeeper, a global database, mandatory Kafka/RabbitMQ, a service mesh, or distributed consensus for the initial federation implementation. A peer must be fully useful without any of these systems.
 
@@ -214,7 +214,7 @@ Configuration must make federation behavior explicit and safe. The eventual conf
 - Static peers and optional DNS/rendezvous sources.
 - Trust roots, local identity, certificate rotation, and revocation.
 - Allowed peer identities, capabilities, partitions, and delegation scopes.
-- Resource, message, transfer, retry, and hop limits.
+- Resource, transfer, retry, and hop limits.
 
 Defaults: federation enabled for peer discovery/presence in a federation-capable deployment; minimal non-sensitive announcements; no automatic trust; no automatic data sharing; no unrestricted delegation. Operators may disable or scope discovery explicitly.
 
@@ -235,7 +235,7 @@ Federation is not complete until automated and multi-process tests prove:
 9. Federated RAG enforces source authorization and partition isolation before fusion/reranking.
 10. Messaging proves acknowledgement, idempotency, ordering scope, offline retention, retry/dead-letter behavior, and backpressure.
 11. Artifact exchange proves snapshot and incremental transfer, checkpoint recovery, deduplication, integrity, compatibility, invalidation, conflict handling, and import through different local storage adapters without database-file copying.
-12. Disconnect/reconnect, peer restart, partial failure, timeout, cancellation, duplicate delivery, and revocation are exercised across independently running instances.
+12. Disconnect/reconnect, peer restart, partial failure, timeout, cancellation, duplicate requests, ambiguous timeouts, and revocation are exercised across independently running instances.
 13. Control Center reports discovered/trusted/unavailable peers and active delegations from real API data, including explicit degraded states.
 14. Audit records identify the acting instance, peer, task/request, capability, authorization decision, data scope, artifact provenance, and outcome without recording secrets.
 
