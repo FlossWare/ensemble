@@ -85,7 +85,7 @@ The exact certificate provisioning, rotation, and revocation mechanism remains a
 
 ## 4. Peer communication and interfaces
 
-The peer transport is separate from discovery:
+The peer transport is separate from discovery. The current implementation provides direct REST request/response for service calls and direct REST submission/status lookup for delegated tasks. gRPC remains a possible typed transport adapter, not a prerequisite for the current slice:
 
 - **gRPC over authenticated TLS** is the initial preferred peer-to-peer transport for typed service calls and task operations. Use streaming only where it materially improves a specific operation; it is not a durable messaging guarantee.
 - **REST/HTTP** remains available for resource-oriented operations, administration, diagnostics, and compatibility.
@@ -98,7 +98,7 @@ Transport adapters must delegate to the same application/domain contracts and en
 
 ### 5.1 Service delegation
 
-A requester may invoke a specific versioned service on an authorized peer while retaining ownership of its parent task. The provider owns the execution lifecycle of the service request. Contracts include typed inputs/outputs, idempotency, correlation, deadlines, cancellation, structured errors, usage metadata, bounded retries for safe operations, circuit breakers, fallback, provenance, and hop/depth limits.
+A requester may invoke a specific versioned service on a peer and receive a bounded response while retaining ownership of its parent task. This is a direct request/response operation, not a task submission: it does not create a provider task record or transfer work ownership to the provider's Orchestrator. The provider executes the existing domain capability implementation and returns a typed response. The first implemented operation is `search.retrieve`, exposed through `POST /federation/services`; a requester invokes it through `POST /federation/peers/{peer_id}/services`. The versioned `ServiceRequest`/`ServiceResponse` contracts carry request identity, requester/provider identity, capability, operation, payload, optional deadline, correlation ID, and result. The current implementation uses a bounded HTTP request, validates capability/operation and payload, and rejects expired deadlines. It is deliberately not a general RPC framework: authentication/trust, policy enforcement, cancellation, usage accounting, richer structured errors, and multi-hop delegation remain future work. Service calls do not enter the task store and do not require reliable messaging.
 
 ### 5.2 Task delegation
 
@@ -114,7 +114,7 @@ The branch currently contains a narrow end-to-end `search.query` proof of concep
 
 This proves a basic peer-to-peer request path. The core Orchestrator now owns worker scheduling and handler dispatch, and the FastAPI lifecycle starts/stops the orchestrator as a service. Task persistence now uses the transport-neutral `SqliteTaskStore` and canonical task models. Existing federation-named database files and tables are migrated to the canonical task store on startup. Do not reintroduce worker loops into federation or API routes.
 
-Requester-side parent/child references are now persisted before outbound peer submission, including an explicit `submitted` state for ambiguous outcomes. Policy enforcement, richer execution controls, trust establishment, and artifact exchange remain incomplete. Federation must remain a thin adapter. The requester can query the provider's persisted task resource for status and results; there is no requirement for guaranteed push delivery or a separate messaging subsystem.
+Requester-side parent/child references are now persisted before outbound task submission, including an explicit `submitted` state for ambiguous outcomes. A separate direct service request/response path now exists for `search.retrieve`; it does not create task records. Policy enforcement, trust establishment, broader service coverage, and artifact exchange remain incomplete. Federation must remain a thin adapter. The requester can query the provider's persisted task resource for status and results; there is no requirement for guaranteed push delivery or a separate messaging subsystem.
 
 ### 5.3 Federated RAG
 
@@ -122,7 +122,7 @@ An instance may retrieve from authorized peers. Source-level authorization and p
 
 ### 5.4 Communication and task status
 
-Federation does not require a general-purpose messaging subsystem, durable message queues, publish/subscribe, dead-letter handling, or guaranteed event delivery. Use direct authenticated service/task requests over the peer transport. The receiving instance persists accepted tasks in its own task store and exposes task status and results through its task API. The requester may poll while the peer is reachable. If a request times out or its response is lost, the requester uses the same task identity/idempotency key when checking or resubmitting; it must not assume the remote operation failed.
+Federation does not require a general-purpose messaging subsystem, durable message queues, publish/subscribe, dead-letter handling, or guaranteed event delivery. Use direct peer service request/response and task submission/status requests over the peer transport. The receiving instance persists accepted tasks in its own task store and exposes task status and results through its task API. The requester may poll while the peer is reachable. If a request times out or its response is lost, the requester uses the same task identity/idempotency key when checking or resubmitting; it must not assume the remote operation failed.
 
 UDP remains limited to best-effort discovery and presence announcements. It must not carry task payloads or commands.
 
