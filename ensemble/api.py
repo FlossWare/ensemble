@@ -5077,6 +5077,38 @@ def create_app(
         if selected_profile is RuntimeProfile.STANDARD
         else ["core", "retrieval", "memory", "knowledge", "graph", "thompson", "collaboration", "ga", "learning"]
     )
+
+    async def runtime_capabilities():
+        descriptors = registry.resolve(selected_profile)
+        return {
+            "profile": selected_profile.value,
+            "groups": list(app.state.enabled_capability_groups),
+            "extensions": [
+                {
+                    "name": item.descriptor.name,
+                    "version": item.descriptor.version,
+                    "requires": list(item.descriptor.requires),
+                }
+                for item in descriptors
+            ],
+        }
+
+    async def runtime_capability_health():
+        statuses = await capability_lifecycle.health()
+        return {
+            "profile": selected_profile.value,
+            "status": "ready" if all(item.get("status") == "ready" for item in statuses) else "degraded",
+            "capabilities": statuses,
+        }
+
+    app.add_api_route(
+        "/api/v1/runtime/capabilities", runtime_capabilities,
+        methods=["GET"], tags=["operations"],
+    )
+    app.add_api_route(
+        "/api/v1/runtime/capabilities/health", runtime_capability_health,
+        methods=["GET"], tags=["operations"],
+    )
     return app
 
 
