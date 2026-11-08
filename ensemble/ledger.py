@@ -13,6 +13,7 @@ from sqlalchemy import (
     JSON, BigInteger, Column, DateTime, Integer, MetaData, String, Table,
     and_, insert, select, update,
 )
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import create_async_engine
 
 ledger_metadata = MetaData()
@@ -153,11 +154,9 @@ class SqliteLedgerStore:
     async def initialize(self):
         async with self.engine.begin() as conn:
             await conn.run_sync(ledger_metadata.create_all)
-            row = (await conn.execute(select(ledger_state.c.ledger_id).where(ledger_state.c.singleton_id == 1))).first()
-            if row is None:
-                await conn.execute(insert(ledger_state).values(
-                    singleton_id=1, ledger_id=str(uuid.uuid4()), head_sequence=0, head_hash=None
-                ))
+            await conn.execute(sqlite_insert(ledger_state).values(
+                singleton_id=1, ledger_id=str(uuid.uuid4()), head_sequence=0, head_hash=None
+            ).on_conflict_do_nothing(index_elements=["singleton_id"]))
 
     async def close(self):
         if self._owns_engine:
@@ -174,6 +173,9 @@ class SqliteLedgerStore:
 
     async def _append_locked(self, value):
         event = validate_event(value)
+        integrity = await self.verify()
+        if not integrity["ok"]:
+            raise RuntimeError("refusing append to an invalid ledger: " + integrity["failure_category"])
         try:
             async with self.engine.begin() as conn:
                 allocated = (await conn.execute(
@@ -282,6 +284,8 @@ class SqliteLedgerStore:
             previous, expected = item["entry_sha256"], expected + 1
         if expected <= end:
             return {"ok": False, "first_failing_sequence": expected, "failure_category": "missing_sequence", "assurance": "hash_chain", "verified_count": expected-from_sequence}
+        if from_sequence == 1 and end == state["head_sequence"] and previous != state["head_hash"]:
+            return {"ok": False, "first_failing_sequence": end, "failure_category": "head_hash_mismatch", "assurance": "hash_chain", "verified_count": len(rows)}
         return {"ok": True, "from_sequence": from_sequence, "through_sequence": end, "verified_count": len(rows), "assurance": "hash_chain" if from_sequence == 1 else "hash_chain_with_external_checkpoint"}
 
     async def import_batch(self, source_ledger_id, entries):
@@ -291,6 +295,9 @@ class SqliteLedgerStore:
     async def _import_batch_locked(self, source_ledger_id, entries):
         if not isinstance(source_ledger_id, str) or not source_ledger_id or not isinstance(entries, list) or len(entries) > 1000:
             raise ValueError("source_ledger_id and up to 1000 entries are required")
+        integrity = await self.verify()
+        if not integrity["ok"]:
+            raise RuntimeError("refusing import into an invalid ledger: " + integrity["failure_category"])
         imported, duplicates = [], []
         previous_source_sequence = 0
         async with self.engine.begin() as conn:
