@@ -50,7 +50,7 @@ from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryRecla
 from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
 from .partitioning import partition_scope_middleware
-from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id
+from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id, inspect_peer
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -738,6 +738,17 @@ def create_app(
     @app.get("/federation/peers", tags=["federation"])
     async def federation_peers():
         return {"instance": federation_instance, "peers": federation_registry.list()}
+
+    @app.get("/federation/overview", tags=["federation"])
+    async def federation_overview():
+        peers = federation_registry.list()
+        inspected = await asyncio.gather(*(inspect_peer(peer) for peer in peers))
+        return {
+            "instance": federation_instance,
+            "discovery": "multicast" if federation_enabled and federation_discovery._started else "disabled" if not federation_enabled else "unavailable",
+            "peer_count": len(inspected),
+            "peers": inspected,
+        }
 
     @app.get("/ready", tags=["operations"])
     async def ready():
