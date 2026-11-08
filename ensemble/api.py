@@ -13,8 +13,8 @@ import math
 import time
 from contextlib import asynccontextmanager
 from typing import Any
-from uuid import uuid4
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from uuid import UUID, uuid4
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.openapi.utils import get_openapi
@@ -2098,8 +2098,10 @@ def create_app(
             "promotion_policy": "explicit-approval-required; approval records an export candidate and never changes live settings",
         }
 
-    async def execute_ga_run(run_id: str, config: dict[str, Any]):
+    async def execute_ga_task(task):
         from datetime import datetime, timezone
+        run_id = task.payload["run_id"]
+        config = task.payload["config"]
         await active_ga_store.update_run(
             run_id, status="running", started_at=datetime.now(timezone.utc)
         )
@@ -2111,14 +2113,18 @@ def create_app(
                 run_id, status="completed", result=result,
                 completed_at=datetime.now(timezone.utc), error=None,
             )
+            return {"run_id": run_id, "status": "completed"}
         except Exception as exc:
             await active_ga_store.update_run(
                 run_id, status="failed", error=f"{type(exc).__name__}: {exc}",
                 completed_at=datetime.now(timezone.utc),
             )
+            raise
+
+    active_orchestrator.register("ga.run", execute_ga_task)
 
     @app.post("/api/v1/ga/runs", status_code=202, tags=["ga"])
-    async def ga_create_run(payload: dict[str, Any], background_tasks: BackgroundTasks):
+    async def ga_create_run(payload: dict[str, Any]):
         allowed = {"population_size", "generations", "crossover_rate", "mutation_rate", "tournament_k", "seed"}
         unknown = set(payload) - allowed
         if unknown:
@@ -2137,8 +2143,24 @@ def create_app(
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         run = await active_ga_store.create_run(config)
-        background_tasks.add_task(execute_ga_run, run["id"], config)
-        return {"ok": True, "run": run}
+        submission = TaskSubmission(
+            task_id=UUID(run["id"]),
+            idempotency_key=f"ga-run:{run['id']}",
+            target_capability="ga",
+            task_type="ga.run",
+            payload={"run_id": run["id"], "config": config},
+        )
+        try:
+            await active_orchestrator.submit_local(submission)
+        except Exception as exc:
+            from datetime import datetime, timezone
+            await active_ga_store.update_run(
+                run["id"], status="failed",
+                error=f"{type(exc).__name__}: task submission failed",
+                completed_at=datetime.now(timezone.utc),
+            )
+            raise HTTPException(status_code=503, detail="GA run could not be submitted to the orchestrator") from exc
+        return {"ok": True, "run": run, "task_id": run["id"]}
 
     @app.get("/api/v1/ga/runs", tags=["ga"])
     async def ga_list_runs(limit: int = 50):
