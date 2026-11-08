@@ -137,12 +137,6 @@ class SqliteLedgerStore:
         event = validate_event(value)
         try:
             async with self.engine.begin() as conn:
-                state = (await conn.execute(select(ledger_state).where(ledger_state.c.singleton_id == 1))).mappings().one()
-                existing = (await conn.execute(select(ledger_entries).where(ledger_entries.c.event_id == event["event_id"]))).mappings().first()
-                if existing:
-                    if digest(existing["payload"]) == digest(event["payload"]) and all(existing[k] == event[k] for k in ("event_type", "source", "timestamp", "correlation_id")):
-                        return {"status": "duplicate", "entry": dict(existing)}
-                    raise ValueError("event_id already exists with different content")
                 allocated = (await conn.execute(
                     update(ledger_state).where(ledger_state.c.singleton_id == 1)
                     .values(head_sequence=ledger_state.c.head_sequence + 1)
