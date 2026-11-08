@@ -77,7 +77,7 @@ These are not yet one fully coherent orchestration system. GA and transcript lif
 2. Inventory and map existing GA, transcript, generation and indexing lifecycle behavior. Preserve domain-specific state and recovery semantics; do not blindly replace mature stores with a generic blob.
 3. Add explicit task events, progress, cancellation, deadlines, bounded retry policy, and parent/child lineage to the canonical lifecycle.
 4. Adapt transcript ingestion through a registered handler where appropriate, retaining domain-specific checkpoint stores for their own work units. GA execution already uses the `ga.run` handler and retains `GAStore` for domain-specific results.
-5. Add requester-side parent/child tracking and reliable lifecycle/result delivery over messaging.
+5. Add requester-side parent/child tracking. The requester reads delegated-task status and results from the provider's persisted task resource when reachable; do not introduce a separate reliable messaging subsystem.
 6. Move Control Center task views to canonical orchestrator APIs.
 7. Add further handlers only after the shared lifecycle works end to end.
 
