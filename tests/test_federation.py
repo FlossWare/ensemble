@@ -55,3 +55,38 @@ def test_graceful_departure_marks_peer_offline():
     peer = registry.list(now=106)[0]
     assert peer["status"] == "offline"
     assert peer["seconds_since_seen"] == 6
+
+
+
+def test_inspect_peer_reports_remote_readiness(monkeypatch):
+    import asyncio
+    from ensemble import federation
+
+    def fake_read(endpoint, path, timeout):
+        if path == "/health":
+            return {"reachable": True, "http_status": 200, "data": {"status": "ok"}}
+        return {"reachable": True, "http_status": 200, "data": {"status": "ready", "capabilities": ["search", "memory"]}}
+
+    monkeypatch.setattr(federation, "_read_peer_endpoint", fake_read)
+    peer = _announcement()
+    peer["last_seen"] = 100
+    peer["expires_at"] = 200
+    peer["first_seen"] = 90
+    result = asyncio.run(federation.inspect_peer(peer))
+    assert result["remote_status"] == "ready"
+    assert result["capabilities"] == ["search", "memory"]
+    assert result["health"]["data"]["status"] == "ok"
+
+
+def test_inspect_peer_reports_unreachable_peer(monkeypatch):
+    import asyncio
+    from ensemble import federation
+
+    def fake_read(endpoint, path, timeout):
+        return {"reachable": False, "error": "timeout"}
+
+    monkeypatch.setattr(federation, "_read_peer_endpoint", fake_read)
+    peer = _announcement()
+    result = asyncio.run(federation.inspect_peer(peer))
+    assert result["remote_status"] == "unreachable"
+    assert result["capabilities"] == peer["capabilities"]
