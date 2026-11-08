@@ -76,14 +76,16 @@ class CapabilityLifecycle:
         self.registry = registry
         self.context = context
         self._started: list[Capability] = []
+        self._started_once = False
 
     @property
     def started(self) -> tuple[str, ...]:
         return tuple(item.descriptor.name for item in self._started)
 
     async def start(self) -> None:
-        if self._started:
+        if self._started_once:
             raise CapabilityError("capability lifecycle has already been started")
+        self._started_once = True
         plan = self.registry.resolve(self.context.profile)
         try:
             for capability in plan:
