@@ -30,7 +30,7 @@ def _canonical(value: dict[str, Any]) -> str:
 
 
 class TaskRequest(BaseModel):
-    contract_version: int = Field(default=1, ge=1, le=100)
+    contract_version: Literal[1] = 1
     task_id: UUID = Field(default_factory=uuid4)
     parent_task_id: UUID | None = None
     idempotency_key: str = Field(min_length=1, max_length=256)
@@ -58,7 +58,7 @@ class TaskRequest(BaseModel):
 
 
 class TaskRecord(BaseModel):
-    contract_version: int = Field(default=1, ge=1, le=100)
+    contract_version: Literal[1] = 1
     task_id: UUID
     parent_task_id: UUID | None = None
     idempotency_key: str
@@ -250,7 +250,7 @@ class SqliteTaskStore:
 
 
 class TaskSubmission(BaseModel):
-    contract_version: int = Field(default=1, ge=1, le=100)
+    contract_version: Literal[1] = 1
     task_id: UUID = Field(default_factory=uuid4)
     parent_task_id: UUID | None = None
     idempotency_key: str = Field(min_length=1, max_length=256)
