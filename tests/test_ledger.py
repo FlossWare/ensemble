@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from ensemble.ledger import SqliteLedgerStore
+from ensemble.ledger import SqliteLedgerStore, envelope_for
 
 
 def event(event_id, payload=None, **extra):
@@ -93,19 +93,18 @@ def test_ledger_import_is_idempotent_and_conflict_safe(tmp_path):
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'import.db'}")
         store = SqliteLedgerStore(engine)
         await store.initialize()
-        source = {
+        source_event = {
             "event_id": "source-1", "event_type": "test", "source": "poc",
             "timestamp": "2026-11-07T12:00:00Z", "correlation_id": None,
-            "payload": {"value": 1}, "sequence": 8,
-            "payload_sha256": __import__("hashlib").sha256(b'{"value":1}').hexdigest(),
-            "entry_sha256": "source-hash", "provenance": {},
+            "payload": {"value": 1},
         }
+        source = envelope_for("poc-ledger", 8, source_event, "2026-11-07T12:00:01Z", "a" * 64)
         first = await store.import_batch("poc-ledger", [source])
         second = await store.import_batch("poc-ledger", [source])
         assert first["imported"] == ["source-1"]
         assert second["duplicates"] == ["source-1"]
-        conflict = dict(source, payload={"value": 2})
-        conflict["payload_sha256"] = __import__("hashlib").sha256(b'{"value":2}').hexdigest()
+        conflict_event = dict(source_event, payload={"value": 2})
+        conflict = envelope_for("poc-ledger", 9, conflict_event, "2026-11-07T12:00:02Z", source["entry_sha256"])
         with pytest.raises(ValueError, match="conflict"):
             await store.import_batch("poc-ledger", [conflict])
         assert (await store.status())["head_sequence"] == 1
