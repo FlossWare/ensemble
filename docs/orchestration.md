@@ -67,20 +67,19 @@ The current code has useful domain-specific lifecycle foundations:
 - GA runs persist pending/running/completed/failed state in `GAStore`.
 - Transcript ingestion jobs persist attempts, status, results and interrupted-job recovery in `TranscriptCheckpointStore`.
 - Generation and indexing workflows have their own durable lifecycle and recovery rules.
-- The initial federation implementation used `FederatedTaskStore` and an API-owned worker loop. The worker loop has been moved into the core `Orchestrator`, which owns handler registration, scheduling, dispatch, execution, and worker lifecycle. The persistence adapter and task models still carry federation-specific names and are not yet the final transport-neutral contract.
+- The initial federation implementation used `FederatedTaskStore` and an API-owned worker loop. The worker loop has been moved into the core `Orchestrator`, which owns handler registration, scheduling, dispatch, execution, and worker lifecycle. `SqliteTaskStore` now owns canonical task persistence in `tasks.sqlite3`; startup migrates the former federation-specific database and table. The old `ensemble.federated_tasks` module remains only as compatibility aliases.
 
 These are not yet one fully coherent orchestration system. GA and transcript lifecycles remain domain-specific and must be mapped deliberately, preserving their recovery semantics.
 
 ## 6. Migration sequence
 
-1. Generalize the federation-specific request/record/store into a transport-neutral task contract and canonical task persistence schema.
-2. Add local task submission so the orchestrator is exercised without federation; local and remote submissions must share one path.
-3. Inventory and map existing GA, transcript, generation and indexing lifecycle behavior. Preserve domain-specific state and recovery semantics; do not blindly replace mature stores with a generic blob.
-4. Add explicit task events, progress, cancellation, deadlines, bounded retry policy, and parent/child lineage to the canonical lifecycle.
-5. Adapt GA and transcript operations through registered handlers where appropriate, retaining domain-specific checkpoint stores for their own work units.
-6. Add requester-side parent/child tracking and reliable lifecycle/result delivery over messaging.
-7. Move Control Center task views to canonical orchestrator APIs.
-8. Add further handlers only after the shared lifecycle works end to end.
+1. Add task schema versioning, partition-aware persistence, and migration/rollback coverage for the canonical task store.
+2. Inventory and map existing GA, transcript, generation and indexing lifecycle behavior. Preserve domain-specific state and recovery semantics; do not blindly replace mature stores with a generic blob.
+3. Add explicit task events, progress, cancellation, deadlines, bounded retry policy, and parent/child lineage to the canonical lifecycle.
+4. Adapt GA and transcript operations through registered handlers where appropriate, retaining domain-specific checkpoint stores for their own work units.
+5. Add requester-side parent/child tracking and reliable lifecycle/result delivery over messaging.
+6. Move Control Center task views to canonical orchestrator APIs.
+7. Add further handlers only after the shared lifecycle works end to end.
 
 ## 7. Acceptance criteria
 
