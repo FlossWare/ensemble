@@ -18,9 +18,9 @@ Federation is now an explicit product requirement, not an optional infrastructur
 
 ## 3. REST is the canonical boundary
 
-REST/HTTP is the canonical contract for external consumers and capability-to-capability communication.
+REST/HTTP is the canonical resource/operation contract for external consumers and intra-instance capability communication. A capability calls another co-located capability through its REST contract, even when both share a process. Direct in-process calls are not the normal service boundary. Co-location is a deployment choice, not permission to bypass the contract.
 
-A capability calls another capability through its REST contract, even when both are co-located. Direct in-process calls are not the normal service boundary. Co-location is a deployment choice, not permission to bypass the contract.
+Across independently deployed Ensemble peers, the versioned gRPC federation contract is the preferred typed service-to-service transport; REST remains available for resource-oriented peer operations and administration. MCP and GraphQL are additional consumer interfaces. Every interface delegates to the same application/domain services and preserves equivalent authorization, partition, policy, provenance, validation, and error behavior.
 
 Contracts are language-neutral. Implementations may use the language and runtime suited to the capability; consumers must not depend on implementation language or framework.
 
