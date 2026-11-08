@@ -28,3 +28,5 @@ def test_standard_profile_omits_optional_ga_and_learning_capabilities():
     paths = {route.path for route in app.routes if hasattr(route, "path")}
     assert not any(path.startswith("/api/v1/ga/") for path in paths)
     assert not any(path.startswith("/api/v1/learning/") for path in paths)
+    assert "/api/v1/runtime/capabilities" in paths
+    assert "/api/v1/runtime/capabilities/health" in paths
