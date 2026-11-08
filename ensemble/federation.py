@@ -5,6 +5,8 @@ import json
 import os
 import socket
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -269,3 +271,43 @@ class MulticastDiscovery:
                 raise
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
+
+
+
+def _read_peer_endpoint(endpoint: str, path: str, timeout: float) -> dict[str, Any]:
+    request = urllib.request.Request(
+        endpoint.rstrip("/") + path,
+        headers={"Accept": "application/json", "User-Agent": "Ensemble-Federation/1"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = response.read(1024 * 1024)
+            data = json.loads(payload.decode("utf-8"))
+            return {"reachable": True, "http_status": response.status, "data": data}
+    except (OSError, urllib.error.URLError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return {"reachable": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+async def inspect_peer(peer: dict[str, Any], timeout: float = 2.0) -> dict[str, Any]:
+    """Fetch live operational details from a discovered peer without blocking the event loop."""
+    endpoint = peer.get("endpoint", "")
+    if not isinstance(endpoint, str) or not endpoint.startswith(("http://", "https://")):
+        return {**peer, "health": {"reachable": False, "error": "invalid endpoint"}}
+    health, ready = await asyncio.gather(
+        asyncio.to_thread(_read_peer_endpoint, endpoint, "/health", timeout),
+        asyncio.to_thread(_read_peer_endpoint, endpoint, "/ready", timeout),
+    )
+    return {
+        **peer,
+        "health": health,
+        "readiness": ready,
+        "remote_status": (
+            "ready" if health.get("reachable") and ready.get("reachable")
+            and ready.get("data", {}).get("status") == "ready"
+            else "degraded" if health.get("reachable") else "unreachable"
+        ),
+        "capabilities": (
+            ready.get("data", {}).get("capabilities", peer.get("capabilities", []))
+            if ready.get("reachable") else peer.get("capabilities", [])
+        ),
+    }
