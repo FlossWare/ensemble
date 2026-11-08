@@ -74,6 +74,6 @@ A future correlated trace must be emitted by the actual ingestion/retrieval exec
 
 ## Federation workbench status
 
-The first LAN discovery slice is implemented. The browser polls `GET /federation/status` and renders the local instance plus discovered peers, endpoint, capabilities, last-seen age, online/offline status, and peer details. `GET /federation/peers` provides the peer-list resource. The backend owns multicast discovery and peer expiry; browser code does not scan the network or maintain an independent registry.
+The LAN discovery slice is implemented. The browser polls `GET /federation/overview`, which inspects each discovered peer through its `/health` and `/ready` endpoints and renders remote reachability/readiness plus capabilities. `GET /federation/status` provides local discovery state and the peer registry; `GET /federation/peers` provides the peer-list resource. The backend owns multicast discovery, peer expiry, and remote inspection; browser code does not scan the network or maintain an independent registry.
 
 Still planned: peer capability detail negotiation, resource/health telemetry, reliable messaging, service/task delegation, federated RAG, and derived-artifact transfer visibility. The current peer list is in-memory and repopulates after restart. See [Control Center Requirements](control-center-requirements.md) and [Federation](federation.md).
