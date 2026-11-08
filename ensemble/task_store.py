@@ -293,13 +293,17 @@ class SqliteTaskStore:
             if parent.origin_instance_id != local_instance_id:
                 raise ValueError("parent task is not owned by this instance")
             existing = db.execute(
-                "SELECT record_json FROM ensemble_delegated_tasks WHERE peer_instance_id=? AND task_id=?",
-                (peer_instance_id, str(submission.task_id)),
+                "SELECT record_json FROM ensemble_delegated_tasks WHERE (peer_instance_id=? AND task_id=?) OR (parent_task_id=? AND peer_instance_id=? AND idempotency_key=?)",
+                (
+                    peer_instance_id, str(submission.task_id), str(parent_task_id),
+                    peer_instance_id, submission.idempotency_key,
+                ),
             ).fetchone()
             if existing:
                 current = DelegatedTaskReference.model_validate_json(existing[0])
                 if (
                     current.parent_task_id != parent_task_id
+                    or current.task_id != submission.task_id
                     or current.idempotency_key != submission.idempotency_key
                     or current.target_capability != submission.target_capability
                     or current.task_type != submission.task_type
