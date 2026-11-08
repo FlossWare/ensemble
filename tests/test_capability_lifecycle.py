@@ -37,10 +37,9 @@ class FakeCapability:
 
 
 def test_registry_resolves_dependencies_before_dependents():
-    events = []
     registry = CapabilityRegistry()
-    registry.register(FakeCapability("retrieval", requires=("storage",), events=events))
-    registry.register(FakeCapability("storage", events=events))
+    registry.register(FakeCapability("retrieval", requires=("storage",)))
+    registry.register(FakeCapability("storage"))
     plan = registry.resolve(RuntimeProfile.STANDARD)
     assert [item.descriptor.name for item in plan] == ["storage", "retrieval"]
 
@@ -68,19 +67,20 @@ def test_registry_rejects_missing_profile_dependency_and_cycles():
 
 def test_lifecycle_starts_in_order_and_stops_in_reverse():
     async def scenario():
-    events = []
-    registry = CapabilityRegistry()
-    registry.register(FakeCapability("b", requires=("a",), events=events))
-    registry.register(FakeCapability("a", events=events))
-    lifecycle = CapabilityLifecycle(registry, RuntimeContext(RuntimeProfile.FULL))
-    await lifecycle.start()
-    assert lifecycle.started == ("a", "b")
-    assert await lifecycle.health() == [
-        {"capability": "a", "status": "ready"},
-        {"capability": "b", "status": "ready"},
-    ]
-    await lifecycle.stop()
-    assert events == ["start:a", "start:b", "stop:b", "stop:a"]
+        events = []
+        registry = CapabilityRegistry()
+        registry.register(FakeCapability("b", requires=("a",), events=events))
+        registry.register(FakeCapability("a", events=events))
+        lifecycle = CapabilityLifecycle(registry, RuntimeContext(RuntimeProfile.FULL))
+        await lifecycle.start()
+        assert lifecycle.started == ("a", "b")
+        assert await lifecycle.health() == [
+            {"capability": "a", "status": "ready"},
+            {"capability": "b", "status": "ready"},
+        ]
+        await lifecycle.stop()
+        assert events == ["start:a", "start:b", "stop:b", "stop:a"]
+
     asyncio.run(scenario())
 
 
@@ -95,6 +95,7 @@ def test_lifecycle_rolls_back_partial_startup():
             await lifecycle.start()
         assert lifecycle.started == ()
         assert events == ["start:a", "start:b", "stop:a"]
+
     asyncio.run(scenario())
 
 
