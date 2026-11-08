@@ -838,7 +838,7 @@ def create_app(
         return host_metrics(federation_settings.persistence_root)
 
     @app.post("/api/v1/tasks", status_code=202, tags=["orchestration"])
-    async def submit_local_task(submission: FederatedTaskSubmission):
+    async def submit_local_task(submission: TaskSubmission):
         if submission.target_capability != "search" or submission.task_type != "search.query":
             raise HTTPException(status_code=409, detail="task type is not currently executable by this instance")
         try:
@@ -870,7 +870,7 @@ def create_app(
         return record
 
     @app.post("/federation/tasks", status_code=202, tags=["federation"])
-    async def accept_federated_task(task: FederatedTaskRequest):
+    async def accept_federated_task(task: TaskRequest):
         if not federation_enabled:
             raise HTTPException(status_code=503, detail="federation is disabled")
         advertised = set(federation_discovery.message["capabilities"])
