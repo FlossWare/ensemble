@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from ensemble.core import (
@@ -64,8 +66,8 @@ def test_registry_rejects_missing_profile_dependency_and_cycles():
         cyclic.resolve(RuntimeProfile.STANDARD)
 
 
-@pytest.mark.asyncio
-async def test_lifecycle_starts_in_order_and_stops_in_reverse():
+def test_lifecycle_starts_in_order_and_stops_in_reverse():
+    async def scenario():
     events = []
     registry = CapabilityRegistry()
     registry.register(FakeCapability("b", requires=("a",), events=events))
@@ -79,19 +81,21 @@ async def test_lifecycle_starts_in_order_and_stops_in_reverse():
     ]
     await lifecycle.stop()
     assert events == ["start:a", "start:b", "stop:b", "stop:a"]
+    asyncio.run(scenario())
 
 
-@pytest.mark.asyncio
-async def test_lifecycle_rolls_back_partial_startup():
-    events = []
-    registry = CapabilityRegistry()
-    registry.register(FakeCapability("a", events=events))
-    registry.register(FakeCapability("b", requires=("a",), events=events, fail=True))
-    lifecycle = CapabilityLifecycle(registry, RuntimeContext(RuntimeProfile.FULL))
-    with pytest.raises(RuntimeError, match="startup failed"):
-        await lifecycle.start()
-    assert lifecycle.started == ()
-    assert events == ["start:a", "start:b", "stop:a"]
+def test_lifecycle_rolls_back_partial_startup():
+    async def scenario():
+        events = []
+        registry = CapabilityRegistry()
+        registry.register(FakeCapability("a", events=events))
+        registry.register(FakeCapability("b", requires=("a",), events=events, fail=True))
+        lifecycle = CapabilityLifecycle(registry, RuntimeContext(RuntimeProfile.FULL))
+        with pytest.raises(RuntimeError, match="startup failed"):
+            await lifecycle.start()
+        assert lifecycle.started == ()
+        assert events == ["start:a", "start:b", "stop:a"]
+    asyncio.run(scenario())
 
 
 def test_duplicate_capability_registration_is_rejected():
