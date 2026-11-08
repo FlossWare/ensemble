@@ -55,7 +55,7 @@ from .partitioning import partition_scope_middleware
 from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id, host_metrics, inspect_peer
 from .task_store import TaskRequest, TaskSubmission, SqliteTaskStore
 from .orchestration import Orchestrator
-from .service_delegation import ServiceRequest, ServiceResponse
+from .service_delegation import ServiceInvocation, ServiceRequest, ServiceResponse
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -790,7 +790,7 @@ def create_app(
         return {"instance": federation_instance, "peers": federation_registry.list()}
 
     @app.post("/federation/peers/{peer_id}/services", tags=["federation"])
-    async def invoke_peer_service(peer_id: str, service_request: ServiceRequest):
+    async def invoke_peer_service(peer_id: str, invocation: ServiceInvocation):
         if not federation_enabled:
             raise HTTPException(status_code=503, detail="federation is disabled")
         peer = next((item for item in federation_registry.list() if item["instance_id"] == peer_id), None)
@@ -798,20 +798,23 @@ def create_app(
             raise HTTPException(status_code=404, detail="federation peer not found")
         if peer["status"] != "online":
             raise HTTPException(status_code=503, detail="federation peer is offline")
-        if service_request.target_capability not in peer["capabilities"]:
+        if invocation.target_capability not in peer["capabilities"]:
             raise HTTPException(status_code=409, detail="peer does not advertise the requested capability")
-        if service_request.target_capability != "search" or service_request.operation != "search.retrieve":
+        if invocation.target_capability != "search" or invocation.operation != "search.retrieve":
             raise HTTPException(status_code=409, detail="service operation is not supported for peer delegation")
-        query = service_request.payload.get("query")
-        limit = service_request.payload.get("limit", 10)
-        rerank = service_request.payload.get("rerank", False)
+        query = invocation.payload.get("query")
+        limit = invocation.payload.get("limit", 10)
+        rerank = invocation.payload.get("rerank", False)
         if not isinstance(query, str) or not query.strip():
             raise HTTPException(status_code=422, detail="search.retrieve requires a non-empty payload.query")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise HTTPException(status_code=422, detail="search.retrieve payload.limit must be between 1 and 100")
         if not isinstance(rerank, bool):
             raise HTTPException(status_code=422, detail="search.retrieve payload.rerank must be a boolean")
-        outbound = service_request.model_copy(update={"requester_instance_id": federation_instance_id})
+        outbound = ServiceRequest(
+            **invocation.model_dump(mode="python"),
+            requester_instance_id=federation_instance_id,
+        )
         timeout = 15.0
         if outbound.deadline is not None:
             remaining = (outbound.deadline - datetime.now(timezone.utc)).total_seconds()
