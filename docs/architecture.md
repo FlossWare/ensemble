@@ -1,6 +1,6 @@
 # Ensemble Architecture
 
-**Status:** Accepted architectural direction. Implementation status is tracked separately in docs/implementation-status.md and docs/review-readiness.md.
+**Status:** Accepted architectural direction. Federation and the four public interfaces are required capabilities; implementation status is tracked separately in docs/implementation-status.md and docs/review-readiness.md.
 
 ## 1. Purpose and product boundary
 
@@ -12,17 +12,9 @@ Ensemble must operate independently of any client application and optional model
 
 ## 2. Deployment shape
 
-The initial deployment is deliberately simple:
+The initial deployment remains deliberately simple within each instance: one application, one local persistence boundary, and independently addressable capabilities behind stable contracts. An Ensemble instance may run on a workstation, laptop, or server. Every instance owns its own orchestration authority, governed state, policies, services, workers, and Control Center, and remains operational without network access.
 
-- One application.
-- One REST server/listener.
-- Multiple versioned endpoint groups.
-- Independently addressable logical capabilities.
-- Pluggable implementations behind stable contracts.
-
-Capabilities may share a process and deployment initially. Their REST contracts and ownership remain independent so a capability can move to another process or host without changing consumers.
-
-Do not introduce federation, service discovery, service meshes, brokers, distributed coordination, or a microservice fleet without a concrete requirement.
+Federation is now an explicit product requirement, not an optional infrastructure experiment. Independently operated instances may discover and cooperate with explicitly trusted peers without a global coordinator, shared database, mandatory broker, service mesh, or distributed consensus. See [Federation](federation.md) for the peer contract, discovery, presence, trust, transport, delegation, messaging, and artifact exchange requirements.
 
 ## 3. REST is the canonical boundary
 
@@ -88,18 +80,18 @@ EnMaaS is the identified enterprise model-gateway integration direction. It is a
 
 Embedding and ranking providers are pluggable behind Ensemble-owned contracts. Optional generation is provider-backed and must not become a dependency of retrieval or other non-generation capabilities.
 
-MCP is an optional adapter over existing Ensemble REST operations. REST remains canonical; MCP tools map to existing operations; MCP contains no duplicate business logic; and Ensemble remains fully usable when MCP is disabled.
+MCP, GraphQL, and gRPC are required first-class interfaces over the same application/domain services as REST. REST is the canonical resource/operation contract. MCP exposes tools/resources to AI clients; GraphQL supports bounded client-driven queries/mutations; gRPC provides typed service-to-service operations and justified streaming. These interfaces must share authorization, partition enforcement, provenance, validation, error semantics, and persistence. None may create duplicate business logic or a separate persistence path.
 
-## 9. Explicitly out of scope initially
+## 9. Explicitly out of scope
 
 - The broader FlossWare ecosystem and its shared infrastructure implementations.
-- Client-specific workflows inside the Ensemble platform.
-- A mandatory MCP server.
-- Federation and distributed service discovery.
-- Service mesh, message brokers, and distributed coordination.
+- Client-specific workflows and AI-client runtimes inside the Ensemble platform.
+- Mandatory service mesh, external message broker, global coordinator, distributed consensus, or shared database.
 - A required generation model.
 - Premature provider federation or a model broker.
 - Rebuilding or migrating unrelated active data stores as a prerequisite for Ensemble implementation.
+
+Federation, peer discovery/presence, messaging, service/task delegation, federated RAG, and storage-independent derived-artifact exchange are required. They are not out of scope; see [Federation](federation.md).
 
 ## 10. Implementation sequence
 
@@ -109,8 +101,10 @@ MCP is an optional adapter over existing Ensemble REST operations. REST remains 
 4. Consolidate capabilities incrementally, including Memory, Graph, Knowledge, ingestion, indexing, embeddings, retrieval/RAG, and context assembly.
 5. Integrate the relevant deletion lifecycle within each capability: soft deletion, restoration, purge strategies, and propagation to derived data.
 6. Validate data integrity, failure behavior, recovery, and operational behavior.
-7. Build client integrations as independent consumers.
-8. Revisit generic contracts and broader abstractions only when concrete use cases justify them.
+7. Deliver the required MCP, GraphQL, and gRPC interfaces over the shared core services.
+8. Deliver federation incrementally: peer identity/trust, automatic discovery/presence, capability negotiation, reliable peer transport, messaging, service/task delegation, federated RAG, and derived-artifact exchange.
+9. Build client integrations as independent consumers in separate ensemble-* projects.
+10. Revisit generic contracts and broader abstractions only when concrete use cases justify them.
 
 Do not create a separate phase or framework for a concern that belongs inside the capability being implemented.
 
@@ -120,7 +114,11 @@ Do not create a separate phase or framework for a concern that belongs inside th
 - Retrieval works when no generation model is configured or reachable.
 - A capability can move from the co-located deployment to another process or host without changing its REST contract or consumer behavior.
 - Internal capability calls use the same REST contracts as external calls.
-- MCP can be disabled without reducing the REST capability surface.
+- REST, MCP, GraphQL, and gRPC exercise the same core services and enforce equivalent authorization and partition isolation.
+- Each instance remains operational without peers; discovery/presence is automatic by default when federation is enabled.
+- Discovery announcements never establish trust; only mutually authenticated and authorized peers can invoke protected capabilities.
+- UDP is used only for best-effort discovery/presence; reliable operations use acknowledged transports.
+- Federation, messaging, delegation, federated RAG, and artifact exchange recover safely from disconnects and restarts without shared database files or global coordination.
 - Data deletion, restoration, and permanent purge cannot leave stale derived data visible or allow deleted data to be resurrected.
 
 
@@ -139,3 +137,8 @@ When no token map is configured, local single-partition mode is limited to `defa
 All SQLite-backed capabilities resolve their database connection from the authenticated request scope. Internal REST calls propagate the selected partition and credential. A new named partition is provisioned by applying the same Alembic migration chain to its empty database on first use, then recording and checking the partition identity. Existing default-partition data is not copied into named partitions.
 
 The in-memory adapters are test/development adapters and are not a multi-partition persistence option. Do not use them for a deployment that enables partition credentials.
+
+
+## 13. Federation
+
+Every Ensemble instance is an autonomous peer. When federation is enabled, it listens for peer announcements and broadcasts minimal presence by default: promptly at startup, periodically (initial design default 30 seconds), after endpoint/capability changes, and on clean shutdown. A configurable TTL (initial design default three heartbeat intervals) expires peers that disappear unexpectedly. mDNS/DNS-SD and scoped UDP multicast support LAN discovery; static peers, DNS, and optional rendezvous/peer exchange support routed networks. Announcements are untrusted hints and contain no credentials or user/task data. Mutual authentication, protocol negotiation, trust validation, and local authorization are required before peer use. UDP is not a reliable task or messaging transport. SSH remains the constrained remote-worker transport; authenticated gRPC is the preferred peer transport. See [Federation](federation.md) for the complete contract and acceptance criteria.
