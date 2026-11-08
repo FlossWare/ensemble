@@ -39,6 +39,10 @@ def test_federation_status_exposes_local_instance_and_discovered_peers(tmp_path)
         assert status["instance"]["endpoint"].startswith("http://")
         assert isinstance(status["peers"], list)
         assert status["peer_count"] == len(status["peers"])
+        overview = client.get("/federation/overview")
+        assert overview.status_code == 200
+        assert overview.json()["peer_count"] == 0
+        assert overview.json()["peers"] == []
         peers = client.get("/federation/peers")
         assert peers.status_code == 200
         assert peers.json()["instance"]["instance_id"] == status["instance"]["instance_id"]
