@@ -39,9 +39,43 @@ class InMemoryGraphStore:
         self.edges[identifier] = record
         return dict(record)
 
+    async def reclaim_source(self, source_id):
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        source_node_ids = {
+            identifier for identifier, node in self.nodes.items()
+            if node["type"] == "source"
+            and node["properties"].get("source_id") == source_id
+        }
+        edge_ids = [
+            identifier for identifier, edge in self.edges.items()
+            if edge["source"] in source_node_ids
+            or edge["target"] in source_node_ids
+            or edge["properties"].get("source_id") == source_id
+        ]
+        for identifier in edge_ids:
+            del self.edges[identifier]
+        for identifier in source_node_ids:
+            del self.nodes[identifier]
+        return len(edge_ids) + len(source_node_ids)
+
     async def get_node(self, node_id):
         record = self.nodes.get(node_id)
         return dict(record) if record else None
+
+    async def stats(self):
+        nodes_by_type = {}
+        edges_by_relationship = {}
+        for node in self.nodes.values():
+            nodes_by_type[node["type"]] = nodes_by_type.get(node["type"], 0) + 1
+        for edge in self.edges.values():
+            edges_by_relationship[edge["type"]] = edges_by_relationship.get(edge["type"], 0) + 1
+        return {
+            "node_count": len(self.nodes),
+            "edge_count": len(self.edges),
+            "nodes_by_type": dict(sorted(nodes_by_type.items())),
+            "edges_by_relationship": dict(sorted(edges_by_relationship.items())),
+        }
 
     async def query_nodes(self, node_type, properties):
         return [dict(record) for record in sorted(self.nodes.values(), key=lambda item: item["id"])

@@ -1,0 +1,26 @@
+# POC-compatible Ensemble genetic algorithm defaults.
+population_size: 50
+generations: 25
+crossover_rate: 0.8
+mutation_rate: 0.1
+tournament_k: 3
+seed: 42
+systems:
+  compression:
+    compression_level: {min: 0.0, max: 5.0}
+    target_reduction: {min: 0.2, max: 0.7}
+  thompson:
+    alpha_prior: {min: 0.5, max: 3.0}
+    beta_prior: {min: 0.5, max: 3.0}
+    cost_weight: {min: 0.1, max: 0.5}
+  caching:
+    ttl_seconds: {min: 60.0, max: 600.0}
+    cache_threshold: {min: 0.1, max: 0.9}
+  matrix:
+    domain_weight: {min: 0.1, max: 0.5}
+    complexity_weight: {min: 0.2, max: 0.6}
+    task_weight: {min: 0.1, max: 0.5}
+  dashboard:
+    learning_rate: {min: 0.01, max: 0.2}
+    exploration_decay: {min: 0.85, max: 0.99}
+    alert_threshold: {min: 0.3, max: 0.9}

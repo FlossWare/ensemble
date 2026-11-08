@@ -12,11 +12,27 @@ from ensemble.vector_memory import InMemoryVectorStore
 
 def test_control_panel_is_served_by_the_api():
     app = create_app(store=InMemoryDocumentStore())
-    assert sum(route.path == "/control" for route in app.routes) == 1
+    assert sum(getattr(route, "path", None) == "/control" for route in app.routes) == 1
     with TestClient(app) as client:
         response = client.get("/control")
         assert response.status_code == 200
         assert "Ensemble Control Center" in response.text
+        assert "/api/v1/collaboration/participants" in client.get("/openapi.json").text
+        session_parameters = client.get("/openapi.json").json()["paths"]["/api/v1/ingest/sessions"]["post"].get("parameters", [])
+        assert "heartbeat" not in [parameter["name"] for parameter in session_parameters]
+        assert "/api/v1/index/restorations" in client.get("/openapi.json").text
+        assert 'class="app-header"' in response.text
+        assert 'class="app-shell"' in response.text
+        assert 'class="sidebar"' in response.text
+        assert 'href="#retrieval-explorer"' in response.text
+        assert 'href="#graph-workbench"' in response.text
+        assert 'href="#pipeline-inspector"' in response.text
+        assert 'id="platform-status"' in response.text
+        assert 'id="overview-metrics"' in response.text
+        assert 'id="refresh-overview"' in response.text
+        assert 'class="metric-grid"' in response.text
+        assert "@media(max-width:760px)" in response.text
+        assert "prefers-reduced-motion" in response.text
         assert "Genetic Algorithm tuning" in response.text
         assert "Start GA run" in response.text
         assert "Thompson Router" in response.text
@@ -25,24 +41,95 @@ def test_control_panel_is_served_by_the_api():
         assert "Reset Learning outcomes" in response.text
         assert "Capability Explorer" in response.text
         assert "Retrieval Explorer" in response.text
+        assert "Embeddings and Ranking Diagnostics" in response.text
+        assert 'id="model-workbench"' in response.text
+        assert 'id="embedding-probe-form"' in response.text
+        assert 'id="ranking-probe-form"' in response.text
+        assert 'id="reranking-probe-form"' in response.text
         assert "Context Assembly" in response.text
         assert "Index and Vector Inspection" in response.text
+        assert "Durable Source Reclamation" in response.text
+        assert 'id="reclamation-refresh"' in response.text
+        assert 'id="reclamation-source-form"' in response.text
         assert "Memory and Knowledge Inspection" in response.text
         assert "Tombstone source" in response.text
         assert "Transcript Session Ingestion" in response.text
+        assert "Durable Transcript Slice Jobs" in response.text
+        assert 'id="refresh-transcript-jobs"' in response.text
+        assert 'id="transcript-job-results"' in response.text
+        assert "Preview same-origin crawl" in response.text
+        assert 'id="crawl-pages"' in response.text
+        assert 'id="crawl-depth"' in response.text
+        assert "Queue durable crawl" in response.text
+        assert 'id="crawl-job-results"' in response.text
+        assert "Ingest crawled pages" in response.text
+        assert 'id="crawl-ingest"' in response.text
+        assert "Schedule automatic refresh" in response.text
+        assert "Chunking Workbench" in response.text
+        assert "Pipeline Inspector" in response.text
+        assert "Persisted execution traces" in response.text
+        assert 'id="crawl-schedules"' in response.text
         script = client.get("/control.js")
+        assert script.status_code == 200
+        assert "/api/v1/graph/ready" in script.text
+        assert "/api/v1/graph/stats" in script.text
+        assert 'id="graph-stats-refresh"' in response.text
+        assert "/api/v1/vector/ready" in script.text
+        assert "/api/v1/embeddings/embed" in script.text
+        assert "/api/v1/vector/collections/" in script.text
+        assert 'id="vector-query-form"' in response.text
+        assert "/api/v1/memory/ready" in script.text
         assert script.status_code == 200
         assert "/api/v1/ga/runs" in script.text
         assert "Approve for export" in script.text
         assert "/api/v1/thompson/state" in script.text
+        assert "Posterior mean" in script.text
+        assert "const posteriorMean=alpha/(alpha+beta)" in script.text
         assert 'textContent="Reset"' in script.text
         assert "/api/v1/search/hybrid" in script.text
+        assert "renderRetrievalPipeline" in script.text
+        assert "RRF contributions" in script.text
+        assert "channelName" in script.text
+        assert 'details.candidates||[]' in script.text
+        assert "/api/v1/embeddings/health" in script.text
+        assert "/api/v1/embeddings/model" in script.text
+        assert "/api/v1/ranking/fuse" in script.text
+        assert "/api/v1/reranking/health" in script.text
+        assert "/api/v1/reranking/rerank" in script.text
+        assert "before,after" in script.text
+        assert "channel-bars" in script.text
+        assert "refreshOverview" in script.text
+        assert '/api/v1/index/manifest?limit=500' in script.text
+        assert "Sources in first 500 manifest entries" in script.text
         assert "/api/v1/context/assemble" in script.text
         assert "/api/v1/index/manifest" in script.text
+        assert "/api/v1/index/reclamation" in script.text
+        assert "/api/v1/index/reclamation/jobs/query" in script.text
+        assert "/deletion-audit?limit=100" in script.text
         assert "/api/v1/memory/search/hybrid" in script.text
         assert "refreshCapabilityTable" in script.text
         assert "/api/v1/index/tombstones" in script.text
         assert "/api/v1/ingest/sessions" in script.text
+        assert "/api/v1/ingest/transcripts/jobs?limit=50" in script.text
+        assert "refreshTranscriptJobs" in script.text
+        assert "/api/v1/ingest/urls/crawl-preview" in script.text
+        assert "/api/v1/execution-traces" in script.text
+        assert "renderExecutionTrace" in script.text
+        assert "Execution stages (" in script.text
+        assert "renderGraphStatistics" in script.text
+        assert "Nodes by type" in script.text
+        assert "renderVectorCollections" in script.text
+        assert "Embedding model" in script.text
+        assert "stage-duration-track" in script.text
+        assert "Inspect stages" in script.text
+        assert "duration_ms" in script.text
+        assert "Project Collaboration" in response.text
+        assert 'id="collab-refresh"' in response.text
+        assert 'id="collab-handoff-supersede"' in response.text
+        assert '"/supersede"' in script.text
+        refresh_handler = script.text.split('document.getElementById("collab-refresh")')[1]
+        assert 'const {projectId,actorId}=collabContext();' in refresh_handler
+
 
 
 def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch):
@@ -72,6 +159,16 @@ def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch
         result = response.json()
         assert result["document"]["source_id"] == "https://example.org/guide"
         assert result["document"]["chunk_count"] == 1
+        trace_id = result["document"]["metadata"]["execution_trace_id"]
+        trace = client.get(f"/api/v1/execution-traces/{trace_id}").json()["trace"]
+        assert trace["operation"] == "document_ingestion"
+        assert trace["status"] in {"completed", "degraded"}
+        assert [stage["name"] for stage in trace["stages"]] == [
+            "index_revision", "chunking", "embedding", "document_persistence",
+            "document_generation_mirror", "vector_indexing_and_generation_mirror",
+            "document_materialization", "graph_entity_linking",
+            "generation_acknowledgement",
+        ]
         index = asyncio.run(index_store.get_source("https://example.org/guide"))
         knowledge = asyncio.run(knowledge_store.get("https://example.org/guide"))
         assert index["high_sequence"] == 1

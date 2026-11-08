@@ -5,7 +5,9 @@ import json
 import os
 from typing import Any, Protocol
 
-from sqlalchemy import Column, ForeignKey, JSON, MetaData, String, Table, select
+import networkx as nx
+
+from sqlalchemy import Column, ForeignKey, JSON, MetaData, String, Table, delete, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.engine import make_url
@@ -44,6 +46,8 @@ class GraphStore(Protocol):
     async def add_node(self, node_type: str, properties: dict[str, Any], node_id: str | None = None) -> dict[str, Any]: ...
     async def add_edge(self, source: str, target: str, edge_type: str, properties: dict[str, Any], edge_id: str | None = None) -> dict[str, Any]: ...
     async def get_node(self, node_id: str) -> dict[str, Any] | None: ...
+    async def reclaim_source(self, source_id: str) -> int: ...
+    async def stats(self) -> dict[str, Any]: ...
     async def query_nodes(self, node_type: str | None, properties: dict[str, Any]) -> list[dict[str, Any]]: ...
     async def query_edges(self, from_type: str | None = None, to_type: str | None = None, relationship: str | None = None) -> list[dict[str, Any]]: ...
     async def traverse(self, start: str, direction: str = "out", max_depth: int = 1, edge_type: str | None = None) -> list[dict[str, Any]]: ...
@@ -106,10 +110,46 @@ class SqliteGraphStore:
             await connection.execute(edges.insert().values(id=identifier, source_id=source, target_id=target, edge_type=edge_type, properties=properties))
         return record
 
+    async def reclaim_source(self, source_id: str) -> int:
+        """Remove source-owned graph edges and source nodes, retaining shared entities."""
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("source_id must contain 1-512 characters")
+        source_node_ids = select(nodes.c.id).where(
+            nodes.c.node_type == "source",
+            func.json_extract(nodes.c.properties, "$.source_id") == source_id,
+        )
+        async with self.engine.begin() as connection:
+            edge_result = await connection.execute(delete(edges).where(or_(
+                edges.c.source_id.in_(source_node_ids),
+                edges.c.target_id.in_(source_node_ids),
+                func.json_extract(edges.c.properties, "$.source_id") == source_id,
+            )))
+            node_result = await connection.execute(delete(nodes).where(
+                nodes.c.id.in_(source_node_ids),
+            ))
+        return int(edge_result.rowcount or 0) + int(node_result.rowcount or 0)
+
     async def get_node(self, node_id: str) -> dict[str, Any] | None:
         async with self.engine.connect() as connection:
             row = (await connection.execute(select(nodes).where(nodes.c.id == node_id))).mappings().first()
         return {"id": row["id"], "type": row["node_type"], "properties": row["properties"]} if row else None
+
+    async def stats(self) -> dict[str, Any]:
+        async with self.engine.connect() as connection:
+            node_rows = (await connection.execute(
+                select(nodes.c.node_type, func.count()).group_by(nodes.c.node_type).order_by(nodes.c.node_type)
+            )).all()
+            edge_rows = (await connection.execute(
+                select(edges.c.edge_type, func.count()).group_by(edges.c.edge_type).order_by(edges.c.edge_type)
+            )).all()
+        nodes_by_type = {name: int(count) for name, count in node_rows}
+        edges_by_relationship = {name: int(count) for name, count in edge_rows}
+        return {
+            "node_count": sum(nodes_by_type.values()),
+            "edge_count": sum(edges_by_relationship.values()),
+            "nodes_by_type": nodes_by_type,
+            "edges_by_relationship": edges_by_relationship,
+        }
 
     async def query_nodes(self, node_type: str | None, properties: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(properties, dict):
@@ -142,30 +182,72 @@ class SqliteGraphStore:
             raise ValueError("direction must be out, in, or both")
         if isinstance(max_depth, bool) or not isinstance(max_depth, int) or not 1 <= max_depth <= 100:
             raise ValueError("max_depth must be an integer from 1 to 100")
-        if await self.get_node(start) is None:
-            raise KeyError("node not found: " + start)
-        visited, frontier, result = {start}, {start}, []
         async with self.engine.connect() as connection:
-            all_edges = (await connection.execute(select(edges).order_by(edges.c.id))).mappings().all()
+            node_rows = (await connection.execute(select(nodes).order_by(nodes.c.id))).mappings().all()
+            edge_rows = (await connection.execute(select(edges).order_by(edges.c.id))).mappings().all()
+        graph = nx.MultiDiGraph()
+        for row in node_rows:
+            graph.add_node(row["id"], type=row["node_type"], properties=row["properties"])
+        for row in edge_rows:
+            graph.add_edge(
+                row["source_id"], row["target_id"], key=row["id"],
+                id=row["id"], type=row["edge_type"], properties=row["properties"],
+            )
+        if start not in graph:
+            raise KeyError("node not found: " + start)
+        if direction == "in":
+            traversal_graph = graph.reverse(copy=False)
+        elif direction == "both":
+            traversal_graph = graph.to_undirected(as_view=True)
+        else:
+            traversal_graph = graph
+        result = []
+        visited = {start}
+        frontier = {start}
         for depth in range(1, max_depth + 1):
             next_frontier = set()
-            for edge in all_edges:
-                if edge_type is not None and edge["edge_type"] != edge_type:
-                    continue
-                neighbors = []
-                if direction in {"out", "both"} and edge["source_id"] in frontier:
-                    neighbors.append(edge["target_id"])
-                if direction in {"in", "both"} and edge["target_id"] in frontier:
-                    neighbors.append(edge["source_id"])
-                for neighbor in neighbors:
+            for current in sorted(frontier):
+                for neighbor in sorted(traversal_graph.neighbors(current)):
                     if neighbor in visited:
                         continue
+                    if direction == "both":
+                        candidates = [
+                            (source, target, key, attrs)
+                            for source, target, key, attrs in graph.edges(keys=True, data=True)
+                            if {source, target} == {current, neighbor}
+                        ]
+                    elif direction == "in":
+                        candidates = [
+                            (source, target, key, attrs)
+                            for source, target, key, attrs in graph.in_edges(current, keys=True, data=True)
+                            if source == neighbor
+                        ]
+                    else:
+                        candidates = [
+                            (source, target, key, attrs)
+                            for source, target, key, attrs in graph.out_edges(current, keys=True, data=True)
+                            if target == neighbor
+                        ]
+                    if edge_type is not None:
+                        candidates = [item for item in candidates if item[3]["type"] == edge_type]
+                    if not candidates:
+                        continue
+                    source, target, _key, attrs = min(candidates, key=lambda item: item[3]["id"])
                     visited.add(neighbor)
                     next_frontier.add(neighbor)
-                    node = await self.get_node(neighbor)
-                    via = {"id": edge["id"], "source": edge["source_id"], "target": edge["target_id"], "type": edge["edge_type"], "properties": edge["properties"]}
-                    result.append({"depth": depth, "node": node, "via": via})
+                    result.append({
+                        "depth": depth,
+                        "node": {
+                            "id": neighbor, "type": graph.nodes[neighbor]["type"],
+                            "properties": graph.nodes[neighbor]["properties"],
+                        },
+                        "via": {
+                            "id": attrs["id"], "source": source, "target": target,
+                            "type": attrs["type"], "properties": attrs["properties"],
+                        },
+                    })
             frontier = next_frontier
             if not frontier:
                 break
         return result
+

@@ -4,26 +4,53 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ensemble Control Center</title>
 <style>
-:root{font-family:system-ui,sans-serif;color:#20242b;background:#f5f7fa}body{max-width:1200px;margin:2rem auto;padding:0 1rem}
-h1{margin-bottom:.2rem}section{background:white;border:1px solid #d8dee8;border-radius:10px;padding:1rem;margin:1rem 0}
-button,input{font:inherit;padding:.45rem .65rem;margin:.25rem;border:1px solid #aab4c2;border-radius:6px}
-button{cursor:pointer;background:#f3f6fa}button:disabled{opacity:.5;cursor:wait}
-input[type=text],input[type=url]{min-width:18rem;max-width:100%}
-pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f7fa;padding:.75rem;border-radius:6px;max-height:28rem;overflow:auto}
-table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;padding:.45rem;border-bottom:1px solid #e1e5eb;vertical-align:top}
-.status-ok{color:#176b39}.status-error{color:#a32222}.muted{color:#5d6877}
-.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem}
+:root{color-scheme:dark;--bg:#0b1220;--panel:#142238;--line:#293b55;--text:#e8eef8;--muted:#9aabc2;--accent:#58d6c4;font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text)}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:90px}body{margin:0;max-width:none;padding:0;background:radial-gradient(ellipse at 70% -20%,#1b3850,transparent 45%),var(--bg);line-height:1.5}
+a{color:var(--accent);text-decoration:none}.app-header{height:70px;display:flex;align-items:center;justify-content:space-between;padding:0 2rem;border-bottom:1px solid var(--line);background:#0d1727;position:sticky;top:0;z-index:5}
+.brand{font-weight:800;letter-spacing:.1em}.brand small{display:block;color:var(--muted);font-size:.65rem}.header-actions{color:var(--muted);font-size:.85rem}
+.app-shell{display:grid;grid-template-columns:230px minmax(0,1fr);min-height:calc(100vh - 70px)}.sidebar{position:sticky;top:70px;height:calc(100vh - 70px);overflow:auto;padding:1.2rem .9rem;border-right:1px solid var(--line);background:#0d1727}
+.nav-label{font-size:.65rem;text-transform:uppercase;letter-spacing:.15em;color:#71849f;padding:1rem .6rem .35rem}.sidebar nav a{display:block;padding:.6rem .7rem;border-radius:8px;color:#b8c6d9;font-size:.88rem}.sidebar nav a:hover{background:#1b2b42;color:white}
+.main-content{min-width:0;max-width:1600px;width:100%;padding:2rem clamp(1rem,3vw,3rem);margin:auto}.page-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem}.page-heading h1{font-size:2rem;margin:0;letter-spacing:-.04em}.page-heading p{color:var(--muted);margin:.25rem 0}.api-link{border:1px solid var(--line);padding:.5rem .8rem;border-radius:8px}
+section{background:linear-gradient(145deg,#142238,#101b2d);border:1px solid var(--line);border-radius:14px;padding:1.2rem 1.4rem;margin:1rem 0 1.2rem;box-shadow:0 8px 24px #0002;scroll-margin-top:90px}
+section h2{font-size:1.08rem;margin:0 0 .5rem;letter-spacing:-.02em}h3{font-size:.95rem;margin:1.3rem 0 .5rem}p{margin:.45rem 0 .8rem}.muted{color:var(--muted)}
+button,input,select,textarea{font:inherit;color:var(--text);background:#0c1728;border:1px solid #34465f;border-radius:8px;padding:.58rem .72rem;margin:.22rem;max-width:100%}input[type=text],input[type=url],input[type=password]{min-width:min(18rem,100%)}input[type=number]{width:7rem}textarea{width:100%;resize:vertical}
+button{cursor:pointer;background:#1c3048;font-weight:600;transition:.15s}button:hover:not(:disabled){background:#28435f;border-color:var(--accent)}button:disabled{opacity:.45;cursor:wait}button[type=submit],#connect-partition{background:#167f80;border-color:#39c6b4}
+label{color:#c3d1e2;font-size:.88rem}.toolbar,.inline-fields{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0a1423;border:1px solid #24364e;color:#c7d8eb;padding:.85rem;border-radius:9px;max-height:28rem;overflow:auto;font-size:.82rem}
+table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{text-align:left;padding:.65rem;border-bottom:1px solid var(--line)}th{background:#1a2a40;color:#aebfd4;font-size:.75rem;text-transform:uppercase}
+.status-ok{color:#72d6a4}.status-error{color:#ff8c8c}.execution-trace-summary,.execution-trace-stages li{border:1px solid var(--line);border-radius:9px;padding:.8rem;margin:.5rem 0;background:#0f1b2d}.execution-trace-summary p{overflow-wrap:anywhere}.execution-trace-stage-heading{display:flex;gap:.75rem;flex-wrap:wrap}.execution-trace-stage-status,.execution-trace-stage-duration{font-size:.85em;color:var(--muted)}.execution-trace-stages{padding-left:1.5rem}
+#partition-session{border-color:#32665f;background:linear-gradient(110deg,#12302f,#142238)}
+@media(max-width:760px){.app-shell{display:block}.sidebar{position:static;height:auto;border:0;border-bottom:1px solid var(--line);padding:.5rem}.sidebar nav{display:flex;overflow-x:auto;gap:.25rem}.sidebar .nav-label{display:none}.sidebar nav a{white-space:nowrap}.main-content{padding:1rem .75rem}.page-heading{align-items:flex-start;flex-direction:column}.app-header{height:60px;padding:0 1rem}section{padding:1rem}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{transition:none!important}}
+
+.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem;margin:1rem 0}
+.metric-card{background:#0c192a;border:1px solid #293d56;border-radius:11px;padding:.9rem 1rem;min-width:0}
+.metric-card .metric-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;color:#8fa5bd}
+.metric-card .metric-value{font-size:1.65rem;font-weight:750;letter-spacing:-.04em;margin-top:.25rem;color:#eaf4ff;overflow-wrap:anywhere}
+.metric-card .metric-note{font-size:.76rem;color:#8fa5bd;margin-top:.15rem}
+.channel-bars{display:grid;gap:.7rem;margin:.9rem 0}.channel-bar-row{display:grid;grid-template-columns:95px minmax(80px,1fr) 52px;gap:.7rem;align-items:center;font-size:.82rem}
+.channel-track{height:9px;border-radius:20px;background:#26374d;overflow:hidden}.channel-fill{height:100%;border-radius:20px;background:linear-gradient(90deg,#238e9b,#58d6c4)}
+.rrf-score{font-variant-numeric:tabular-nums;font-weight:650;color:#a8eee1}
+@media(max-width:900px){.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:420px){.metric-grid{grid-template-columns:1fr}.channel-bar-row{grid-template-columns:75px minmax(50px,1fr) 45px}}
 </style>
 </head>
 <body>
-<h1>Ensemble Control Center</h1>
-<p><a href="/docs">REST API</a></p>
+<header class="app-header"><div class="brand">◈ ENSEMBLE<small>CONTROL CENTER</small></div><div class="header-actions">● Local service console &nbsp; <a href="/docs">API reference ↗</a></div></header>
+<div class="app-shell">
+<aside class="sidebar" aria-label="Control Center navigation">
+<div class="nav-label">Workspace</div><nav>
+<a href="#platform-status">Overview</a><a href="#retrieval-explorer">Retrieval</a><a href="#model-workbench">Embeddings &amp; Ranking</a><a href="#memory-inspector">Intelligence</a><a href="#graph-workbench">Knowledge Graph</a><a href="#generation-workbench">Index Generations</a><a href="#pipeline-inspector">Pipelines</a><a href="#collaboration-panel">Collaboration</a><a href="#ga-panel">Experiments</a>
+</nav><div class="nav-label">Administration</div><nav>
+<a href="#index-inspector">Index &amp; Vectors</a><a href="#runtime-config">Runtime</a><a href="#partition-session">Partition session</a>
+</nav></aside><main class="main-content">
+<div class="page-heading"><div><h1>Control Center</h1><p>Inspect, operate, and understand your Ensemble instance.</p></div><a class="api-link" href="/docs">Open REST API ↗</a></div>
 <section id="partition-session">
 <h2>Authenticated partition session</h2>
 <p class="muted">Credentials stay in this browser tab's session storage. The partition name selects only a partition authorized by the token.</p>
 <div class="toolbar"><input id="partition-token" type="password" autocomplete="off" placeholder="Bearer token"><input id="partition-id" type="text" maxlength="128" placeholder="Partition (optional for single-partition tokens)"><button id="connect-partition" type="button">Connect</button><button id="clear-partition" type="button">Clear</button><span id="partition-session-status">Local default session.</span></div>
 </section>
-<section><h2>Platform status</h2><button id="refresh-health" type="button">Refresh readiness</button><pre id="health-result">Not checked.</pre></section>
+<section id="platform-status"><h2>Platform overview</h2><p class="muted">Live operational snapshot. Counts are read from the current local stores and execution trace ledger.</p><div id="overview-metrics" class="metric-grid"><div class="metric-card"><div class="metric-label">Service</div><div class="metric-value">…</div><div class="metric-note">Checking readiness</div></div></div><div class="toolbar"><button id="refresh-health" type="button">Refresh readiness</button><button id="refresh-overview" type="button">Refresh overview metrics</button></div><pre id="health-result">Not checked.</pre></section>
 <section id="capability-explorer">
 <h2>Capability Explorer</h2>
 <p class="muted">Live health checks for the single Ensemble process and its capability endpoint groups.</p>
@@ -34,7 +61,33 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <h2>Retrieval Explorer</h2>
 <p>Run the actual Hybrid endpoint and inspect result provenance, scores and degraded dependencies.</p>
 <form id="retrieval-form"><input id="retrieval-query" type="text" required maxlength="2000" placeholder="Search documents and knowledge"><input id="retrieval-limit" type="number" min="1" max="100" value="10"><label><input id="retrieval-rerank" type="checkbox"> Rerank candidates</label><button type="submit">Search</button></form>
-<pre id="retrieval-results">No query run.</pre>
+<div id="retrieval-results">No query run.</div>
+</section>
+<section id="model-workbench">
+<h2>Embeddings and Ranking Diagnostics</h2>
+<p class="muted">Inspect configured provider identity and readiness, run a bounded embedding probe, compare independent RRF inputs, and inspect cross-encoder scores. These probes do not persist data or change model configuration.</p>
+<div class="toolbar"><button id="model-status-refresh" type="button">Refresh provider status</button></div>
+<pre id="model-provider-status">Provider status not loaded.</pre>
+<form id="embedding-probe-form">
+<label>Embedding query <input id="embedding-probe-text" type="text" required maxlength="2000" placeholder="Text to embed"></label>
+<button type="submit">Run query embedding probe</button>
+</form>
+<pre id="embedding-probe-result">No embedding probe run.</pre>
+<h3>Independent RRF comparison</h3>
+<p class="muted">Provide ranked candidate lists as JSON. Each channel is a ranked array of objects containing the same identity key. The operation is deterministic and does not alter stored ranking policy.</p>
+<form id="ranking-probe-form">
+<label>Ranked channels JSON <textarea id="ranking-probe-channels" rows="6" style="width:100%">{"lexical":[{"chunk_id":"candidate-a","rank":1},{"chunk_id":"candidate-b","rank":2}],"vector":[{"chunk_id":"candidate-b","rank":1},{"chunk_id":"candidate-a","rank":2}]}</textarea></label>
+<label>RRF k <input id="ranking-probe-k" type="number" min="1" max="10000" value="60"></label>
+<button type="submit">Fuse candidate lists</button>
+</form>
+<pre id="ranking-probe-result">No RRF probe run.</pre>
+<h3>Cross-encoder before/after inspection</h3>
+<form id="reranking-probe-form">
+<label>Query <input id="reranking-probe-query" type="text" required maxlength="2000" placeholder="Ranking query"></label>
+<label>Candidate documents, one per line <textarea id="reranking-probe-documents" rows="6" style="width:100%" placeholder="Candidate document one&#10;Candidate document two"></textarea></label>
+<button type="submit">Score and compare candidates</button>
+</form>
+<pre id="reranking-probe-result">No reranking probe run.</pre>
 </section>
 <section id="session-ingest">
 <h2>Transcript Session Ingestion</h2>
@@ -42,16 +95,48 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <textarea id="session-payload" rows="10" style="width:100%" placeholder='{"session":{"session_id":"session-1","project":"project","file":"/logical/path/session.jsonl"},"messages":[{"uuid":"message-1","role":"user","kind":"text","text":"Example transcript message"}]}'></textarea>
 <div class="toolbar"><button id="session-ingest-button" type="button">Ingest session</button><span id="session-ingest-status">No session submitted.</span></div>
 <pre id="session-ingest-result"></pre>
+<h3>Durable Transcript Slice Jobs</h3>
+<p class="muted">Read-only status for resumable JSONL byte-slice ingestion, including attempt and lease state.</p>
+<div class="toolbar"><button id="refresh-transcript-jobs" type="button">Refresh transcript job history</button></div>
+<pre id="transcript-job-results">Transcript job history not loaded.</pre>
 </section>
 <section id="index-inspector">
 <h2>Index and Vector Inspection</h2>
 <div class="toolbar"><button id="refresh-index" type="button">Refresh source manifest</button><button id="refresh-vectors" type="button">Refresh vector collections</button></div>
 <pre id="index-results">Not loaded.</pre><pre id="vector-results">Not loaded.</pre>
+<h3>Vector similarity query</h3>
+<p class="muted">Uses the configured embedding provider and performs an exact collection scan. This is not an approximate-nearest-neighbor index.</p>
+<form id="vector-query-form">
+<label>Collection <input id="vector-query-collection" type="text" required maxlength="128" placeholder="Collection name"></label>
+<label>Query text <input id="vector-query-text" type="text" required maxlength="2000" placeholder="Text to embed and search"></label>
+<label>Top results <input id="vector-query-limit" type="number" min="1" max="200" value="10"></label>
+<button type="submit">Query vector collection</button>
+</form>
+<pre id="vector-query-results">No vector query run.</pre>
 <form id="source-lookup-form"><input id="source-id" type="text" required maxlength="512" placeholder="Source identifier"><button type="submit">Inspect source</button></form>
 <pre id="source-result">No source selected.</pre>
 <form id="source-tombstone-form"><input id="tombstone-source-id" type="text" required maxlength="512" placeholder="Source identifier to tombstone"><input id="tombstone-sequence" type="number" min="1" required placeholder="Revision sequence"><button type="submit">Tombstone source</button></form>
 <p class="muted">Tombstones are permanent source-index decisions. Confirm carefully before submitting.</p><pre id="tombstone-result">No tombstone requested.</pre>
+<h3>Durable Source Reclamation</h3>
+<p class="muted">Read-only queue status and per-source deletion audit. Physical reclamation runs through the durable worker; this panel does not trigger purge or cancel a pending deletion.</p>
+<div class="toolbar"><button id="reclamation-refresh" type="button">Refresh reclamation queue</button></div>
+<pre id="reclamation-status">Queue status not loaded.</pre>
+<form id="reclamation-source-form">
+<label>Source identifier <input id="reclamation-source-id" type="text" required maxlength="1024" placeholder="Source identifier"></label>
+<button type="submit">Inspect reclamation and audit</button>
+</form>
+<pre id="reclamation-source-details">No source reclamation selected.</pre>
 </section>
+<section id="generation-workbench">
+ <h2>Index Generation Lifecycle</h2>
+ <p class="muted">Operate the durable SQLite-backed rebuild lifecycle one bounded page at a time. Review status and checkpoints before fencing or activating. A generation switch affects live retrieval and writes.</p>
+ <div class="toolbar"><button id="generation-refresh" type="button">Refresh generation status</button><input id="generation-id" type="text" maxlength="64" placeholder="Generation ID (created or existing)"><button id="generation-create" type="button">Create generation</button></div>
+ <label>Page size <input id="generation-page-size" type="number" min="1" max="1000" value="250"></label>
+ <div class="toolbar"><button id="generation-copy" type="button">Copy next page across capabilities</button><button id="generation-reconcile" type="button">Reconcile next page across capabilities</button></div>
+ <div class="toolbar"><button id="generation-fence" type="button">Fence reconciled generation</button><button id="generation-activate" type="button">Activate generation</button><button id="generation-abort" type="button">Abort generation</button></div>
+ <pre id="generation-status">Not loaded. Refresh status before operating on an existing generation.</pre>
+ <pre id="generation-results">No generation operation run.</pre>
+ </section>
 <section id="memory-inspector">
 <h2>Memory and Knowledge Inspection</h2>
 <div class="toolbar"><button id="refresh-memories" type="button">Refresh memory names</button><button id="refresh-memory-knowledge" type="button">Refresh Knowledge status</button></div>
@@ -88,7 +173,9 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 </section>
 <section id="graph-workbench">
 <h2>Graph Workbench</h2>
-<p>Read-only node lookup, property-filtered queries, and bounded traversal. This view does not create or modify graph data.</p>
+<p>Read-only graph inventory, node lookup, property-filtered queries, and bounded traversal. Statistics are aggregate counts by node and relationship type.</p>
+<div class="toolbar"><button id="graph-stats-refresh" type="button">Refresh graph statistics</button></div>
+<pre id="graph-stats">Not loaded.</pre>
 <form id="graph-query-form"><label>Node type <input id="graph-node-type" type="text" maxlength="128" placeholder="session, file, etc."></label><label>Properties (JSON) <input id="graph-node-properties" type="text" value="{}" maxlength="2000"></label><button type="submit">Query nodes</button></form>
 <form id="graph-node-form"><label>Node ID <input id="graph-node-id" type="text" required maxlength="512"></label><button type="submit">Inspect node</button></form>
 <form id="graph-traverse-form"><label>Start node ID <input id="graph-start-id" type="text" required maxlength="512"></label><label>Direction <select id="graph-direction"><option value="out">Outgoing</option><option value="in">Incoming</option><option value="both">Both</option></select></label><label>Max depth <input id="graph-depth" type="number" min="1" max="3" value="1"></label><label>Edge type <input id="graph-edge-type" type="text" maxlength="128" placeholder="Optional"></label><button type="submit">Traverse</button></form>
@@ -122,6 +209,11 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <textarea id="pipeline-text" rows="7" style="width:100%" maxlength="200000" placeholder="Paste text to inspect across processing stages"></textarea>
 <button id="pipeline-run" type="button">Run diagnostic pipeline</button>
 <pre id="pipeline-results">No diagnostic pipeline run.</pre>
+<h3>Persisted execution traces</h3>
+<p>Inspect real ingestion and retrieval executions. Trace records contain metadata and timings, not source content.</p>
+<button id="trace-refresh" type="button">Refresh execution traces</button>
+<div id="trace-list">No persisted traces loaded.</div>
+<div id="trace-detail">Select a persisted trace to inspect its stages.</div>
 </section>
 <h2>URI ingestion</h2>
 <form id="scrape-form">
@@ -129,7 +221,25 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <input id="uri" type="url" required placeholder="https://example.org/docs">
 <button type="submit">Preview page</button>
 </form>
+<div class="inline-fields">
+<label for="crawl-pages">Crawl request limit (1-20)</label>
+<input id="crawl-pages" type="number" min="1" max="20" value="10">
+<label for="crawl-depth">Crawl depth (0-3)</label>
+<input id="crawl-depth" type="number" min="0" max="3" value="1">
+<button id="crawl-preview" type="button">Preview same-origin crawl</button>
+<button id="crawl-queue" type="button">Queue durable crawl</button>
+<button id="crawl-retry" type="button" hidden>Retry failed crawl</button>
+<button id="crawl-ingest" type="button" hidden>Ingest crawled pages</button>
+</div>
 <p id="status">Preview first. Ingestion is a separate explicit action.</p>
+<pre id="crawl-results">No crawl preview run. Crawling is preview-only.</pre>
+<pre id="crawl-job-results">No durable crawl job queued.</pre>
+<div class="inline-fields">
+<label for="crawl-interval">Automatic refresh interval (seconds, 3600-2592000)</label>
+<input id="crawl-interval" type="number" min="3600" max="2592000" value="86400">
+<button id="crawl-schedule" type="button">Schedule automatic refresh</button>
+</div>
+<div id="crawl-schedules">No automatic refresh schedules.</div>
 <section id="preview" hidden>
 <h2 id="title"></h2><p id="metadata"></p><pre id="body"></pre><h3>Discovered links (not crawled)</h3><div id="links"></div>
 <button id="ingest" type="button">Ingest this page</button>
@@ -162,7 +272,7 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 </section>
 <section id="thompson-panel">
 <h2>Thompson Router</h2>
-<p>Model-level Beta posteriors and cost-aware selection. Task-specific capability filtering is not implemented in the POC contract yet.</p>
+<p>Model-level Beta posteriors use alpha = successes + 1 and beta = failures + 1. The posterior mean is descriptive, not a guarantee of future performance. Selection is sampled; capability filtering remains outside the current POC contract. Recent selections are recorded for inspection.</p>
 <form id="thompson-select-form">
 <label for="thompson-task">Task type</label>
 <input id="thompson-task" type="text" value="unknown">
@@ -171,8 +281,10 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <button type="submit">Select model</button>
 </form>
 <p id="thompson-selection">No selection requested.</p>
-<button id="thompson-refresh" type="button">Refresh model statistics</button>
+<button id="thompson-refresh" type="button">Refresh model statistics and selection history</button>
 <div id="thompson-state"></div>
+<h3>Recent selections</h3>
+<div id="thompson-history">Loading selection history...</div>
 </section>
 <section id="runtime-config">
 <h2>Runtime Configuration</h2>
@@ -192,5 +304,84 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{text-align:left;p
 <h3>Portable artifacts</h3>
 <div id="learning-artifacts"></div>
 </section>
+<section id="collaboration-panel">
+<h2>Project Collaboration</h2>
+<p class="muted">Provider-neutral participants, attributable contributions, resumable handoffs, project synthesis, proposals, and auditable decisions. This is continuity data, not an agent scheduler.</p>
+<h3>Participants and projects</h3>
+<form id="collab-participant-form">
+<input id="collab-participant-id" type="text" maxlength="256" placeholder="Participant ID (optional)">
+<input id="collab-participant-name" type="text" maxlength="256" required placeholder="Display name">
+<select id="collab-participant-type"><option value="human">Human</option><option value="agent">Agent</option></select>
+<input id="collab-provider" type="text" maxlength="128" placeholder="Provider (optional)">
+<input id="collab-model" type="text" maxlength="256" placeholder="Model (optional)">
+<button type="submit">Create participant</button>
+</form>
+<form id="collab-project-form">
+<input id="collab-project-name" type="text" maxlength="256" required placeholder="Project name">
+<input id="collab-owner-id" type="text" maxlength="256" required placeholder="Owner participant ID">
+<label><input id="collab-human-gate" type="checkbox" checked> Require human approval for final decisions</label>
+<button type="submit">Create project</button>
+</form>
+<h3>Active project context</h3>
+<div class="toolbar">
+<input id="collab-project-id" type="text" maxlength="128" placeholder="Project ID">
+<input id="collab-actor-id" type="text" maxlength="256" placeholder="Actor participant ID">
+<input id="collab-recipient-id" type="text" maxlength="256" placeholder="Handoff recipient ID (optional)">
+<button id="collab-refresh" type="button">Refresh activity</button>
+<button id="collab-synthesize" type="button">Generate synthesis</button>
+</div>
+<div class="toolbar">
+<input id="collab-member-id" type="text" maxlength="256" placeholder="Participant ID to add">
+<select id="collab-member-role"><option value="read">Read</option><option value="contribute">Contribute</option><option value="review">Review</option><option value="approve">Approve</option></select>
+<button id="collab-add-member" type="button">Add project member</button>
+</div>
+<h3>Contributions</h3>
+<form id="collab-contribution-form">
+<input id="collab-contribution-kind" type="text" maxlength="64" value="implementation" required placeholder="Contribution type">
+<input id="collab-work-item" type="text" maxlength="256" placeholder="Work item / issue">
+<input id="collab-source-ref" type="text" maxlength="2048" placeholder="Commit, PR, document, or artifact reference">
+<input id="collab-contribution-summary" type="text" maxlength="4000" required placeholder="What changed and why">
+<button type="submit">Record contribution</button>
+</form>
+<div class="toolbar">
+<input id="collab-contribution-id" type="text" maxlength="64" placeholder="Contribution ID to review">
+<select id="collab-review-status"><option value="accepted">Accept</option><option value="rejected">Reject</option></select>
+<input id="collab-review-rationale" type="text" maxlength="4000" placeholder="Review rationale">
+<button id="collab-review-contribution" type="button">Record review</button>
+</div>
+<h3>Work handoffs and checkpoints</h3>
+<form id="collab-handoff-form">
+<input id="collab-handoff-objective" type="text" maxlength="4000" required placeholder="Objective">
+<input id="collab-handoff-state" type="text" maxlength="8000" required placeholder="Current state">
+<input id="collab-handoff-completed" type="text" maxlength="8000" placeholder="Completed work">
+<input id="collab-handoff-blockers" type="text" placeholder="Blockers, comma-separated">
+<input id="collab-handoff-next" type="text" placeholder="Next actions, comma-separated">
+<input id="collab-handoff-refs" type="text" placeholder="References, comma-separated">
+<button type="submit">Create handoff</button>
+</form>
+<div class="toolbar">
+<input id="collab-handoff-id" type="text" maxlength="64" placeholder="Handoff ID for checkpoint / transition">
+<button id="collab-handoff-checkpoint" type="button">Save incremental checkpoint</button>
+<button id="collab-handoff-ack" type="button">Acknowledge</button>
+<button id="collab-handoff-complete" type="button">Complete</button>
+<button id="collab-handoff-supersede" type="button">Supersede with current context</button>
+</div>
+<h3>Proposals and decisions</h3>
+<form id="collab-proposal-form">
+<input id="collab-proposal-title" type="text" maxlength="256" required placeholder="Proposal title">
+<input id="collab-proposal-summary" type="text" maxlength="4000" required placeholder="Proposal summary">
+<input id="collab-proposal-rationale" type="text" maxlength="8000" required placeholder="Rationale">
+<input id="collab-proposal-objections" type="text" placeholder="Known objections, comma-separated">
+<button type="submit">Create proposal</button>
+</form>
+<div class="toolbar">
+<input id="collab-proposal-id" type="text" maxlength="64" placeholder="Proposal ID">
+<select id="collab-decision-status"><option value="under_review">Under review</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option><option value="superseded">Superseded</option></select>
+<input id="collab-decision-rationale" type="text" maxlength="8000" placeholder="Decision rationale">
+<button id="collab-decide" type="button">Record decision</button>
+</div>
+<pre id="collab-results">No collaboration activity loaded.</pre>
+</section>
+</main></div>
 <script src="/control.js"></script>
 </body></html>

@@ -5,6 +5,10 @@ on:
     branches: ["**"]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -18,7 +22,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install
-        run: python -m pip install -e '.[dev]'
+        run: python -m pip install -e '.[dev,poc-learning]'
       - name: Validate installer shell syntax
         run: |
           for script in scripts/install.sh scripts/backup-persistence.sh scripts/restore-persistence.sh; do
@@ -26,5 +30,21 @@ jobs:
           done
       - name: Validate Control Center JavaScript
         run: node --check ensemble/control.js
+      - name: Set up Node.js host adapter
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Node host adapter dependencies
+        run: npm install --no-package-lock
+        working-directory: integrations/claude-code
+      - name: Test retained Node host adapters
+        run: npm test
+        working-directory: integrations/claude-code
+      - name: Audit POC dependency retention
+        run: python -m parity.dependency_audit
+      - name: Smoke-test judged retrieval evaluator
+        run: python -m parity.retrieval_metrics parity/corpora/synthetic-smoke.json --report /tmp/retrieval-parity-report.json
+      - name: Test parity harness
+        run: python -m pytest tests/test_parity_harness.py
       - name: Test
         run: python -m pytest

@@ -1,0 +1,64 @@
+# Ensemble deployment profiles
+
+Ensemble is one codebase and one application identity with multiple deployment profiles. A worker is a lightweight execution participant, not a fork or a separate product.
+
+## Profiles
+
+| Profile | Intended deployment | Current composition |
+|---|---|---|
+| `worker` | R9000-class devices, Raspberry Pis, small hosts | Standalone Worker Runtime only; does not import the full API or initialize Ensemble stores |
+| `standard` | General-purpose host | Core application, retrieval, Memory, Knowledge, Graph, Thompson and collaboration. GA and Learning are omitted. |
+| `full` | Server/workstation | Standard capabilities plus GA and Learning, including optional analytics and model-training dependencies. |
+
+Standard and Full have a real profile boundary: Standard does not construct or initialize GA or Learning stores, and those route groups are not exposed. The analytics and GA-configuration dependencies are imported lazily and are installed only with Full. Both profiles still share the existing API composition and its persistence, ingestion and retrieval routes. Memory, Knowledge, Graph and Thompson stores, plus GA and Learning in Full, are now initialized, health-checked and closed through the shared capability lifecycle. Their route handlers remain part of the shared API module; route/service extraction is still future work.
+
+## Run
+
+Install only the worker runtime for a small device:
+
+```bash
+python -m pip install 'flossware-ensemble[worker]'
+ensemble-runtime --profile worker --host 0.0.0.0 --port 8091
+```
+
+Install the existing application dependencies for a Standard deployment:
+
+```bash
+python -m pip install 'flossware-ensemble[standard]'
+ensemble-runtime --profile standard --host 0.0.0.0 --port 8080
+```
+
+Install the complete optional dependency set for a Full deployment:
+
+```bash
+python -m pip install 'flossware-ensemble[full]'
+ensemble-runtime --profile full --host 0.0.0.0 --port 8080
+```
+
+The profile can also be selected with `ENSEMBLE_PROFILE=worker|standard|full`. The base package contains only FastAPI and Uvicorn; database, vector, graph, document, and local intelligence dependencies are optional extras. The existing `ensemble` and `ensemble-worker` commands remain available for compatibility.
+
+## Capability lifecycle
+
+Extensions implement the shared `Capability` contract in `ensemble.core`: a descriptor, asynchronous initialization and shutdown, and a health report. Register implementations in a `CapabilityRegistry` and pass that registry to `create_runtime(..., capability_registry=...)` or `create_app(..., capability_registry=...)`.
+
+The registry resolves profile eligibility and dependencies before startup. The lifecycle starts dependencies first, rolls back a partial startup on failure, and shuts down in reverse order. Runtime discovery is exposed at:
+
+- `GET /api/v1/runtime/capabilities`
+- `GET /api/v1/runtime/capabilities/health`
+
+The current built-in lifecycle-managed stores are Memory, Knowledge, Graph and Thompson in Standard and Full, plus GA and Learning in Full. The trusted worker adapter bridge can load an existing `module:register` adapter in Full with `ENSEMBLE_WORKER_ADAPTER=package.module:register`; each operation is exposed in `RuntimeContext.services["worker_operations"]`. Standard does not load these adapters. This is an in-process extension point, not a public invocation route or a second worker server. Route handlers and the remaining persistence/ingestion/retrieval composition are not yet independently packaged capabilities.
+
+## Upgrade path
+
+A deployment can change its selected profile and install the corresponding package dependencies. Moving from Standard to Full enables the GA and Learning routes and initializes their stores on startup. Moving from Full to Standard stops exposing those routes and skips their stores; existing database records are retained. Profile changes do not run schema migrations automatically.
+
+The worker profile imports its application lazily and does not import `ensemble.api`. Standard and Full import the shared API composition, but optional GA and Learning dependencies are lazy and profile-gated. Provider credentials should remain in a central provider gateway initially; no credentials or shared secrets are introduced by the profile model.
+
+## Design constraints
+
+- One codebase, shared contracts, no worker fork.
+- Full remains the compatibility baseline until modularization is proven.
+- Worker does not initialize full stores, Control Center, GA, Thompson, or learning.
+- No message broker, durable queue, or guaranteed-delivery promise.
+- No shared-secret or certificate infrastructure.
+- Never expose unauthenticated worker or federation endpoints to untrusted networks.

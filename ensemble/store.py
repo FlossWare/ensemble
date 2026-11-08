@@ -119,6 +119,8 @@ class DocumentStore(Protocol):
     async def generation_all_chunks(self, generation_id: str) -> list[IndexedChunk]: ...
     async def generation_lexical_search(self, generation_id: str, query: str, limit: int = 200) -> list[tuple[IndexedChunk, float]]: ...
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int: ...
+    async def restore_generation_source(self, generation_id: str, source_id: str) -> int: ...
+    async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int: ...
     async def delete_generation(self, generation_id: str) -> int: ...
 
 
@@ -260,6 +262,31 @@ class InMemoryDocumentStore:
                 document.metadata["_generation_tombstoned"] = True
         return 1
 
+    async def restore_generation_source(self, generation_id: str, source_id: str) -> int:
+        tombstones = self._generation_tombstones.get(generation_id, set())
+        removed = int(source_id in tombstones)
+        tombstones.discard(source_id)
+        generation = self._generation_data.get(generation_id, {})
+        for (stored_source, _revision), (document, _chunks) in generation.items():
+            if stored_source == source_id:
+                document.metadata = dict(document.metadata)
+                document.metadata.pop("_generation_tombstoned", None)
+        return removed
+
+    async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int:
+        """Remove one bounded page of a source's documents from a generation."""
+        if not generation_id or not source_id:
+            raise ValueError("generation_id and source_id are required")
+        generation = self._generation_data.get(generation_id, {})
+        keys = sorted(
+            (key for key in generation if key[0] == source_id),
+            key=lambda key: key[1],
+        )
+        selected = keys[:500]
+        for key in selected:
+            del generation[key]
+        return 501 if len(keys) > 500 else len(selected)
+
     async def delete_generation(self, generation_id: str) -> int:
         self._generation_tombstones.pop(generation_id, None)
         return len(self._generation_data.pop(generation_id, {}))
@@ -303,7 +330,7 @@ class SqlDocumentStore:
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0028_memory_generation_snapshots":
+        if revision not in {"0031_source_schedules", "0032_execution_traces", "0033_thompson_selection_history", "0034_deletion_metadata", "0035_collaboration_records", "0036_deletion_audit", "0037_legal_erasure_metadata", "0038_transcript_job_leases"}:
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )
@@ -661,6 +688,58 @@ class SqlDocumentStore:
                 ).values(is_current=False)
             )
         return inserted.rowcount or 0
+
+    async def restore_generation_source(self, generation_id: str, source_id: str) -> int:
+        async with self.engine.begin() as connection:
+            marker = await connection.execute(
+                delete(generation_source_tombstones).where(
+                    generation_source_tombstones.c.generation_id == generation_id,
+                    generation_source_tombstones.c.source_id == source_id,
+                )
+            )
+            latest_revision = (await connection.execute(
+                select(func.max(generation_documents.c.revision)).where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == source_id,
+                )
+            )).scalar_one_or_none()
+            await connection.execute(
+                generation_documents.update().where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == source_id,
+                ).values(is_current=False)
+            )
+            if latest_revision is not None:
+                await connection.execute(
+                    generation_documents.update().where(
+                        generation_documents.c.generation_id == generation_id,
+                        generation_documents.c.source_id == source_id,
+                        generation_documents.c.revision == latest_revision,
+                    ).values(is_current=True)
+                )
+        return int(marker.rowcount or 0)
+
+    async def reclaim_generation_source(self, generation_id: str, source_id: str) -> int:
+        """Remove one bounded page of a purged source's generation documents and chunks."""
+        async with self.engine.begin() as connection:
+            document_ids = (await connection.execute(
+                select(generation_documents.c.document_id).where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.source_id == source_id,
+                ).order_by(generation_documents.c.document_id).limit(501)
+            )).scalars().all()
+            more = len(document_ids) > 500
+            document_ids = document_ids[:500]
+            if document_ids:
+                await connection.execute(delete(generation_chunks).where(
+                    generation_chunks.c.generation_id == generation_id,
+                    generation_chunks.c.document_id.in_(document_ids),
+                ))
+                await connection.execute(delete(generation_documents).where(
+                    generation_documents.c.generation_id == generation_id,
+                    generation_documents.c.document_id.in_(document_ids),
+                ))
+        return 501 if more else len(document_ids)
 
     async def delete_generation(self, generation_id: str) -> int:
         async with self.engine.begin() as connection:

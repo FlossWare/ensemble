@@ -1,0 +1,63 @@
+# POC Dependency Parity Audit
+
+Reference: `FlossWare/poc-claude-ensemble` (`main`)
+Target: `FlossWare/ensemble` (`integration/source-lifecycle-mainline-2026-11-04`)
+
+## Acceptance rule
+
+Ensemble preserves the POC's third-party libraries and their proven roles. A library substitution is a parity gap, even when a replacement exposes similar routes or operations. A substitution requires a written technical justification and explicit approval before it is accepted.
+
+The one-application/one-listener REST architecture does not authorize replacing working storage, model, inference, parsing, retrieval, or analytics libraries. Dependencies can be consolidated behind Ensemble capability boundaries without changing the underlying library.
+
+## Initial dependency inventory
+
+This is a source-backed first pass, not a completed transitive dependency lock audit. It separates the POC's service implementation from the broader `core/` Claude Code integration package so that dependencies are not accidentally attributed to the wrong runtime.
+
+| POC component | Library / runtime | Evidence in POC | Ensemble status | Parity disposition |
+|---|---|---|---|---|
+| Vector store | Python `chromadb` | `services/embeddings/vector_store.py` imports `chromadb` and uses `PersistentClient`, persistent collections, cosine-space metadata; POC README identifies ChromaDB-backed exact search | Production API now selects `ChromaVectorStore` (`ensemble/chroma_vector_store.py`); ChromaDB `1.5.9` is a required runtime dependency, matching the POC's versioned persistent-store directory. Legacy `SqliteVectorStore` remains for direct adapter tests, not production selection | **Library restored; Chroma lifecycle and generation-mirror tests pass. POC corpus import, production recall, and performance verification remain.** |
+| Embedding math | `numpy` | POC `services/embeddings/embed_lib.py` and `vector_service.py` | Required Ensemble runtime dependency; also used by embedding and vector code paths | Retained as a required dependency |
+| Tokenization | Hugging Face `tokenizers` | POC `embed_lib.py` loads the pinned tokenizer JSON using `Tokenizer.from_file` | Declared as optional `local-embeddings` and `context-tokenizer` dependency | Present; verify parity and install profile |
+| Embedding inference | `onnxruntime` | POC `embed_lib.py` imports ONNX Runtime for default CPU FP32 inference | Declared as optional `local-embeddings` dependency | Present; verify pinned/runtime matrix |
+| Embedding inference | `openvino` | POC `embed_lib.py` supports explicit CPU/GPU backends and fail-closed GPU selection | Declared as optional `openvino` dependency | Present; verify hardware runtime matrix |
+| Reranking | `sentence-transformers` / `CrossEncoder` | POC `services/embeddings/reranking_service.py` loads the pinned local cross-encoder | Declared as optional `reranking` dependency | Present; local runtime verification pending |
+| Graph | `networkx` | POC `services/graph-service/graph_service.py` uses `networkx.MultiDiGraph` for durable graph operations and traversal | Required dependency; `ensemble/graph_store.py` constructs a `MultiDiGraph` for typed, directional traversal while SQLite remains durable persistence | Retained; graph regression tests pass |
+| POC analytics / learning | `numpy`, `scikit-learn`, `pandas`, `joblib`, `pyyaml`, `filelock`, `Pillow` | `core/requirements.txt` plus its explicit note that `filelock` and Pillow are handled in API requirements | `ensemble/learning_analytics.py` uses pandas DataFrames and scikit-learn IsolationForest; joblib persists content-addressed detectors under a FileLock. `ensemble/ga_config.py` loads validated POC-compatible YAML bounds. `ensemble/image_ingestion.py` uses Pillow to validate images and extract dimensions/EXIF metadata; `/api/v1/ingest/images` indexes those metadata. CI installs `poc-learning` and runs dedicated tests. | **Runtime use implemented and tested for analytics, GA configuration, and image metadata ingestion. This is not OCR/vision parity; anomaly flags are review-only and not promotion evidence.** |
+| POC integration package | `@xenova/transformers`, `better-sqlite3`, `chromadb` (Node client), `neo4j-driver`, `pg`, `uuid`, `js-yaml` | `core/package.json` and `core/package-lock.json` | `integrations/claude-code/dependency-adapters.mjs` now exposes a local-only Transformers.js embedding pipeline, SQLite adapter, persistent Chroma client, explicitly optional Neo4j interoperability driver, UUID generation, and YAML loading. The adapter package has executable Node tests and CI installs its dependencies. `pg` remains excluded under the SQLite-only decision. | **All non-PostgreSQL Node manifest dependencies now have explicit adapter entry points; integration against live model files, Chroma data, and a Neo4j server remains environment-level verification.** |
+| POC Python integration package | `psycopg2-binary` | `core/requirements.txt` | Not declared in Ensemble | **Explicit architecture exception:** PostgreSQL is excluded from Ensemble by the established SQLite-only decision. This client is not required by the SQLite application and must not be added to Ensemble. |
+
+The direct-dependency retention baseline is now machine-readable in `parity/dependency-parity.json` and enforced by `python -m parity.dependency_audit` in CI. See [Automated POC Dependency Retention Check](dependency-parity-check.md). This check complements the source audit; it does not replace the outstanding import-use and transitive-lock audit.
+
+## Implemented POC learning dependencies
+
+The `poc-learning` extra is now exercised by CI (`pip install -e '.[dev,poc-learning]'`) rather than merely being checked for declaration.
+
+- `pandas` and `scikit-learn` power `/api/v1/learning/analytics`, which summarizes observed outcomes and uses IsolationForest to flag multivariate anomalies once at least ten observations exist.
+- `joblib` stores the fitted detector using a dataset-content-addressed cache; `filelock` serializes concurrent cache creation. Cache reuse requires matching schema version and dataset digest.
+- `pyyaml` loads `config/ga.yaml` through `ensemble.ga_config.load_ga_config`. The loader rejects unknown fields and verifies all configured system parameter bounds against the versioned GA parameter schema. GA run creation now consumes those defaults, with request values taking precedence.
+- `Pillow` validates bounded image uploads and extracts dimensions, format, color mode, frame count, and selected EXIF metadata. `/api/v1/ingest/images` indexes that metadata. It explicitly reports that visual content has not been OCR- or vision-processed; metadata indexing is not image-understanding parity.
+
+The model/inference extras (`tokenizers`, `onnxruntime`, `openvino`, and `sentence-transformers`) already have runtime implementations in the embedding and reranking providers. They remain separately installable because their model/runtime footprints differ substantially. CI does not download local model weights or claim hardware execution parity.
+## Implemented Node host-adapter dependencies
+
+`integrations/claude-code/dependency-adapters.mjs` is the concrete use boundary for the retained Node packages. Its test suite covers SQLite WAL/foreign-key setup, Chroma client construction, Neo4j configuration validation/driver lifecycle, fail-closed local model path selection, YAML parsing, and UUID generation. The CI workflow installs this package and runs those tests.
+
+These are host-side adapters, not another Ensemble service. The Neo4j driver is an explicitly configured interoperability option and does not replace SQLite or NetworkX as Ensemble's authoritative persistence/graph implementation. Transformers.js is local-only and refuses a missing model directory; CI does not download model weights.
+## Important distinctions
+
+- The Python ChromaDB dependency used by the POC vector service is distinct from the Node.js `chromadb` client listed in `core/package.json`. Both must be inventoried accurately. The Node package also declares `@xenova/transformers`, `better-sqlite3`, `neo4j-driver`, `uuid`, and `js-yaml`; these are retained in the optional host-adapter manifest, not loaded by the Python REST server. POC source inspection found `js-yaml` used by the model config loader and code-documentation tools, the Node `chromadb` package imported by the legacy memory RAG hook, and `pg` used by the PostgreSQL workflow-storage integration. `@xenova/transformers`, `better-sqlite3`, `neo4j-driver`, and `uuid` appear in the POC package manifest but were not found in the 43 tracked core JavaScript files inspected; they remain declared pending a broader source audit. The `pg` and `psycopg2-binary` packages remain excluded from Ensemble because PostgreSQL is explicitly out of scope.
+- The POC's vector service uses ChromaDB's persistent client and collection model. Production Ensemble now uses ChromaDB for vector records and similarity search; SQLite remains the transactional authority for source/index/generation metadata, not a replacement vector engine.
+- POC `core/` includes a broader Claude Code integration/runtime with Node and Python dependencies. Each dependency must be mapped to the POC capability that actually imports it; package presence alone does not prove that every dependency belongs in the standalone Ensemble server.
+- Existing explicit Ensemble constraints (one Python application, SQLite persistence, no PostgreSQL) are explicit architecture constraints. POC PostgreSQL clients (`pg`, `psycopg2-binary`) are excluded from the Ensemble runtime because PostgreSQL is explicitly out of scope; this is not permission to replace unrelated working libraries.
+- Transitive dependencies, exact installed versions, optional extras, platform markers, and lockfile reproducibility have not yet been fully reconciled.
+
+## Required next audit steps
+
+1. Recursively enumerate imports and dependency manifests in all POC service, core, tools, and evaluation code.
+2. Map every direct dependency to the POC modules and tests that exercise it.
+3. Compare against Ensemble's declared dependencies, optional extras, imports, runtime selection, and tests.
+4. Classify each entry as same library, missing, explicit approved exception, POC-only integration dependency, or not yet assessed.
+5. Verify ChromaDB persistent collection compatibility, cosine scoring, partition isolation, source tombstones, generation mirroring/cutover, and migration behavior before claiming vector parity. The CI suite now covers collection persistence, exact NumPy ranking, incremental cache updates, snapshot pagination/resume, metadata, source lifecycle, partition isolation, and the DocumentService generation-mirror path; see [ChromaDB storage and migration](chroma-migration.md).
+6. Add a CI check that fails when a POC runtime dependency is absent from Ensemble's dependency inventory without an explicit approved exception.
+
+No dependency substitution is accepted merely because a replacement has a similar API.

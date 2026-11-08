@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "reference": {
+    "repository": "FlossWare/poc-claude-ensemble",
+    "ref": "main",
+    "audit_document": "docs/poc-dependency-parity.md"
+  },
+  "python_required": [
+    "chromadb",
+    "numpy",
+    "tokenizers",
+    "onnxruntime",
+    "openvino",
+    "sentence-transformers",
+    "networkx",
+    "scikit-learn",
+    "pandas",
+    "joblib",
+    "PyYAML",
+    "filelock",
+    "Pillow"
+  ],
+  "node_adapter_required": [
+    "@xenova/transformers",
+    "better-sqlite3",
+    "chromadb",
+    "neo4j-driver",
+    "uuid",
+    "js-yaml"
+  ],
+  "approved_exceptions": {
+    "pg": "POC PostgreSQL workflow-storage integration is excluded by the SQLite-only Ensemble architecture decision.",
+    "psycopg2-binary": "POC PostgreSQL client is excluded by the SQLite-only Ensemble architecture decision."
+  }
+}

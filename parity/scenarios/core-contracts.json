@@ -1,0 +1,322 @@
+{
+  "version": 1,
+  "description": "Initial deterministic service-health contract checks. Add behavior scenarios only after confirming both request and response contracts from source.",
+  "reference_base_url_env": "POC_BASE_URL",
+  "candidate_base_url_env": "ENSEMBLE_BASE_URL",
+  "scenarios": [
+    {
+      "id": "chunking-health",
+      "capability": "chunking",
+      "reference": {
+        "method": "GET",
+        "path": "/health",
+        "base_url_env": "POC_CHUNKING_URL"
+      },
+      "candidate": {
+        "method": "GET",
+        "path": "/api/v1/chunking/health",
+        "base_url_env": "ENSEMBLE_BASE_URL"
+      },
+      "comparison": {
+        "ignore_json_pointers": [
+          "/timestamp",
+          "/uptime_seconds"
+        ]
+      }
+    },
+    {
+      "id": "tokenization-health",
+      "capability": "tokenization",
+      "reference": {
+        "method": "GET",
+        "path": "/health",
+        "base_url_env": "POC_TOKENIZATION_URL"
+      },
+      "candidate": {
+        "method": "GET",
+        "path": "/api/v1/tokenization/health",
+        "base_url_env": "ENSEMBLE_BASE_URL"
+      },
+      "comparison": {
+        "ignore_json_pointers": [
+          "/timestamp",
+          "/uptime_seconds"
+        ]
+      }
+    },
+    {
+      "id": "chunking-window-v1",
+      "capability": "chunking",
+      "reference": {
+        "method": "POST",
+        "path": "/chunk",
+        "base_url_env": "POC_CHUNKING_URL",
+        "request": {
+          "profile": "window-v1",
+          "source_id": "parity-fixture-001",
+          "media_type": "text/plain",
+          "text": "Alpha beta gamma. Delta epsilon zeta. Eta theta iota."
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/chunking/chunk",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "profile": "window-v1",
+          "source_id": "parity-fixture-001",
+          "media_type": "text/plain",
+          "text": "Alpha beta gamma. Delta epsilon zeta. Eta theta iota."
+        }
+      }
+    },
+    {
+      "id": "chunking-markdown-v1",
+      "capability": "chunking",
+      "reference": {
+        "method": "POST",
+        "path": "/chunk",
+        "base_url_env": "POC_CHUNKING_URL",
+        "request": {
+          "profile": "markdown-v1",
+          "source_id": "parity-fixture-002",
+          "media_type": "text/markdown",
+          "text": "# Overview\\nAlpha beta.\\n\\n## Details\\nGamma delta."
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/chunking/chunk",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "profile": "markdown-v1",
+          "source_id": "parity-fixture-002",
+          "media_type": "text/markdown",
+          "text": "# Overview\\nAlpha beta.\\n\\n## Details\\nGamma delta."
+        }
+      }
+    },
+    {
+      "id": "tokenization-compound-identifiers",
+      "capability": "tokenization",
+      "reference": {
+        "method": "POST",
+        "path": "/tokenize",
+        "base_url_env": "POC_TOKENIZATION_URL",
+        "request": {
+          "profile": "lexical-v1",
+          "text": "Deploy memory-service v1.2 from /var/lib/ensemble; café UUID-1234."
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/tokenization/tokenize",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "profile": "lexical-v1",
+          "text": "Deploy memory-service v1.2 from /var/lib/ensemble; café UUID-1234."
+        }
+      }
+    },
+    {
+      "id": "ranking-rrf-deterministic",
+      "capability": "ranking",
+      "reference": {
+        "method": "POST",
+        "path": "/rank",
+        "base_url_env": "POC_RANKING_URL",
+        "request": {
+          "lists": {
+            "lexical": [
+              {
+                "key": "chunk-a",
+                "rank": 1
+              },
+              {
+                "key": "chunk-b",
+                "rank": 2
+              },
+              {
+                "key": "chunk-c",
+                "rank": 3
+              }
+            ],
+            "vector": [
+              {
+                "key": "chunk-b",
+                "rank": 1
+              },
+              {
+                "key": "chunk-a",
+                "rank": 2
+              },
+              {
+                "key": "chunk-d",
+                "rank": 3
+              }
+            ]
+          },
+          "top_k": 4,
+          "k": 60
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/ranking/rank",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "lists": {
+            "lexical": [
+              {
+                "key": "chunk-a",
+                "rank": 1
+              },
+              {
+                "key": "chunk-b",
+                "rank": 2
+              },
+              {
+                "key": "chunk-c",
+                "rank": 3
+              }
+            ],
+            "vector": [
+              {
+                "key": "chunk-b",
+                "rank": 1
+              },
+              {
+                "key": "chunk-a",
+                "rank": 2
+              },
+              {
+                "key": "chunk-d",
+                "rank": 3
+              }
+            ]
+          },
+          "top_k": 4,
+          "k": 60
+        }
+      }
+    },
+    {
+      "id": "extraction-issue-key-v1",
+      "capability": "extraction",
+      "reference": {
+        "method": "POST",
+        "path": "/extract",
+        "base_url_env": "POC_EXTRACTION_URL",
+        "request": {
+          "text": "please track issue FLOSS-123 in release notes."
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/entities/extract",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "text": "please track issue FLOSS-123 in release notes."
+        }
+      },
+      "comparison": {
+        "include_json_pointers": [
+          "/entities/0/type",
+          "/entities/0/text",
+          "/entities/0/start",
+          "/entities/0/end",
+          "/entities/0/exact",
+          "/entities/0/confidence"
+        ]
+      }
+    },
+    {
+      "id": "intent-history-v1",
+      "capability": "intent",
+      "reference": {
+        "method": "POST",
+        "path": "/classify",
+        "base_url_env": "POC_INTENT_URL",
+        "request": {
+          "text": "What did we decide earlier?"
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/intent/classify",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "text": "What did we decide earlier?"
+        }
+      },
+      "comparison": {
+        "include_json_pointers": [
+          "/label",
+          "/confidence"
+        ]
+      }
+    },
+    {
+      "id": "extraction-path-version-v1",
+      "capability": "extraction",
+      "reference": {
+        "method": "POST",
+        "path": "/extract",
+        "base_url_env": "POC_EXTRACTION_URL",
+        "request": {
+          "text": "please inspect /var/lib/ensemble/config.yaml and release v1.2.3"
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/entities/extract",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "text": "please inspect /var/lib/ensemble/config.yaml and release v1.2.3"
+        }
+      },
+      "comparison": {
+        "include_json_pointers": [
+          "/entities/0/type",
+          "/entities/0/text",
+          "/entities/0/start",
+          "/entities/0/end",
+          "/entities/0/exact",
+          "/entities/0/confidence",
+          "/entities/1/type",
+          "/entities/1/text",
+          "/entities/1/start",
+          "/entities/1/end",
+          "/entities/1/exact",
+          "/entities/1/confidence"
+        ]
+      }
+    },
+    {
+      "id": "intent-no-match-v1",
+      "capability": "intent",
+      "reference": {
+        "method": "POST",
+        "path": "/classify",
+        "base_url_env": "POC_INTENT_URL",
+        "request": {
+          "text": "the quick brown fox crosses the quiet field"
+        }
+      },
+      "candidate": {
+        "method": "POST",
+        "path": "/api/v1/intent/classify",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "request": {
+          "text": "the quick brown fox crosses the quiet field"
+        }
+      },
+      "comparison": {
+        "include_json_pointers": [
+          "/label",
+          "/confidence"
+        ]
+      }
+    }
+  ]
+}

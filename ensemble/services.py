@@ -7,7 +7,9 @@ import asyncio
 import copy
 import os
 import time
+import json
 from collections.abc import Sequence
+from typing import Any
 from uuid import uuid5, NAMESPACE_URL
 from .chunking import Chunker, chunk as chunk_text
 from .embeddings import EmbeddingProvider, MAX_TEXTS as MAX_EMBEDDING_BATCH
@@ -15,6 +17,8 @@ from .models import Chunk, Document, DocumentIn, DocumentOut, SearchHit
 from .store import DocumentStore
 from .reranking import Reranker, RerankingDecorator, configured_ranking_provider
 from .vector_store import VectorStore
+from .rrf import reciprocal_rank_fusion, thompson_channel_weights
+from .rest_client import InternalRestClient
 
 
 def _retrieval_channel_timeout() -> float:
@@ -31,17 +35,24 @@ class DocumentService:
     def __init__(
         self, store: DocumentStore, chunker: Chunker, embeddings: EmbeddingProvider,
         vector_store: VectorStore | None = None, index_store: object | None = None,
+        internal_client: InternalRestClient | None = None,
     ):
         self.store = store
         self.chunker = chunker
         self.embeddings = embeddings
         self.vector_store = vector_store
         self.index_store = index_store
+        self.internal_client = internal_client
 
-    async def _active_generation(self) -> str | None:
-        if self.index_store is None:
+    async def _active_generation(self, request: Any = None) -> str | None:
+        if self.internal_client is not None:
+            status = await self.internal_client.request(
+                "GET", "/api/v1/index/generations", request=request,
+            )
+        elif self.index_store is not None:
+            status = await self.index_store.generation_status()
+        else:
             return None
-        status = await self.index_store.generation_status()
         active_id = status.get("active_generation_id")
         active = next((item for item in status.get("generations", [])
                        if item.get("generation_id") == active_id), None)
@@ -50,13 +61,34 @@ class DocumentService:
             return active_id
         return None
 
-    async def ingest(self, request: DocumentIn, *, embed: bool = True, vector_collection: str | None = None) -> DocumentOut:
+    async def ingest(
+        self, request: DocumentIn, *, embed: bool = True,
+        vector_collection: str | None = None, trace: object | None = None,
+        request_context: Any = None,
+    ) -> DocumentOut:
+        async def record_stage(name: str, status: str, started: float, **details: object) -> None:
+            if not callable(trace):
+                return
+            try:
+                await trace({
+                    "name": name, "status": status,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    **details,
+                })
+            except Exception:
+                # Trace persistence must never become a document-ingestion dependency.
+                pass
+
         document = Document(request.source_id, request.revision, request.title, request.content, request.metadata)
         document.id = uuid5(NAMESPACE_URL, f"ensemble:document:{request.source_id}:{request.revision}")
+        stage_started = time.perf_counter()
         records = chunk_text(request.chunk_profile, request.source_id, request.content, request.media_type)
         if not records:
+            await record_stage("chunking", "failed", stage_started, error_category="EmptyDocument")
             raise ValueError("document content contains no usable text")
+        await record_stage("chunking", "completed", stage_started, chunk_count=len(records))
         texts = [record["text"] for record in records]
+        stage_started = time.perf_counter()
         if embed and self.embeddings.available:
             try:
                 vectors = []
@@ -72,6 +104,12 @@ class DocumentService:
             vectors = [[] for _ in texts]
         if len(vectors) != len(texts):
             raise RuntimeError("embedding provider returned an unexpected vector count")
+        await record_stage(
+            "embedding", "completed" if embed and self.embeddings.available else "skipped",
+            stage_started, embedded_count=sum(bool(vector) for vector in vectors),
+            requested=bool(embed), provider_available=bool(self.embeddings.available),
+        )
+        stage_started = time.perf_counter()
         chunks = [
             Chunk(
                 document.id, record["index"], record["text"], vectors[index],
@@ -82,7 +120,11 @@ class DocumentService:
         ]
         for chunk in chunks:
             chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
-        if self.index_store is not None:
+        if self.internal_client is not None:
+            await self.internal_client.request(
+                "GET", "/api/v1/index/generation-writes/ready", request=request_context,
+            )
+        elif self.index_store is not None:
             await self.index_store.assert_generation_writes_open()
         requested_document_id = document.id
         document = await self.store.save(document, chunks)
@@ -91,60 +133,112 @@ class DocumentService:
                 chunk.document_id = document.id
                 chunk.id = uuid5(NAMESPACE_URL, f"ensemble:{document.id}:{chunk.ordinal}")
             document = await self.store.save(document, chunks)
-        active_generation_id = await self._active_generation()
+        await record_stage("document_persistence", "completed", stage_started, chunk_count=len(chunks))
+        stage_started = time.perf_counter()
+        active_generation_id = await self._active_generation(request_context)
         if active_generation_id is not None:
             await self.store.upsert_generation(
                 active_generation_id, copy.deepcopy(document), copy.deepcopy(chunks),
             )
+        await record_stage(
+            "document_generation_mirror", "completed" if active_generation_id is not None else "skipped",
+            stage_started, generation_active=active_generation_id is not None,
+        )
+        stage_started = time.perf_counter()
         vector_indexed = False
         digest = hashlib.sha256(request.content.encode("utf-8")).hexdigest()
-        if vector_collection and embed and self.vector_store is not None:
-            if self.embeddings.available and chunks and all(chunk.embedding for chunk in chunks):
+        if vector_collection and (self.vector_store is not None or self.internal_client is not None):
+            if embed and self.embeddings.available and chunks and all(chunk.embedding for chunk in chunks):
                 status = self.embeddings.status()
                 model = status.get("model") or "unknown"
                 dimensions = status.get("dimensions") or len(chunks[0].embedding)
+                items = [{
+                    "id": str(chunk.id),
+                    "embedding": chunk.embedding,
+                    "document": chunk.content,
+                    "metadata": {
+                        "source_id": document.source_id,
+                        "url": document.source_id,
+                        "revision": document.revision,
+                        "title": document.title,
+                        "chunk_id": str(chunk.id),
+                        "chunk_ordinal": chunk.ordinal,
+                        "chunk_profile": chunk.profile,
+                        "chunk_start": chunk.start,
+                        "chunk_end": chunk.end,
+                        "chunk_header": chunk.header,
+                        "content_sha256": digest,
+                        "source_metadata": document.metadata,
+                    },
+                } for chunk in chunks]
                 try:
-                    items = [{
-                        "id": str(chunk.id),
-                        "embedding": chunk.embedding,
-                        "document": chunk.content,
-                        "metadata": {
-                            "source_id": document.source_id,
-                            "url": document.source_id,
-                            "revision": document.revision,
-                            "title": document.title,
-                            "chunk_id": str(chunk.id),
-                            "chunk_ordinal": chunk.ordinal,
-                            "chunk_profile": chunk.profile,
-                            "chunk_start": chunk.start,
-                            "chunk_end": chunk.end,
-                            "chunk_header": chunk.header,
-                            "content_sha256": digest,
-                            "source_metadata": document.metadata,
-                        },
-                    } for chunk in chunks]
                     for offset in range(0, len(items), 256):
-                        await self.vector_store.upsert(
-                            vector_collection, model, dimensions, items[offset:offset + 256]
-                        )
-                    if active_generation_id is not None:
-                        await self.vector_store.delete_generation_source(
-                            active_generation_id, document.source_id, name=vector_collection,
-                        )
-                        await self.vector_store.upsert_generation(
-                            active_generation_id, vector_collection, model, dimensions, items,
-                        )
+                        batch = items[offset:offset + 256]
+                        if self.internal_client is not None:
+                            await self.internal_client.request(
+                                "PUT", f"/api/v1/vector/collections/{vector_collection}/records",
+                                request=request_context,
+                                json={
+                                    "ids": [item["id"] for item in batch],
+                                    "embeddings": [item["embedding"] for item in batch],
+                                    "documents": [item["document"] for item in batch],
+                                    "metadatas": [item["metadata"] for item in batch],
+                                    "model": model, "dimensions": dimensions,
+                                },
+                            )
+                        else:
+                            await self.vector_store.upsert(
+                                vector_collection, model, dimensions, batch,
+                            )
                     vector_indexed = True
                 except Exception:
+                    # Vector indexing is optional; durable Documents ingestion remains authoritative.
                     vector_indexed = False
-            # The durable document revision is authoritative. Never leave vectors
-            # from an older revision searchable after a newer revision is accepted.
+
+            # The durable document revision is authoritative. Prune older vectors through Vector REST.
             try:
-                await self.vector_store.delete_superseded(
-                    vector_collection, document.source_id, digest
-                )
+                if self.internal_client is not None:
+                    await self.internal_client.request(
+                        "POST", f"/api/v1/vector/collections/{vector_collection}/records/prune",
+                        request=request_context,
+                        json={"url": document.source_id, "keep_sha256": digest},
+                    )
+                else:
+                    await self.vector_store.delete_superseded(
+                        vector_collection, document.source_id, digest,
+                    )
             except Exception:
                 vector_indexed = False
+
+            if active_generation_id is not None and self.internal_client is None:
+                # Direct mirroring remains only for isolated unit adapters without REST.
+                persisted = await self.vector_store.list_records_for_source(
+                    vector_collection, document.source_id,
+                )
+                await self.vector_store.delete_generation_source(
+                    active_generation_id, document.source_id, name=vector_collection,
+                )
+                if persisted:
+                    collections = await self.vector_store.list_collections()
+                    collection = next(
+                        (item for item in collections if item["name"] == vector_collection),
+                        None,
+                    )
+                    if collection is None:
+                        raise RuntimeError(
+                            f"Vector collection {vector_collection} disappeared during generation mirroring"
+                        )
+                    await self.vector_store.upsert_generation(
+                        active_generation_id, vector_collection,
+                        collection["model"], collection["dimensions"], persisted,
+                    )
+        await record_stage(
+            "vector_indexing_and_generation_mirror",
+            "completed" if vector_indexed else ("skipped" if not vector_collection or (self.vector_store is None and self.internal_client is None) else "degraded"),
+            stage_started, vector_indexed=vector_indexed,
+            collection_configured=bool(vector_collection),
+            generation_mirrored=active_generation_id is not None,
+        )
         return DocumentOut(
             id=document.id,
             source_id=document.source_id,
@@ -163,19 +257,27 @@ class SearchService:
     def __init__(
         self, store: DocumentStore, embeddings: EmbeddingProvider,
         reranker: Reranker | None = None, vector_store: VectorStore | None = None,
-        index_store: object | None = None,
+        index_store: object | None = None, thompson_store: object | None = None,
+        internal_client: InternalRestClient | None = None,
     ):
         self.store = store
         self.embeddings = embeddings
         self.reranker = reranker
         self.vector_store = vector_store
         self.index_store = index_store
+        self.thompson_store = thompson_store
+        self.internal_client = internal_client
+        self.rrf_k = _rrf_constant()
+        self.rrf_weights = _rrf_weights()
+        self.rrf_weight_strategy = os.getenv("ENSEMBLE_RRF_WEIGHT_STRATEGY", "static").strip().lower()
+        if self.rrf_weight_strategy not in {"static", "thompson"}:
+            raise ValueError("ENSEMBLE_RRF_WEIGHT_STRATEGY must be static or thompson")
         provider = configured_ranking_provider(reranker)
         self.search_with_status = RerankingDecorator(provider)(self._search_with_status)
 
-    async def lexical_search(self, query: str, limit: int = 10) -> list[SearchHit]:
+    async def lexical_search(self, query: str, limit: int = 10, request: Any = None) -> list[SearchHit]:
         candidates = await self.search_with_status(
-            query, min(2000, limit * 4), include_vector=False, rerank=False
+            query, min(2000, limit * 4), include_vector=False, rerank=False, request=request,
         )
         seen: set[str] = set()
         unique: list[SearchHit] = []
@@ -189,18 +291,40 @@ class SearchService:
                 break
         return unique
 
-    async def search(self, query: str, limit: int = 10) -> list[SearchHit]:
-        return (await self.search_with_status(query, limit))["results"]
+    async def search(self, query: str, limit: int = 10, request: Any = None) -> list[SearchHit]:
+        return (await self.search_with_status(query, limit, request=request))["results"]
 
     async def _search_with_status(
-        self, query: str, limit: int = 10, *, include_vector: bool = True, rerank: bool | None = None
+        self, query: str, limit: int = 10, *, include_vector: bool = True,
+        rerank: bool | None = None, trace: object | None = None,
+        request: Any = None,
     ) -> dict:
         if not query.strip():
             raise ValueError("query is required")
 
+        async def record_stage(name: str, status: str, started: float, **details: object) -> None:
+            if not callable(trace):
+                return
+            try:
+                await trace({
+                    "name": name, "status": status,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    **details,
+                })
+            except Exception:
+                # Observability must not become a retrieval dependency.
+                pass
+
         active_generation_id = None
-        if self.index_store is not None:
+        if self.internal_client is not None:
+            status_snapshot = await self.internal_client.request(
+                "GET", "/api/v1/index/generations", request=request,
+            )
+        elif self.index_store is not None:
             status_snapshot = await self.index_store.generation_status()
+        else:
+            status_snapshot = None
+        if status_snapshot is not None:
             active_id = status_snapshot.get("active_generation_id")
             active_row = next((item for item in status_snapshot.get("generations", [])
                                if item.get("generation_id") == active_id), None)
@@ -246,6 +370,11 @@ class SearchService:
             }
             degraded.append("lexical_timeout" if isinstance(exc, TimeoutError) else "lexical")
 
+        await record_stage(
+            "lexical_retrieval", channels["lexical"]["status"], lexical_started,
+            candidate_count=channels["lexical"]["candidate_count"],
+        )
+
         if include_vector:
             if not self.embeddings.available:
                 channels["vector"] = {
@@ -276,18 +405,32 @@ class SearchService:
                         raise RuntimeError("embedding provider returned a non-finite query vector")
 
                     collection_scores: dict = {}
-                    if self.vector_store is not None:
+                    if self.vector_store is not None or self.internal_client is not None:
                         collection_started = time.perf_counter()
                         try:
-                            vector_operation = (
-                                self.vector_store.query_generation(
-                                    active_generation_id, "transcript_text", query_vector, 200,
-                                ) if active_generation_id is not None else
-                                self.vector_store.query("transcript_text", query_vector, 200)
-                            )
-                            vector_hits = await asyncio.wait_for(
-                                vector_operation, timeout=_retrieval_channel_timeout(),
-                            )
+                            if self.internal_client is not None:
+                                vector_operation = self.internal_client.request(
+                                    "POST", "/api/v1/vector/collections/transcript_text/query",
+                                    request=request,
+                                    json={
+                                        "embedding": list(query_vector), "limit": 200,
+                                        "generation_id": active_generation_id,
+                                    },
+                                )
+                                vector_response = await asyncio.wait_for(
+                                    vector_operation, timeout=_retrieval_channel_timeout(),
+                                )
+                                vector_hits = vector_response.get("results", [])
+                            else:
+                                vector_operation = (
+                                    self.vector_store.query_generation(
+                                        active_generation_id, "transcript_text", query_vector, 200,
+                                    ) if active_generation_id is not None else
+                                    self.vector_store.query("transcript_text", query_vector, 200)
+                                )
+                                vector_hits = await asyncio.wait_for(
+                                    vector_operation, timeout=_retrieval_channel_timeout(),
+                                )
                             known_ids = {str(item.chunk.id): item.chunk.id for item in indexed}
                             collection_scores = {
                                 known_ids[hit["id"]]: float(hit["score"])
@@ -345,15 +488,80 @@ class SearchService:
                     }
                     degraded.append("embeddings_timeout" if isinstance(exc, TimeoutError) else "embeddings")
 
+        vector_channel = channels["vector"]
+        if include_vector:
+            if vector_channel.get("embedding_ms") is not None:
+                await record_stage(
+                    "query_embedding",
+                    "completed" if vector_channel.get("available") else "failed",
+                    time.perf_counter() - float(vector_channel.get("embedding_ms", 0)) / 1000.0,
+                    duration_ms=vector_channel.get("embedding_ms"),
+                    provider_available=bool(self.embeddings.available),
+                )
+                await record_stage(
+                    "vector_collection_query",
+                    "completed" if vector_channel.get("collection_candidate_count", 0) or vector_channel.get("status") == "ok" else "degraded",
+                    time.perf_counter() - float(vector_channel.get("collection_ms", 0)) / 1000.0,
+                    duration_ms=vector_channel.get("collection_ms", 0),
+                    candidate_count=vector_channel.get("collection_candidate_count", 0),
+                )
+                await record_stage(
+                    "document_vector_scan", "completed",
+                    time.perf_counter() - float(vector_channel.get("document_scan_ms", 0)) / 1000.0,
+                    duration_ms=vector_channel.get("document_scan_ms", 0),
+                    candidate_count=vector_channel.get("document_candidate_count", 0),
+                )
+            else:
+                await record_stage(
+                    "query_embedding",
+                    "failed" if not self.embeddings.available or vector_channel.get("status") == "unavailable" else "skipped",
+                    time.perf_counter(),
+                    provider_available=bool(self.embeddings.available),
+                )
+        else:
+            await record_stage("vector_retrieval", "skipped", time.perf_counter())
+
         lexical_ranks = _rank(lexical_scores)
         vector_ranks = _rank(vector_scores)
+        ranked_channels = {
+            "lexical": [{"chunk_id": identifier} for identifier in lexical_ranks],
+            "vector": [{"chunk_id": identifier} for identifier in vector_ranks],
+            "graph": [],
+        }
+        selected_weights = dict(self.rrf_weights)
+        weight_strategy = "static"
+        if self.rrf_weight_strategy == "thompson" and (self.thompson_store is not None or self.internal_client is not None):
+            if self.internal_client is not None:
+                state = (await self.internal_client.request(
+                    "GET", "/api/v1/thompson/state", request=request,
+                )).get("state", {})
+            else:
+                state = await self.thompson_store.get_state()
+            model_stats = state.get("models", {})
+            feedback = {
+                channel: model_stats.get(f"retrieval:{channel}", {})
+                for channel in ranked_channels
+            }
+            if any(stats.get("calls", 0) for stats in feedback.values()):
+                selected_weights = thompson_channel_weights(feedback)
+                weight_strategy = "thompson"
+        fusion_started = time.perf_counter()
+        fused = reciprocal_rank_fusion(
+            ranked_channels, k=self.rrf_k, weights=selected_weights,
+        )
+        await record_stage(
+            "rrf_fusion", "completed", fusion_started,
+            algorithm="weighted_rrf" if any(weight != 1.0 for weight in selected_weights.values()) or weight_strategy == "thompson" else "rrf",
+            k=self.rrf_k, channel_candidate_counts={
+                name: len(candidates) for name, candidates in ranked_channels.items()
+            }, fused_candidate_count=len(fused),
+        )
+        fused_by_id = {item.candidate_id: item for item in fused}
         hits: list[SearchHit] = []
         for item in indexed:
-            lexical_rank = lexical_ranks.get(item.chunk.id)
-            vector_rank = vector_ranks.get(item.chunk.id)
-            if lexical_rank is None and vector_rank is None:
+            fusion_result = fused_by_id.get(str(item.chunk.id))
+            if fusion_result is None:
                 continue
-            fusion = _rrf(lexical_rank) + _rrf(vector_rank)
             hits.append(SearchHit(
                 document_id=item.document.id,
                 source_id=item.document.source_id,
@@ -364,7 +572,7 @@ class SearchService:
                 text=item.chunk.content,
                 lexical_score=lexical_scores.get(item.chunk.id, 0.0),
                 vector_score=vector_scores.get(item.chunk.id, 0.0),
-                fusion_score=fusion,
+                fusion_score=fusion_result.score,
                 chunk_profile=item.chunk.profile,
                 chunk_start=item.chunk.start,
                 chunk_end=item.chunk.end,
@@ -376,7 +584,7 @@ class SearchService:
                 is_subagent=item.document.metadata.get("is_subagent"),
                 text_sha=hashlib.sha256(item.chunk.content.encode("utf-8")).hexdigest(),
             ))
-        if active_generation_id is not None and hits:
+        if self.index_store is not None and hits:
             source_states = await self.index_store.get_sources(
                 sorted({hit.source_id for hit in hits}),
             )
@@ -391,10 +599,66 @@ class SearchService:
                     continue
                 current_hits.append(hit)
             hits = current_hits
+        finalization_started = time.perf_counter()
         results = sorted(
-            hits, key=lambda hit: (hit.fusion_score, hit.lexical_score, str(hit.chunk_id)),
-            reverse=True,
+            hits, key=lambda hit: (-hit.fusion_score, -hit.lexical_score, str(hit.chunk_id)),
         )[:limit]
+        await record_stage(
+            "generation_filter_and_final_order", "completed", finalization_started,
+            candidate_count=len(hits), result_count=len(results),
+            active_generation=active_generation_id is not None,
+        )
+        indexed_by_id = {str(item.chunk.id): item for item in indexed}
+        channel_candidate_limit = min(100, max(20, limit * 4))
+
+        def channel_candidates(ranks: dict, scores: dict) -> list[dict]:
+            candidates = []
+            for identifier, rank in sorted(ranks.items(), key=lambda pair: pair[1]):
+                item = indexed_by_id.get(str(identifier))
+                if item is None:
+                    continue
+                candidates.append({
+                    "rank": rank,
+                    "chunk_id": str(item.chunk.id),
+                    "document_id": item.document.id,
+                    "source_id": item.document.source_id,
+                    "revision": item.document.revision,
+                    "title": item.document.title,
+                    "chunk_ordinal": item.chunk.ordinal,
+                    "score": round(float(scores.get(identifier, 0.0)), 8),
+                })
+                if len(candidates) >= channel_candidate_limit:
+                    break
+            return candidates
+
+        fusion_diagnostics = {
+            "algorithm": "weighted_rrf" if any(weight != 1.0 for weight in selected_weights.values()) or weight_strategy == "thompson" else "rrf",
+            "k": self.rrf_k,
+            "weight_strategy": weight_strategy,
+            "weights": {
+                channel: selected_weights.get(channel, 1.0)
+                for channel in ranked_channels
+            },
+            "channels": {
+                "lexical": {"candidate_count": len(lexical_ranks), "candidates": channel_candidates(lexical_ranks, lexical_scores)},
+                "vector": {"candidate_count": len(vector_ranks), "candidates": channel_candidates(vector_ranks, vector_scores)},
+                "graph": {"candidate_count": 0, "candidates": []},
+            },
+            "results": [
+                {
+                    "chunk_id": hit.chunk_id,
+                    "lexical_rank": fused_by_id[str(hit.chunk_id)].ranks.get("lexical"),
+                    "vector_rank": fused_by_id[str(hit.chunk_id)].ranks.get("vector"),
+                    "ranks": dict(fused_by_id[str(hit.chunk_id)].ranks),
+                    "contributions": {
+                        channel: round(value, 8)
+                        for channel, value in fused_by_id[str(hit.chunk_id)].contributions.items()
+                    },
+                    "score": round(hit.fusion_score, 8),
+                }
+                for hit in results
+            ],
+        }
         operational_channels = sum(
             1 for channel in channels.values()
             if channel["status"] in {"ok", "partial"}
@@ -411,6 +675,11 @@ class SearchService:
             retrieval = "vector"
         else:
             retrieval = "unavailable"
+        await record_stage(
+            "retrieval_response", "completed" if operational_channels > 0 else "degraded",
+            finalization_started, result_count=len(results), retrieval=retrieval,
+            degraded=sorted(set(degraded)),
+        )
         return {
             "ok": operational_channels > 0,
             "status": status,
@@ -418,6 +687,7 @@ class SearchService:
             "degraded": sorted(set(degraded)),
             "channels": channels,
             "retrieval": retrieval,
+            "fusion": fusion_diagnostics,
             "reranked": False,
         }
 
@@ -426,8 +696,30 @@ def _tokens(text: str) -> set[str]:
     return {token for token in re.findall(r"[^\W_]+", text.casefold()) if token}
 
 
+def _rrf_weights() -> dict[str, float]:
+    raw = os.getenv("ENSEMBLE_RRF_WEIGHTS", "{}")
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ENSEMBLE_RRF_WEIGHTS must be a JSON object") from exc
+    if not isinstance(value, dict):
+        raise ValueError("ENSEMBLE_RRF_WEIGHTS must be a JSON object")
+    for channel, weight in value.items():
+        if not isinstance(channel, str) or not channel.strip() or isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(float(weight)) or weight < 0:
+            raise ValueError("ENSEMBLE_RRF_WEIGHTS values must be finite non-negative numbers keyed by channel")
+    return {key: float(weight) for key, weight in value.items()}
+
+
+def _rrf_constant() -> int:
+    try:
+        configured = int(os.getenv("ENSEMBLE_RRF_K", "60"))
+    except (TypeError, ValueError):
+        return 60
+    return configured if 1 <= configured <= 10_000 else 60
+
+
 def _rank(scores: dict) -> dict:
-    ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    ordered = sorted(scores.items(), key=lambda item: (-item[1], str(item[0])))
     return {identifier: rank for rank, (identifier, _) in enumerate(ordered, start=1)}
 
 

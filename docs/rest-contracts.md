@@ -75,7 +75,121 @@ Each capability group can be assigned an independent REST base URL. The initial 
 
 When a key is unset, requests for that capability use the co-located ASGI transport. Setting a key routes that capability's requests to the configured REST server. Context Assembly dispatches to Search, Memory, Intent, and Entity REST endpoints. Hybrid Search dispatches base retrieval to Search, intent classification and entity extraction to their capabilities, Graph query/traversal to Graph, reranking to Reranking, and its search-ledger write to Memory through REST. Knowledge-scoped Hybrid Search dispatches embedding and vector queries through their REST contracts. Document ingestion dispatches revision registration to Index, document/chunk storage to Documents, entity extraction to Entities, and graph association to Graph through REST. Transcript session ingestion dispatches event persistence to Memory, revision lookup to Index, entity extraction to Entities, and session/file relationships to Graph through REST. Source tombstone propagation dispatches to Documents, Knowledge, and every configured Vector collection through REST. Hybrid Search invokes the Search capability through `POST /api/v1/search/retrieve`. Search retains ownership of its retrieval algorithm and persistence rather than exposing its internal store implementation to Hybrid. Setting `ENSEMBLE_SEARCH_REST_URL` moves Search behind a separate REST server without changing the Hybrid contract. Remaining direct store access inside Search is capability-owned implementation, not cross-capability composition. Only call paths explicitly migrated to the internal REST client satisfy the boundary.
 
-## 7. Initial implemented endpoints
+## 7. Index coordination endpoints
+
+Internal callers coordinate generation state through the Index REST contract rather than reaching into the Index store:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | /api/v1/index/generation-writes/ready | Reject writes while generation lifecycle state blocks mutation |
+| GET | /api/v1/index/vector-writes/ready | Reject vector mutations while generation or standalone-vector lifecycle state blocks mutation |
+| POST | /api/v1/index/generation-changes/acknowledgements | Acknowledge a source revision or tombstone after downstream capability work completes |
+
+The acknowledgement body requires `source_id`, positive `revision_sequence`, and boolean `tombstoned`. These routes are also the contract used by the co-located ASGI transport; they are not implementation-only shortcuts.
+
+## 8. Index generation-copy primitives
+
+Generation rebuilds are durable operations represented by the Index generation record and its capability checkpoints. The public lifecycle is:
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | /api/v1/index/generations | Create a durable building generation |
+| GET | /api/v1/index/generations | Inspect generation state, checkpoints, missing work, and activation readiness |
+| POST | /api/v1/index/generations/{generation_id}/copy/{capability} | Run one bounded copy page for Index, Documents, Vectors, Knowledge, or Memory |
+| POST | /api/v1/index/generations/{generation_id}/reconcile/{capability} | Run one bounded reconciliation page for a capability |
+| POST | /api/v1/index/generations/{generation_id}/fence | Acquire the write fence after every required copy/reconciliation checkpoint is sealed |
+| POST | /api/v1/index/generations/{generation_id}/activate | Verify and atomically activate the generation |
+| POST | /api/v1/index/generations/{generation_id}/abort | Cancel a building generation with a required reason |
+
+Copy and reconciliation calls commit their cursors/checkpoints before returning. A retry resumes from the last committed cursor; replaying a sealed capability returns its completed checkpoint without copying the page again. An aborted generation remains in the `aborted` state and rejects further copy/reconciliation work. An interrupted cutover fence is recovered on application startup by reopening the building generation's reconciliation checkpoints; activation remains fail-closed until reconciliation is repeated.
+
+The Index generation builder is an orchestrator. Its source-copy pass reads and mutates Index-owned state only through these REST contracts:
+The Index generation builder is an orchestrator. Its source-copy pass reads and mutates Index-owned state only through these REST contracts:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | /api/v1/index/generations/{generation_id}/source-upper-bound | Capture the bounded source-key snapshot |
+| POST | /api/v1/index/generations/{generation_id}/sources/page | Read one ordered source page |
+| PUT | /api/v1/index/generations/{generation_id}/sources | Copy one source into the building generation |
+| POST | /api/v1/index/generations/{generation_id}/checkpoints | Persist progress and seal the Index checkpoint |
+| GET | /api/v1/index/generations/{generation_id}/changes/high-watermark | Read the Index generation journal high-water mark |
+| POST | /api/v1/index/generations/{generation_id}/changes/page | Read an ordered page of Index generation journal entries |
+
+The public generation-copy operation uses these contracts through the internal REST client. This preserves the single-process ASGI deployment while allowing the Index capability to move behind its configured REST base URL.
+
+## 9. Documents and Vector generation-copy operations
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | /api/v1/index/generations/{generation_id}/sources/page | Read a page of source snapshots from the target generation |
+| POST | /api/v1/documents/generations/{generation_id}/sources | Copy or tombstone one source in the Documents generation |
+| POST | /api/v1/vector/generations/{generation_id}/sources/tombstone | Tombstone one source in the Vector generation |
+| POST | /api/v1/vector/generations/{generation_id}/sources/reconcile | Reconcile one source across all target Vector collections |
+| GET | /api/v1/vector/generations/collections | List collections and capture record upper bounds |
+| POST | /api/v1/vector/generations/{generation_id}/collections/{name}/records/page | Read a bounded Vector record page |
+| POST | /api/v1/vector/generations/{generation_id}/collections/{name}/records | Copy records into the target Vector generation |
+| POST | /api/v1/vector/collections/{name}/query | Run similarity search against a base or named generation collection |
+| POST | /api/v1/index/generations/{generation_id}/sources/query | Resolve source snapshots in the target Index generation |
+
+The generation orchestrator pages source metadata through Index REST, then delegates document and vector generation mutations to their owning capability APIs. These operations are bounded by source page and generation ID. Capability base URLs may be configured independently with `ENSEMBLE_INDEX_REST_URL`, `ENSEMBLE_DOCUMENTS_REST_URL`, `ENSEMBLE_VECTOR_REST_URL`, `ENSEMBLE_MEMORY_REST_URL`, and `ENSEMBLE_KNOWLEDGE_REST_URL`; unset values retain the in-process ASGI transport.
+
+## 10. Memory generation operations
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | /api/v1/memory/generations/source-upper-bound | Capture the bounded memory-name snapshot |
+| POST | /api/v1/memory/generations/sources/page | Read a page of memory names |
+| POST | /api/v1/memory/generations/snapshots/query | Read active memory snapshots |
+| PUT | /api/v1/memory/generations/{generation_id}/snapshots/{name} | Write a snapshot into the target generation |
+| POST | /api/v1/memory/generations/{generation_id}/changes/page | Read Memory journal changes |
+| GET | /api/v1/memory/generations/{generation_id}/changes/high-watermark | Read the Memory journal high-water mark |
+| POST | /api/v1/memory/generations/{generation_id}/changes/acknowledgements | Acknowledge copied Memory journal changes |
+| GET | /api/v1/memory/generations/{generation_id}/changes/pending | Count unacknowledged Memory journal changes |
+
+The Memory capability owns its snapshot and journal persistence. The generation orchestrator only coordinates these operations and records progress in Index checkpoints.
+
+## 11. Knowledge generation operations
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | /api/v1/knowledge/records/materialize | Persist a Knowledge-owned record and mirror it into the active generation |
+| POST | /api/v1/knowledge/records/query | Read active Knowledge records by source identity |
+| POST | /api/v1/knowledge/generations/{generation_id}/records | Copy or tombstone a record in the target Knowledge generation |
+
+Knowledge owns record retrieval and generation persistence. The orchestrator validates each record against the target Index snapshot before delegating the write. Journal reconciliation remains coordinated through the Index generation journal; each capability applies its own generation mutation through its REST API. The public operations are `POST /api/v1/index/generations/{generation_id}/reconcile/{index|documents|vectors|memory|knowledge}` followed by the final write-fence operation.
+
+## 12. Source restoration
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | /api/v1/documents/sources/restore | Restore source documents and optional generation payload |
+| POST | /api/v1/knowledge/sources/restore | Restore the Knowledge record and optional generation payload |
+| POST | /api/v1/vector/sources/restore | Restore source vectors and optional generation payload |
+| POST | /api/v1/index/reclamation/jobs/query | Read reclamation state for a source |
+| POST | /api/v1/index/reclamation/jobs/cancel | Cancel queued reclamation before restoring |
+| POST | /api/v1/index/reclamation/audit | Record the restoration audit event |
+
+The Index restoration operation validates lifecycle state, cancels pending physical reclamation, delegates capability restoration through REST, then advances the Index revision and acknowledges the generation change.
+
+## 13. Permanent reclamation
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | /api/v1/index/reclamation/jobs/claim | Claim due reclamation jobs |
+| POST | /api/v1/index/reclamation/jobs/retry | Reschedule a failed or deferred job |
+| POST | /api/v1/index/reclamation/jobs/complete | Mark a job complete |
+| POST | /api/v1/index/sources/purge | Mark an Index source permanently purged |
+| POST | /api/v1/graph/sources/reclaim | Reclaim derived graph data |
+| POST | /api/v1/documents/sources/reclaim | Reclaim active Documents payload |
+| POST | /api/v1/documents/generations/{generation_id}/sources/reclaim | Reclaim Documents generation payload |
+| POST | /api/v1/knowledge/sources/reclaim | Reclaim active Knowledge payload |
+| POST | /api/v1/knowledge/generations/{generation_id}/sources/reclaim | Reclaim Knowledge generation payload |
+| POST | /api/v1/vector/sources/reclaim | Reclaim active Vector payload |
+| POST | /api/v1/vector/generations/{generation_id}/sources/reclaim | Reclaim Vector generation payload |
+
+The reclamation worker coordinates through REST and marks the Index source purged only after all participating capabilities report that bounded reclamation is complete.
+
+## 14. Initial implemented endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -118,7 +232,19 @@ When a key is unset, requests for that capability use the co-located ASGI transp
 | GET | /api/v1/index/health, /ready | Index capability status |
 | POST | /api/v1/index/revisions | Record a revision and return accepted/duplicate/conflict/superseded/tombstoned decision |
 | POST | /api/v1/index/tombstones | Permanently tombstone a source at a revision sequence |
+| POST | /api/v1/index/restorations | Restore a soft-deleted source and cancel pending physical reclamation |
+| GET | /api/v1/index/reclamation, POST /api/v1/index/reclamation/run | Inspect or explicitly run durable physical reclamation jobs |
+| GET | /api/v1/index/sources/{source_id}/deletion-audit | Read bounded append-only deletion strategy and reclamation audit history |
 | GET | /api/v1/index/sources/{source_id}, /manifest | Read source state and bounded source manifest |
+| POST / GET | /api/v1/collaboration/participants, /participants/{id} | Create and read provider-neutral human and agent identities |
+| POST / GET | /api/v1/collaboration/projects, /projects/{id}/members | Create projects and manage membership roles |
+| POST / GET | /api/v1/collaboration/projects/{id}/contributions | Create and query attributable project contributions |
+| POST | /api/v1/collaboration/contributions/{id}/review | Record reviewer-authorized contribution acceptance or rejection |
+| GET | /api/v1/collaboration/projects/{id}/activity | Query project-scoped chronological activity |
+| POST / GET | /api/v1/collaboration/projects/{id}/handoffs, /handoffs/{id} | Create and inspect resumable handoffs and history |
+| POST | /api/v1/collaboration/handoffs/{id}/checkpoints, /acknowledge, /complete, /supersede | Persist incremental checkpoints and validate handoff lifecycle transitions |
+| POST / GET | /api/v1/collaboration/projects/{id}/syntheses, /syntheses/{id}/refresh | Generate and refresh provenance-linked project synthesis |
+| POST / GET | /api/v1/collaboration/projects/{id}/proposals, /proposals/{id}/objections, /proposals/{id}/decisions | Preserve competing proposals, objections, and attributable decisions |
 | POST | /api/v1/index/sources/query | Read current source state for a bounded set of source identifiers |
 | POST | /api/v1/documents/chunks/query | Read chunks for a bounded set of source identifiers with document and chunk provenance |
 | GET | /api/v1/vector/health, /collections | Vector storage status and collection inventory |
@@ -168,6 +294,9 @@ The required capability surface is defined by Ensemble's own product scope, arch
 | Knowledge | Sourced record create/read/tombstone with revision and provenance |
 | Memory | Durable memory/event operations, retrieval and operational status |
 | Context | Bounded context assembly across Memory and Ensemble retrieval with explicit source provenance and extractive compression |
+| Collaboration | Provider-neutral participants, memberships, contributions, handoffs, checkpoints, synthesis, proposals, and auditable human-gated decisions |
+
+Collaboration contracts are documented in [Collaboration REST Contracts](collaboration-contracts.md). The initial implementation uses the existing SQLite database and Control Center; integrations own automatic capture and publish incremental checkpoints through REST.
 
 A Control Center is also a required product surface. It is served by the same application and consumes these REST contracts; it does not create a second backend or duplicate capability logic.
 
@@ -184,6 +313,17 @@ A Control Center is also a required product surface. It is served by the same ap
 - `POST /api/v1/memory/sources/import` and `/sources/reconcile`, with `GET /api/v1/memory/sources/status`, manage imported Knowledge sources.
 - `POST /api/v1/memory/events` captures prompt events.
 
+### Session history ledger
+
+Transcript history is stored in the existing `session-events` Memory collection. Consumers use the Memory entry contract directly; there is no separate Ledger service or parallel history route family.
+
+- `GET /api/v1/memory/memories/session-events/entries?limit=1000` reads the bounded session history in chronological order.
+- `PUT /api/v1/memory/memories/session-events/entries/{event_id}` appends an entry using a caller-supplied stable event ID.
+- Repeating the same event ID and payload returns `duplicate`; reusing that ID with different content returns HTTP `409`.
+- Use the idempotent `PUT` form when writing ledger entries so retries cannot create duplicate records.
+
+This contract exposes existing session history and supports controlled appends. It does not introduce event producers, pipeline instrumentation, or additional capture behavior.
+
 ## Graph resource conventions
 
 - `POST /api/v1/graph/nodes` creates or resolves a node.
@@ -193,6 +333,19 @@ A Control Center is also a required product surface. It is served by the same ap
 - `POST /api/v1/graph/traverse` performs bounded directional traversal.
 
 Node and edge mutations use resource names and HTTP methods. Query and traversal remain explicit domain operations because they describe graph computations rather than CRUD resources.
+
+
+
+### Source deletion lifecycle metadata
+
+`POST /api/v1/index/tombstones` accepts optional `actor`, `reason`, and `retain_until` fields in addition to `source_id` and `revision_sequence`.
+
+- `actor` is a bounded contributor identifier. When bearer authentication is enabled, the server derives attribution from the authenticated principal and rejects a conflicting caller-supplied actor. In local mode, callers may supply an explicit actor; otherwise the actor is `local`.
+- `reason` is an optional bounded explanation for the deletion.
+- `retain_until` is an optional timezone-aware ISO-8601 timestamp. The reclamation job is durably scheduled with this deadline as its earliest eligible execution time. The deadline survives process restarts.
+- The reclamation ledger retains actor, reason, request time, retention deadline, retry state, and completion time. Logical tombstoning remains immediate; retention delays only physical reclamation.
+- Physical reclamation remains idempotent and retryable. The authoritative Index tombstone is retained after derived payloads are purged.
+- The append-only deletion audit ledger records strategy outcomes and worker claims, deferrals, retries, and completion. Read it with `GET /api/v1/index/sources/{source_id}/deletion-audit`.
 
 ## 9. Search and reranking security
 

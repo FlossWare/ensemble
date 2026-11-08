@@ -71,3 +71,48 @@ def test_ga_run_rejects_invalid_bounds_and_unknown_configuration():
         )
         assert too_small.status_code == 400
         assert unknown.status_code == 400
+
+
+def test_ga_run_can_be_recorded_as_learning_artifact_with_retry_after_memory_failure():
+    from ensemble.ga_store import InMemoryGAStore
+    from ensemble.learning_store import InMemoryLearningStore
+    from ensemble.memory_store import InMemoryMemoryStore
+
+    class FailOnceMemoryStore(InMemoryMemoryStore):
+        def __init__(self):
+            super().__init__()
+            self.fail = True
+
+        async def append(self, name, payload, event_id=None):
+            if name == "learning-artifacts" and self.fail:
+                self.fail = False
+                raise RuntimeError("simulated Memory acknowledgement failure")
+            return await super().append(name, payload, event_id)
+
+    memory = FailOnceMemoryStore()
+    learning = InMemoryLearningStore()
+    ga = InMemoryGAStore()
+    with TestClient(create_app(
+        store=InMemoryDocumentStore(), memory_store=memory,
+        learning_store=learning, ga_store=ga,
+    )) as http:
+        started = http.post("/api/v1/ga/runs", json={
+            "population_size": 15, "generations": 1, "seed": 1234,
+        })
+        assert started.status_code == 202
+        run_id = started.json()["run"]["id"]
+        assert http.get(f"/api/v1/ga/runs/{run_id}").json()["run"]["status"] == "completed"
+
+        failed = http.post(f"/api/v1/ga/runs/{run_id}/artifact", json={})
+        retried = http.post(f"/api/v1/ga/runs/{run_id}/artifact", json={})
+        assert failed.status_code == 503
+        assert retried.status_code == 200
+        assert retried.json()["artifact_status"] == "duplicate"
+        assert retried.json()["memory"] is True
+        artifacts = http.get("/api/v1/learning/artifacts").json()["artifacts"]
+        assert len(artifacts) == 1
+        assert artifacts[0]["artifact_type"] == "ga.tuning.result"
+        entries = http.get("/api/v1/memory/memories/learning-artifacts/entries").json()["entries"]
+        assert len(entries) == 1
+        assert entries[0]["event_type"] == "learning.artifact"
+

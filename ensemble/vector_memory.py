@@ -4,6 +4,8 @@ from typing import Any
 
 
 class InMemoryVectorStore:
+    backend_name = "memory"
+
     def __init__(self):
         self._collections: dict[str, dict[str, Any]] = {}
 
@@ -208,13 +210,35 @@ class InMemoryVectorStore:
                 if item.get("metadata", {}).get("source_id") == source_id
                 or item.get("metadata", {}).get("url") == source_id
             ]
-            for record_id in stale:
+            selected = stale[:500]
+            for record_id in selected:
                 del generation[record_id]
-            removed += len(stale)
+            removed += len(selected)
+            if len(stale) > 500:
+                return 501
         return removed
 
     async def tombstone_generation_source(self, generation_id: str, source_id: str) -> int:
-        return await self.delete_generation_source(generation_id, source_id)
+        changed = 0
+        for collection in self._collections.values():
+            generation = collection.get("generations", {}).get(generation_id, {})
+            for item in generation.values():
+                metadata = item.get("metadata", {})
+                if metadata.get("source_id") == source_id or metadata.get("url") == source_id:
+                    if not metadata.get("_tombstoned"):
+                        metadata["_tombstoned"] = True
+                        changed += 1
+        return changed
+
+    async def restore_generation_source(self, generation_id: str, source_id: str) -> int:
+        changed = 0
+        for collection in self._collections.values():
+            generation = collection.get("generations", {}).get(generation_id, {})
+            for item in generation.values():
+                metadata = item.get("metadata", {})
+                if (metadata.get("source_id") == source_id or metadata.get("url") == source_id) and metadata.pop("_tombstoned", None):
+                    changed += 1
+        return changed
 
     async def delete_generation(self, generation_id: str) -> int:
         removed = 0

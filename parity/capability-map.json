@@ -1,0 +1,671 @@
+{
+  "schema_version": 1,
+  "reference": {
+    "repository": "FlossWare/poc-claude-ensemble",
+    "ref": "main",
+    "commit": "b1581e317d291bb9e16a12f42916640146f3ba5a"
+  },
+  "candidate": {
+    "repository": "FlossWare/ensemble",
+    "ref": "integration/source-lifecycle-mainline-2026-11-04"
+  },
+  "rule": "A route mapping is not evidence of behavioral parity. Each entry remains unmeasured until a scenario executes against both systems.",
+  "capabilities": [
+    {
+      "id": "chunking",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_CHUNKING_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/chunk"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/chunking/chunk"
+          }
+        ]
+      },
+      "scenario_ids": [
+        "chunking-health",
+        "chunking-window-v1",
+        "chunking-markdown-v1"
+      ],
+      "measurement": "scenario-backed"
+    },
+    {
+      "id": "tokenization",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_TOKENIZATION_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/tokenize"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/tokenization/tokenize"
+          }
+        ]
+      },
+      "scenario_ids": [
+        "tokenization-health",
+        "tokenization-compound-identifiers"
+      ],
+      "measurement": "scenario-backed"
+    },
+    {
+      "id": "ranking",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_RANKING_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/rank"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/ranking/rank"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/ranking/fuse"
+          }
+        ]
+      },
+      "scenario_ids": [
+        "ranking-rrf-deterministic"
+      ],
+      "measurement": "scenario-backed"
+    },
+    {
+      "id": "extraction",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_EXTRACTION_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/extract"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/entities/extract"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/entities/resolve"
+          }
+        ]
+      },
+      "scenario_ids": [
+        "extraction-issue-key-v1"
+      ],
+      "measurement": "scenario-backed"
+    },
+    {
+      "id": "intent",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_INTENT_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/classify"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/intent/classify"
+          }
+        ]
+      },
+      "scenario_ids": [
+        "intent-history-v1"
+      ],
+      "measurement": "scenario-backed"
+    },
+    {
+      "id": "hybrid-search",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_HYBRID_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/search"
+          },
+          {
+            "method": "POST",
+            "path": "/knowledge/search"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/search/hybrid"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/search/hybrid/knowledge"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "POC knowledge search combines vector and exact-match retrieval with weighted RRF and optional reranking. Exact-match hits now preserve chunk_index, chunk_count, and content_sha256. Ensemble currently needs the exact-match lexical leg and provenance projection verified; vector-only route similarity is not sufficient. Retrieval metric evaluation is implemented; shared judged corpus and live result adapters remain pending.",
+      "quality_evaluator": "parity.retrieval_metrics",
+      "judged_corpus_status": "pending"
+    },
+    {
+      "id": "knowledge",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_KNOWLEDGE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/records"
+          },
+          {
+            "method": "GET",
+            "path": "/records/{source_id}"
+          },
+          {
+            "method": "POST",
+            "path": "/records/{source_id}/tombstone"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/knowledge/records"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/knowledge/records/{source_id}"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/knowledge/records/{source_id}/tombstone"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "POC knowledge sources now include captured prompts in addition to RFCs, patents, research papers, research, and books. Prompt indexing skips credential-looking text and carries chunk provenance. Compare prompt-source lifecycle and provenance independently from record revision/tombstone behavior."
+    },
+    {
+      "id": "graph",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_GRAPH_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/graph/add-node"
+          },
+          {
+            "method": "POST",
+            "path": "/graph/add-edge"
+          },
+          {
+            "method": "POST",
+            "path": "/graph/query"
+          },
+          {
+            "method": "POST",
+            "path": "/graph/traverse"
+          },
+          {
+            "method": "GET",
+            "path": "/graph/node/{node_id}"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/graph/nodes"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/graph/edges"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/graph/query"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/graph/traverse"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/graph/nodes/{node_id}"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "Compare typed node/edge properties, deterministic IDs where contractually required, direction, depth, and multi-edge traversal."
+    },
+    {
+      "id": "memory",
+      "poc": {
+        "transport": "mixed",
+        "socket": "private memory daemon socket",
+        "http_base_url_env": "POC_MEMORY_URL",
+        "http_routes": [
+          {
+            "method": "GET",
+            "path": "/history",
+            "query": [
+              "limit",
+              "cursor",
+              "event_type",
+              "source",
+              "correlation_id",
+              "since",
+              "until"
+            ]
+          },
+          {
+            "method": "GET",
+            "path": "/history/{event_id}"
+          }
+        ],
+        "socket_operations": [
+          "/memory/read",
+          "/memory/write",
+          "/memory/append",
+          "/memory/append-once",
+          "/memory/entries",
+          "/memory/retrieve",
+          "/memory/list",
+          "/memory/search",
+          "/memory/search-hybrid",
+          "/memory/chunk",
+          "/memory/ingest",
+          "/memory/reconcile",
+          "/memory/knowledge/status",
+          "GET /history",
+          "GET /history/{event_id}"
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/api/v1/memory/memories"
+          },
+          {
+            "method": "PUT",
+            "path": "/api/v1/memory/memories/{name}"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/memories/{name}/entries"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/memory/memories/{name}/entries"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/recall"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/search/semantic"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/search/hybrid"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/memory/memories/session-events/entries",
+            "query": [
+              "limit",
+              "offset"
+            ]
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/events",
+            "purpose": "idempotent prompt capture"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "POC now exposes read-only session history over HTTP while retaining its private socket for other memory operations. Ensemble exposes append-only named-memory entries and prompt capture, but not the same filtered history contract; compare event identity/content first and track filtering, timestamp validation, malformed-ledger behavior, and pagination semantics as separate gaps."
+    },
+    {
+      "id": "prompt-capture",
+      "poc": {
+        "transport": "hook-and-jsonl",
+        "capture": "services/hooks/session-end-memory-capture.js",
+        "ledger": "~/.FlossWare/ledger/prompts/prompts.jsonl",
+        "indexer": "services/embeddings/build_knowledge_chunks.py"
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/memory/events"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "POC indexes captured prompts as a knowledge source, with credential-looking prompts filtered before indexing. Ensemble exposes idempotent prompt capture but reports vector_indexed=false and lexical_indexed=false; this is not yet equivalent to searchable prompt knowledge."
+    },
+    {
+      "id": "embedding",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_EMBEDDING_URL",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health"
+          },
+          {
+            "method": "GET",
+            "path": "/model"
+          },
+          {
+            "method": "POST",
+            "path": "/embeddings"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/api/v1/embeddings/health"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/embeddings/model"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/embeddings/embed"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "Compare model identity, dimensions, tokenization/truncation, vector values, and CPU/OpenVINO runtime provenance. A model name match alone is insufficient."
+    },
+    {
+      "id": "vector",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_VECTOR_URL",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health"
+          },
+          {
+            "method": "GET",
+            "path": "/collections"
+          },
+          {
+            "method": "POST",
+            "path": "/collections/{name}/existing"
+          },
+          {
+            "method": "POST",
+            "path": "/collections/{name}/upsert"
+          },
+          {
+            "method": "POST",
+            "path": "/collections/{name}/query"
+          },
+          {
+            "method": "POST",
+            "path": "/collections/{name}/delete-superseded"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/api/v1/vector/health"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/vector/collections"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/vector/collections/{name}/existing"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/vector/collections/{name}/upsert"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/vector/collections/{name}/query"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/vector/collections/{name}/delete-superseded"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "Both use ChromaDB persistence. POC query semantics are exact dot-product ranking over normalized vectors; Ensemble parity must verify this rather than assume Chroma HNSW behavior."
+    },
+    {
+      "id": "lexical",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_LEXICAL_URL",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health"
+          },
+          {
+            "method": "POST",
+            "path": "/search"
+          },
+          {
+            "method": "POST",
+            "path": "/documents"
+          },
+          {
+            "method": "POST",
+            "path": "/knowledge/documents"
+          },
+          {
+            "method": "POST",
+            "path": "/knowledge/search"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/v1/lexical/documents"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/search/hybrid"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/search/hybrid/knowledge"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "Ensemble integrates lexical retrieval into hybrid search rather than exposing a separate POC-shaped lexical query service. Compare analyzed term behavior, indexing idempotency, scores, and candidate provenance."
+    },
+    {
+      "id": "reranking",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_RERANKING_URL",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health"
+          },
+          {
+            "method": "POST",
+            "path": "/rerank"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/api/v1/reranking/health"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/reranking/rerank"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "Compare identical model revision, tokenizer, truncation, candidate ordering, score values, and CPU/OpenVINO execution. Runtime availability alone is not behavioral parity."
+    },
+    {
+      "id": "index",
+      "poc": {
+        "transport": "http",
+        "base_url_env": "POC_INDEX_URL",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health"
+          },
+          {
+            "method": "GET",
+            "path": "/ready"
+          },
+          {
+            "method": "POST",
+            "path": "/revisions"
+          },
+          {
+            "method": "POST",
+            "path": "/tombstones"
+          },
+          {
+            "method": "GET",
+            "path": "/sources/{source_id}"
+          },
+          {
+            "method": "GET",
+            "path": "/manifest"
+          }
+        ]
+      },
+      "ensemble": {
+        "transport": "http",
+        "base_url_env": "ENSEMBLE_BASE_URL",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/api/v1/index/health"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/index/ready"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/index/revisions"
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/index/tombstones"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/index/sources/{source_id}"
+          },
+          {
+            "method": "GET",
+            "path": "/api/v1/index/manifest"
+          }
+        ]
+      },
+      "scenario_ids": [],
+      "measurement": "mapped-unmeasured",
+      "notes": "Compare revision acceptance/rejection, monotonicity, tombstone ordering, restoration, and manifest pagination. Ensemble adds durable generation lifecycle operations beyond the POC contract."
+    }
+  ]
+}

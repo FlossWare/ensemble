@@ -113,6 +113,50 @@ class InMemoryIndexStore:
                     })
         return {"decision": decision, "source": dict(current)}
 
+    async def restore_source(self, source_id: str, sequence: int) -> dict[str, Any]:
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("sequence must be a positive integer")
+        if self._write_fence_generation is not None:
+            raise RuntimeError("writes are fenced during generation cutover")
+        current = self._sources.get(source_id)
+        if current is None:
+            raise KeyError("unknown source")
+        if current.get("purged"):
+            raise RuntimeError("permanently purged sources cannot be restored")
+        if not current.get("tombstoned"):
+            raise RuntimeError("source is not soft-deleted")
+        if sequence <= current["high_sequence"]:
+            raise ValueError("restore sequence must exceed the current source sequence")
+        now = datetime.now(timezone.utc).isoformat()
+        current.update(high_sequence=sequence, tombstoned=False, updated_at=now)
+        for generation in self._generations.values():
+            if generation["state"] not in {"active", "building"}:
+                continue
+            generation_id = generation["generation_id"]
+            if generation["state"] == "active":
+                self._generation_sources.setdefault(generation_id, {})[source_id] = {
+                    "source_id": source_id, "high_sequence": sequence,
+                    "revision_id": current["revision_id"], "profiles": dict(current["profiles"]),
+                    "tombstoned": False, "updated_at": now,
+                }
+            self._change_sequence += 1
+            self._generation_changes.setdefault(generation_id, []).append({
+                "change_id": self._change_sequence, "generation_id": generation_id,
+                "source_id": source_id, "high_sequence": sequence,
+                "revision_id": current["revision_id"], "profiles": dict(current["profiles"]),
+                "tombstoned": False, "acknowledged": False, "created_at": now,
+            })
+        return dict(current)
+
+    async def mark_purged(self, source_id: str) -> None:
+        source = self._sources.get(source_id)
+        if source is None or not source["tombstoned"]:
+            raise RuntimeError("only a soft-deleted source can be permanently purged")
+        if source.get("purged"):
+            return
+        source["purged"] = True
+        source["updated_at"] = datetime.now(timezone.utc).isoformat()
+
     async def get_source(self, source_id: str) -> dict[str, Any] | None:
         value = self._sources.get(source_id)
         return dict(value) if value else None
@@ -274,6 +318,12 @@ class InMemoryIndexStore:
         return {"generation_id": generation_id, "through_change_id": high,
                 "acquired_at": datetime.now(timezone.utc).isoformat()}
 
+    async def assert_standalone_vector_writes_open(self) -> None:
+        if any(item["state"] == "building" for item in self._generations.values()):
+            raise RuntimeError(
+                "standalone vector mutations are paused during generation rebuild; use indexed ingestion"
+            )
+
     async def assert_generation_writes_open(self) -> None:
         if self._write_fence_generation is not None:
             raise RuntimeError("writes are fenced during generation cutover")
@@ -283,9 +333,16 @@ class InMemoryIndexStore:
         if generation_id is None:
             return {"recovered": False, "reason": "no_fence"}
         generation = self._generations.get(generation_id)
-        if generation and generation["state"] == "active":
-            raise RuntimeError("active generation unexpectedly retains a write fence")
-        if generation and generation["state"] == "building":
+        if generation is None:
+            raise RuntimeError(
+                "write fence references a missing generation; refusing unsafe recovery"
+            )
+        if generation["state"] != "building":
+            raise RuntimeError(
+                f"write fence references generation in {generation['state']} state; "
+                "refusing unsafe recovery"
+            )
+        if generation["state"] == "building":
             checkpoints = generation.get("checkpoints") or {}
             for capability in (
                 "index_reconciliation", "documents_reconciliation",

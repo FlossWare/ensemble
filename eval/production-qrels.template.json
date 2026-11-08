@@ -1,0 +1,16 @@
+{
+  "benchmark": {
+    "name": "",
+    "corpus_snapshot": "",
+    "corpus_revision": "",
+    "embedding_model": "",
+    "judgment_policy": "",
+    "judgment_scale": "0=not relevant, 1=related, 2=relevant, 3=highly relevant",
+    "judged_by": [],
+    "judged_at": ""
+  },
+  "k": 10,
+  "queries": {},
+  "qrels": {},
+  "runs": {}
+}
