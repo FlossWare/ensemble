@@ -71,10 +71,12 @@ class FederatedTaskRecord(BaseModel):
     result: dict[str, Any] | None = None
     error: str | None = None
     progress: dict[str, Any] = Field(default_factory=dict)
+    worker_id: str | None = None
+    attempt: int = 0
 
 
 class FederatedTaskStore:
-    """Durable per-instance task inbox. It accepts work; it does not execute it."""
+    """Durable per-instance task inbox and single-owner task state transitions."""
 
     def __init__(self, persistence_root: Path) -> None:
         self.path = Path(persistence_root) / "federated-tasks.sqlite3"
@@ -122,6 +124,94 @@ class FederatedTaskStore:
                 (str(request.task_id), request.idempotency_key, digest, encoded, now, now),
             )
         return record, True
+
+    def claim_next(self, worker_id: str, task_types: list[str]) -> FederatedTaskRecord | None:
+        if not task_types:
+            return None
+        with sqlite3.connect(self.path, timeout=10) as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                "SELECT task_id, record_json FROM federated_tasks ORDER BY created_at, task_id"
+            ).fetchall()
+            for task_id, encoded in rows:
+                record = FederatedTaskRecord.model_validate_json(encoded)
+                if record.state != "accepted" or record.task_type not in task_types:
+                    continue
+                record.state = "running"
+                record.worker_id = worker_id
+                record.attempt += 1
+                record.updated_at = datetime.now(timezone.utc)
+                db.execute(
+                    "UPDATE federated_tasks SET record_json=?, updated_at=? WHERE task_id=?",
+                    (record.model_dump_json(), _now(), task_id),
+                )
+                return record
+        return None
+
+    def complete(self, task_id: UUID, worker_id: str, result: dict[str, Any]) -> bool:
+        _canonical(result)
+        with sqlite3.connect(self.path, timeout=10) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT record_json FROM federated_tasks WHERE task_id=?", (str(task_id),)
+            ).fetchone()
+            if row is None:
+                return False
+            record = FederatedTaskRecord.model_validate_json(row[0])
+            if record.state != "running" or record.worker_id != worker_id:
+                return False
+            record.state = "succeeded"
+            record.result = result
+            record.error = None
+            record.worker_id = None
+            record.updated_at = datetime.now(timezone.utc)
+            db.execute(
+                "UPDATE federated_tasks SET record_json=?, updated_at=? WHERE task_id=?",
+                (record.model_dump_json(), _now(), str(task_id)),
+            )
+            return True
+
+    def fail(self, task_id: UUID, worker_id: str, error: str) -> bool:
+        with sqlite3.connect(self.path, timeout=10) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT record_json FROM federated_tasks WHERE task_id=?", (str(task_id),)
+            ).fetchone()
+            if row is None:
+                return False
+            record = FederatedTaskRecord.model_validate_json(row[0])
+            if record.state != "running" or record.worker_id != worker_id:
+                return False
+            record.state = "failed"
+            record.error = str(error)[:1024]
+            record.worker_id = None
+            record.updated_at = datetime.now(timezone.utc)
+            db.execute(
+                "UPDATE federated_tasks SET record_json=?, updated_at=? WHERE task_id=?",
+                (record.model_dump_json(), _now(), str(task_id)),
+            )
+            return True
+
+    def recover_interrupted(self) -> int:
+        recovered = 0
+        with sqlite3.connect(self.path, timeout=10) as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                "SELECT task_id, record_json FROM federated_tasks"
+            ).fetchall()
+            for task_id, encoded in rows:
+                record = FederatedTaskRecord.model_validate_json(encoded)
+                if record.state != "running":
+                    continue
+                record.state = "accepted"
+                record.worker_id = None
+                record.updated_at = datetime.now(timezone.utc)
+                db.execute(
+                    "UPDATE federated_tasks SET record_json=?, updated_at=? WHERE task_id=?",
+                    (record.model_dump_json(), _now(), task_id),
+                )
+                recovered += 1
+        return recovered
 
     def get(self, task_id: UUID) -> FederatedTaskRecord | None:
         with sqlite3.connect(self.path, timeout=10) as db:
