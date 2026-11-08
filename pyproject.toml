@@ -64,7 +64,17 @@ dev = [
   "pypdf>=5.4,<7",
   "chromadb==1.5.9",
   "networkx>=3.4,<4",
-  "numpy>=2.0,<3",
+  "numpy>=2.0,<3",  "sentence-transformers>=3.4,<6",
+  "tokenizers>=0.21,<1",
+  "onnxruntime>=1.20,<2",
+  "openvino>=2026.2,<2027",
+  "scikit-learn==1.9.0",
+  "pandas==3.0.3",
+  "joblib==1.5.3",
+  "PyYAML==6.0.3",
+  "filelock>=3.13,<4",
+  "Pillow>=10,<13",
+
 ]
 reranking = ["sentence-transformers>=3.4,<6"]
 local-embeddings = ["numpy>=1.26,<3", "tokenizers>=0.21,<1", "onnxruntime>=1.20,<2"]
