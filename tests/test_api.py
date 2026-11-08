@@ -1359,3 +1359,52 @@ def test_context_assembly_works_without_search_or_memory_dependencies(tmp_path):
         assert result["sources"] == []
         assert result["intent"] is not None
         assert result["degraded"] == []
+
+
+def test_federated_task_inbox_accepts_idempotently_and_survives_restart(tmp_path):
+    import uuid
+
+    task_id = str(uuid.uuid4())
+    payload = {
+        "task_id": task_id,
+        "idempotency_key": "api-request-1",
+        "origin_instance_id": "remote-instance",
+        "target_capability": "search",
+        "task_type": "search.query",
+        "payload": {"query": "durable federation"},
+    }
+    with _client(tmp_path) as client:
+        first = client.post("/federation/tasks", json=payload)
+        assert first.status_code == 202
+        assert first.json()["accepted"] is True
+        assert first.json()["created"] is True
+        assert first.json()["task"]["state"] == "accepted"
+
+        retry = client.post("/federation/tasks", json=payload)
+        assert retry.status_code == 202
+        assert retry.json()["created"] is False
+        assert retry.json()["task"]["task_id"] == task_id
+
+        fetched = client.get(f"/federation/tasks/{task_id}")
+        assert fetched.status_code == 200
+        assert fetched.json()["task_type"] == "search.query"
+
+    with _client(tmp_path) as client:
+        listed = client.get("/federation/tasks")
+        assert listed.status_code == 200
+        assert [item["task_id"] for item in listed.json()["tasks"]] == [task_id]
+
+
+def test_federated_task_inbox_rejects_unsupported_capability(tmp_path):
+    import uuid
+
+    with _client(tmp_path) as client:
+        response = client.post("/federation/tasks", json={
+            "task_id": str(uuid.uuid4()),
+            "idempotency_key": "unsupported-1",
+            "origin_instance_id": "remote-instance",
+            "target_capability": "nonexistent",
+            "task_type": "unknown.operation",
+            "payload": {},
+        })
+        assert response.status_code == 409
