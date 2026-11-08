@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Protocol
 from uuid import UUID
 
-from .federated_tasks import FederatedTaskRecord, FederatedTaskRequest
+from .federated_tasks import FederatedTaskRecord, FederatedTaskRequest, FederatedTaskSubmission
 
 
 TaskHandler = Callable[[FederatedTaskRecord], Awaitable[dict[str, Any]]]
@@ -79,6 +79,21 @@ class Orchestrator:
         if not self.accepts(request.task_type):
             raise ValueError(f"no execution handler registered for {request.task_type}")
         return await asyncio.to_thread(self.store.accept, request, self.instance_id)
+
+    async def submit_local(
+        self, submission: FederatedTaskSubmission,
+    ) -> tuple[FederatedTaskRecord, bool]:
+        if not self._started:
+            raise RuntimeError("orchestrator is not running")
+        if not self.accepts(submission.task_type):
+            raise ValueError(f"no execution handler registered for {submission.task_type}")
+        request = FederatedTaskRequest(
+            **submission.model_dump(mode="python"),
+            origin_instance_id=self.instance_id,
+        )
+        return await asyncio.to_thread(
+            self.store.accept, request, self.instance_id, allow_local_origin=True,
+        )
 
     async def get(self, task_id: UUID) -> FederatedTaskRecord | None:
         return await asyncio.to_thread(self.store.get, task_id)
