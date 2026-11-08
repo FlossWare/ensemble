@@ -1574,11 +1574,11 @@ def test_peer_task_timeout_reports_ambiguous_outcome_and_stable_identity(tmp_pat
         })
 
         assert response.status_code == 504
-        detail = response.json()["detail"]
-        assert detail["code"] == "submission_outcome_unknown"
-        assert detail["task_id"] == task_id
-        assert detail["status_url"] == f"/federation/peers/remote-peer/tasks/{task_id}"
-        assert detail["retry_with_same_task_id_and_idempotency_key"] is True
+        problem = response.json()
+        assert problem["code"] == "submission_outcome_unknown"
+        assert problem["task_id"] == task_id
+        assert problem["status_url"] == f"/federation/peers/remote-peer/tasks/{task_id}"
+        assert problem["retry_with_same_task_id_and_idempotency_key"] is True
         children = client.get(f"/api/v1/tasks/{parent_task_id}/children")
         assert children.status_code == 200
         assert children.json()["children"][0]["task_id"] == task_id
