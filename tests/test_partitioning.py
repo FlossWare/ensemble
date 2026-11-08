@@ -69,7 +69,7 @@ def test_local_mode_cannot_select_another_partition(monkeypatch):
     assert response.status_code == 403
 
 
-def test_remote_api_requires_credentials_in_local_mode(monkeypatch):
+def test_remote_api_uses_default_partition_without_credentials_in_local_mode(monkeypatch):
     monkeypatch.delenv("ENSEMBLE_PARTITION_TOKENS", raising=False)
     monkeypatch.setenv("ENSEMBLE_AUTH_REQUIRED", "0")
     app = FastAPI()
@@ -85,7 +85,7 @@ def test_remote_api_requires_credentials_in_local_mode(monkeypatch):
             return await client.get("/api/v1/scope")
 
     response = asyncio.run(request_remote())
-    assert response.status_code == 503
+    assert response.status_code == 200
 
 
 def test_partitioned_index_uses_separate_sqlite_databases(tmp_path):
