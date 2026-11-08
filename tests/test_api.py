@@ -1499,9 +1499,59 @@ def test_peer_task_submission_forwards_local_identity_and_contract(tmp_path, mon
 
         assert response.status_code == 202, response.text
         assert response.json()["peer"]["instance_id"] == "remote-peer"
+        assert response.json()["task_id"] == captured["body"]["task_id"]
+        assert response.json()["status_url"] == f"/federation/peers/remote-peer/tasks/{captured['body']['task_id']}"
         assert captured["url"] == "http://192.0.2.20:8090/federation/tasks"
         assert captured["body"]["origin_instance_id"] == client.app.state.federation_instance["instance_id"]
         assert captured["body"]["task_type"] == "search.query"
+
+
+def test_peer_task_timeout_reports_ambiguous_outcome_and_stable_identity(tmp_path, monkeypatch):
+    import uuid
+
+    from fastapi import HTTPException
+    from ensemble import api as api_module
+
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
+    task_id = str(uuid.uuid4())
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json):
+            raise api_module.httpx.TimeoutException("response timed out")
+
+    monkeypatch.setattr(api_module.httpx, "AsyncClient", FakeClient)
+    with _client(tmp_path) as client:
+        client.app.state.federation_registry.observe({
+            "kind": "ensemble.presence",
+            "protocol_version": "1",
+            "instance_id": "remote-peer",
+            "name": "remote-server",
+            "endpoint": "http://192.0.2.20:8090",
+            "capabilities": ["search"],
+        })
+        response = client.post("/federation/peers/remote-peer/tasks", json={
+            "task_id": task_id,
+            "idempotency_key": "ambiguous-submit-1",
+            "target_capability": "search",
+            "task_type": "search.query",
+            "payload": {"query": "remote search", "limit": 3},
+        })
+
+        assert response.status_code == 504
+        detail = response.json()["detail"]
+        assert detail["code"] == "submission_outcome_unknown"
+        assert detail["task_id"] == task_id
+        assert detail["status_url"] == f"/federation/peers/remote-peer/tasks/{task_id}"
+        assert detail["retry_with_same_task_id_and_idempotency_key"] is True
 
 
 def test_local_task_submission_uses_orchestrator_and_hides_remote_tasks(tmp_path, monkeypatch):
