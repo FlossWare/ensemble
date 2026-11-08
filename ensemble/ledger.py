@@ -133,20 +133,34 @@ class SqliteLedgerStore:
 
     async def append(self, value):
         event = validate_event(value)
-        async with self.engine.begin() as conn:
-            state = (await conn.execute(select(ledger_state).where(ledger_state.c.singleton_id == 1))).mappings().one()
-            existing = (await conn.execute(select(ledger_entries).where(ledger_entries.c.event_id == event["event_id"]))).mappings().first()
-            if existing:
-                if digest(existing["payload"]) == digest(event["payload"]) and all(existing[k] == event[k] for k in ("event_type", "source", "timestamp", "correlation_id")):
-                    return {"status": "duplicate", "entry": dict(existing)}
-                raise ValueError("event_id already exists with different content")
-            seq = state["head_sequence"] + 1
-            record = envelope_for(state["ledger_id"], seq, event, utc_now(), state["head_hash"])
-            await conn.execute(insert(ledger_entries).values(**record))
-            await conn.execute(update(ledger_state).where(ledger_state.c.singleton_id == 1).values(
-                head_sequence=seq, head_hash=record["entry_sha256"]
-            ))
-            return {"status": "stored", "entry": record}
+        try:
+            async with self.engine.begin() as conn:
+                state = (await conn.execute(select(ledger_state).where(ledger_state.c.singleton_id == 1))).mappings().one()
+                existing = (await conn.execute(select(ledger_entries).where(ledger_entries.c.event_id == event["event_id"]))).mappings().first()
+                if existing:
+                    if digest(existing["payload"]) == digest(event["payload"]) and all(existing[k] == event[k] for k in ("event_type", "source", "timestamp", "correlation_id")):
+                        return {"status": "duplicate", "entry": dict(existing)}
+                    raise ValueError("event_id already exists with different content")
+                allocated = (await conn.execute(
+                    update(ledger_state).where(ledger_state.c.singleton_id == 1)
+                    .values(head_sequence=ledger_state.c.head_sequence + 1)
+                    .returning(ledger_state.c.ledger_id, ledger_state.c.head_sequence, ledger_state.c.head_hash)
+                )).mappings().one()
+                raced = (await conn.execute(select(ledger_entries).where(ledger_entries.c.event_id == event["event_id"]))).mappings().first()
+                if raced:
+                    raise RuntimeError("ledger duplicate append raced")
+                seq = allocated["head_sequence"]
+                record = envelope_for(allocated["ledger_id"], seq, event, utc_now(), allocated["head_hash"])
+                await conn.execute(insert(ledger_entries).values(**record))
+                await conn.execute(update(ledger_state).where(ledger_state.c.singleton_id == 1).values(head_hash=record["entry_sha256"]))
+                return {"status": "stored", "entry": record}
+        except RuntimeError as exc:
+            if str(exc) != "ledger duplicate append raced":
+                raise
+            existing = await self.get(event["event_id"])
+            if existing and digest(existing["payload"]) == digest(event["payload"]) and all(existing[k] == event[k] for k in ("event_type", "source", "timestamp", "correlation_id")):
+                return {"status": "duplicate", "entry": existing}
+            raise ValueError("event_id already exists with different content") from exc
 
     async def pull(self, after_sequence=0, through_sequence=None, limit=100, **filters):
         if isinstance(after_sequence, bool) or not isinstance(after_sequence, int) or after_sequence < 0:
@@ -199,13 +213,8 @@ class SqliteLedgerStore:
         expected = from_sequence
         previous = None
         if from_sequence > 1:
-            async with self.engine.connect() as conn:
-                prior = (await conn.execute(select(ledger_entries.c.entry_sha256).where(
-                    ledger_entries.c.sequence == from_sequence - 1
-                ))).scalar_one_or_none()
-            previous = prior
-            if previous is None:
-                return {"ok": False, "first_failing_sequence": from_sequence, "failure_category": "missing_checkpoint", "assurance": "unverified_partial_range", "verified_count": 0}
+            # A local predecessor is not a trusted checkpoint: it can be tampered too.
+            return {"ok": False, "first_failing_sequence": from_sequence, "failure_category": "missing_checkpoint", "assurance": "unverified_partial_range", "verified_count": 0}
         seen = set()
         for row in rows:
             item = dict(row)
