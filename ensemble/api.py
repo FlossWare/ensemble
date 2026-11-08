@@ -694,24 +694,26 @@ def create_app(
             try:
                 yield
             finally:
-                if worker_task is not None:
-                    worker_task.cancel()
-                crawl_worker_task.cancel()
-                schedule_worker_task.cancel()
-                for task in (worker_task, crawl_worker_task, schedule_worker_task):
-                    if task is None:
-                        continue
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                await active_collaboration_store.close()
-                await active_execution_trace_store.close()
-                await active_source_schedule_store.close()
-                await active_crawl_store.close()
-                await active_reclamation_store.close()
-                await active_transcript_store.close()
-                await capability_lifecycle.stop()
+                try:
+                    if worker_task is not None:
+                        worker_task.cancel()
+                    crawl_worker_task.cancel()
+                    schedule_worker_task.cancel()
+                    for task in (worker_task, crawl_worker_task, schedule_worker_task):
+                        if task is None:
+                            continue
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                    await active_collaboration_store.close()
+                    await active_execution_trace_store.close()
+                    await active_source_schedule_store.close()
+                    await active_crawl_store.close()
+                    await active_reclamation_store.close()
+                    await active_transcript_store.close()
+                finally:
+                    await capability_lifecycle.stop()
         finally:
             if active_learning_store is not None:
                 await active_learning_store.close()
