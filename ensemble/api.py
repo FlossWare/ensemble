@@ -361,13 +361,6 @@ def create_app(
             "hits": [hit.model_dump(mode="json") for hit in hits],
         }
 
-    active_orchestrator = Orchestrator(
-        active_federated_task_store, federation_instance_id,
-        poll_interval=0.5, worker_count=1,
-    )
-    active_orchestrator.register("search.query", execute_search_task)
-    app.state.orchestrator = active_orchestrator
-
     async def active_generation_id() -> str | None:
         status = await active_index_store.generation_status()
         generation_id = status.get("active_generation_id")
@@ -689,6 +682,13 @@ def create_app(
     active_federated_task_store = FederatedTaskStore(federation_settings.persistence_root)
     app.state.federated_task_store = active_federated_task_store
     federation_instance_id = _instance_id(federation_settings.persistence_root)
+    active_orchestrator = Orchestrator(
+        active_federated_task_store, federation_instance_id,
+        poll_interval=0.5, worker_count=1,
+    )
+    active_orchestrator.register("search.query", execute_search_task)
+    app.state.orchestrator = active_orchestrator
+
     federation_name = os.getenv("ENSEMBLE_NAME", socket.gethostname()).strip() or socket.gethostname()
     federation_enabled = os.getenv("ENSEMBLE_FEDERATION_ENABLED", "true").strip().casefold() not in {"0", "false", "no", "off"}
     federation_host = _advertise_host(federation_settings.host)
