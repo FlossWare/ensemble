@@ -24,9 +24,18 @@ def create_runtime(
 
         return create_worker_app(configured_worker_runtime())
 
-    # Importing api is deliberately deferred so worker deployments do not import
-    # SQLAlchemy, Chroma, graph, memory, GA, Thompson, or learning subsystems.
-    from .api import create_app
+    # api.py retains its legacy module-level ASGI app. Set the selected profile
+    # during first import so that compatibility app does not eagerly construct
+    # optional stores for a Standard deployment.
+    previous_profile = os.environ.get("ENSEMBLE_PROFILE")
+    os.environ["ENSEMBLE_PROFILE"] = selected.value
+    try:
+        from .api import create_app
+    finally:
+        if previous_profile is None:
+            os.environ.pop("ENSEMBLE_PROFILE", None)
+        else:
+            os.environ["ENSEMBLE_PROFILE"] = previous_profile
 
     app = create_app(profile=selected, capability_registry=capability_registry)
     app.state.runtime_profile = selected.value
