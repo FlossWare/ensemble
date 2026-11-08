@@ -29,6 +29,21 @@ def test_startup_rejects_unmigrated_database(tmp_path):
             pass
 
 
+def test_federation_status_exposes_local_instance_and_discovered_peers(tmp_path):
+    with _client(tmp_path) as client:
+        response = client.get("/federation/status")
+        assert response.status_code == 200
+        status = response.json()
+        assert status["enabled"] is True
+        assert status["instance"]["instance_id"]
+        assert status["instance"]["endpoint"].startswith("http://")
+        assert isinstance(status["peers"], list)
+        assert status["peer_count"] == len(status["peers"])
+        peers = client.get("/federation/peers")
+        assert peers.status_code == 200
+        assert peers.json()["instance"]["instance_id"] == status["instance"]["instance_id"]
+
+
 def test_health_and_ready(tmp_path):
     with _client(tmp_path) as client:
         assert client.get("/health").json()["status"] == "ok"
