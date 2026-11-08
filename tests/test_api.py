@@ -1489,8 +1489,19 @@ def test_peer_task_submission_forwards_local_identity_and_contract(tmp_path, mon
             "endpoint": "http://192.0.2.20:8090",
             "capabilities": ["search"],
         })
+        parent_task_id = str(uuid.uuid4())
+        parent = client.post("/api/v1/tasks", json={
+            "task_id": parent_task_id,
+            "idempotency_key": "parent-task-1",
+            "target_capability": "search",
+            "task_type": "search.query",
+            "payload": {"query": "parent task", "limit": 1},
+        })
+        assert parent.status_code == 202, parent.text
+        child_task_id = str(uuid.uuid4())
         response = client.post("/federation/peers/remote-peer/tasks", json={
-            "task_id": str(uuid.uuid4()),
+            "task_id": child_task_id,
+            "parent_task_id": parent_task_id,
             "idempotency_key": "outbound-1",
             "target_capability": "search",
             "task_type": "search.query",
@@ -1503,7 +1514,13 @@ def test_peer_task_submission_forwards_local_identity_and_contract(tmp_path, mon
         assert response.json()["status_url"] == f"/federation/peers/remote-peer/tasks/{captured['body']['task_id']}"
         assert captured["url"] == "http://192.0.2.20:8090/federation/tasks"
         assert captured["body"]["origin_instance_id"] == client.app.state.federation_instance["instance_id"]
+        assert captured["body"]["parent_task_id"] == parent_task_id
         assert captured["body"]["task_type"] == "search.query"
+        children = client.get(f"/api/v1/tasks/{parent_task_id}/children")
+        assert children.status_code == 200
+        assert children.json()["children"][0]["task_id"] == child_task_id
+        assert children.json()["children"][0]["peer_instance_id"] == "remote-peer"
+        assert children.json()["children"][0]["state"] == "accepted"
 
 
 def test_peer_task_timeout_reports_ambiguous_outcome_and_stable_identity(tmp_path, monkeypatch):
