@@ -25,6 +25,8 @@ def test_control_panel_is_served_by_the_api():
         assert "Reset Learning outcomes" in response.text
         assert "Capability Explorer" in response.text
         assert "Retrieval Explorer" in response.text
+        assert "Federation" in response.text
+        assert "federation-rows" in response.text
         assert "Context Assembly" in response.text
         assert "Index and Vector Inspection" in response.text
         assert "Memory and Knowledge Inspection" in response.text
@@ -43,6 +45,8 @@ def test_control_panel_is_served_by_the_api():
         assert "refreshCapabilityTable" in script.text
         assert "/api/v1/index/tombstones" in script.text
         assert "/api/v1/ingest/sessions" in script.text
+        assert "/federation/status" in script.text
+        assert "refreshFederation" in script.text
 
 
 def test_scrape_ingestion_flows_through_document_index_and_knowledge(monkeypatch):
