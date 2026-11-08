@@ -7,10 +7,10 @@ Ensemble is one codebase and one application identity with multiple deployment p
 | Profile | Intended deployment | Current composition |
 |---|---|---|
 | `worker` | R9000-class devices, Raspberry Pis, small hosts | Standalone Worker Runtime only; does not import the full API or initialize Ensemble stores |
-| `standard` | General-purpose host | Existing full API composition |
-| `full` | Server/workstation | Existing full API composition, including the configured persistence and intelligence subsystems |
+| `standard` | General-purpose host | Core application, retrieval, Memory, Knowledge, Graph, Thompson and collaboration. GA and Learning are omitted. |
+| `full` | Server/workstation | Standard capabilities plus GA and Learning, including optional analytics and model-training dependencies. |
 
-The `standard` and `full` names are stable deployment intent, not yet independently selectable subsystem bundles. Today they deliberately use the same application composition. We must not pretend that disabling a profile label removes imports or storage initialization. The next refactoring step is to extract shared core contracts and make Standard/Full subsystem composition genuinely incremental while preserving the current Full behavior.
+Standard and Full now have a real first capability boundary: Standard does not construct or initialize GA or Learning stores, and those route groups are not exposed. The analytics and GA-configuration dependencies are imported lazily and are installed only with Full. Both profiles still share the existing core application and its persistence, ingestion, retrieval, Memory, Knowledge, Graph and Thompson composition. Further capability groups will be migrated incrementally behind the shared lifecycle contracts.
 
 ## Run
 
@@ -39,9 +39,9 @@ The profile can also be selected with `ENSEMBLE_PROFILE=worker|standard|full`. T
 
 ## Upgrade path
 
-A deployment can change its selected profile and install the corresponding package dependencies as profile composition is modularized. Worker identity and HTTP operation contracts are independent of the selected coordinator profile. A profile change does not imply an automatic database migration or enable capabilities for which the host lacks dependencies.
+A deployment can change its selected profile and install the corresponding package dependencies. Moving from Standard to Full enables the GA and Learning routes and initializes their stores on startup. Moving from Full to Standard stops exposing those routes and skips their stores; existing database records are retained. Profile changes do not run schema migrations automatically.
 
-The worker profile imports its application lazily and does not import `ensemble.api`. Standard and Full currently import the existing application. Provider credentials should remain in a central provider gateway initially; no credentials or shared secrets are introduced by the profile model.
+The worker profile imports its application lazily and does not import `ensemble.api`. Standard and Full import the shared API composition, but optional GA and Learning dependencies are lazy and profile-gated. Provider credentials should remain in a central provider gateway initially; no credentials or shared secrets are introduced by the profile model.
 
 ## Design constraints
 
