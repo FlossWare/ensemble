@@ -1502,3 +1502,55 @@ def test_peer_task_submission_forwards_local_identity_and_contract(tmp_path, mon
         assert captured["url"] == "http://192.0.2.20:8090/federation/tasks"
         assert captured["body"]["origin_instance_id"] == client.app.state.federation_instance["instance_id"]
         assert captured["body"]["task_type"] == "search.query"
+
+
+def test_local_task_submission_uses_orchestrator_and_hides_remote_tasks(tmp_path, monkeypatch):
+    import time
+    import uuid
+
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
+    with _client(tmp_path) as client:
+        ingested = client.post("/api/v1/ingest/documents", json={
+            "source_id": "local-orchestration-source",
+            "revision": 1,
+            "title": "Local orchestration fixture",
+            "content": "The canonical orchestrator handles local and federated tasks through one execution path.",
+        })
+        assert ingested.status_code == 201
+
+        task_id = str(uuid.uuid4())
+        accepted = client.post("/api/v1/tasks", json={
+            "task_id": task_id,
+            "idempotency_key": "local-orchestration-1",
+            "target_capability": "search",
+            "task_type": "search.query",
+            "payload": {"query": "canonical orchestrator execution path", "limit": 5},
+        })
+        assert accepted.status_code == 202, accepted.text
+        assert accepted.json()["task"]["origin_instance_id"] == client.app.state.federation_instance["instance_id"]
+
+        result = None
+        for _ in range(60):
+            response = client.get(f"/api/v1/tasks/{task_id}")
+            assert response.status_code == 200
+            result = response.json()
+            if result["state"] in {"succeeded", "failed"}:
+                break
+            time.sleep(0.05)
+
+        assert result["state"] == "succeeded", result
+        assert result["result"]["count"] >= 1
+        assert result["result"]["hits"][0]["source_id"] == "local-orchestration-source"
+
+        remote = client.post("/federation/tasks", json={
+            "task_id": str(uuid.uuid4()),
+            "idempotency_key": "remote-orchestration-1",
+            "origin_instance_id": "remote-instance",
+            "target_capability": "search",
+            "task_type": "search.query",
+            "payload": {"query": "canonical orchestrator execution path", "limit": 5},
+        })
+        assert remote.status_code == 202
+        remote_id = remote.json()["task"]["task_id"]
+        hidden = client.get(f"/api/v1/tasks/{remote_id}")
+        assert hidden.status_code == 404
