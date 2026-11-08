@@ -1,7 +1,7 @@
 # Ensemble Federation
 
-**Status:** LAN discovery, heartbeat presence, live peer inspection, and Control Center visibility are implemented. Delegated task execution now dispatches through the core per-instance Orchestrator and registered task handlers. Task execution and persistence now use transport-neutral `TaskRequest`, `TaskSubmission`, `TaskRecord`, `Orchestrator`, and `SqliteTaskStore` contracts. Startup migrates the old federation-named database and table. Trust establishment and artifact exchange remain incomplete. Federation does not require a general-purpose reliable messaging subsystem; delegated tasks are persisted by the receiving instance and their status/results are queried from that instance when reachable. See [Orchestration](orchestration.md).
-**Scope:** Discovery, presence, trust establishment, direct peer communication, delegation, and exchange between independently operated Ensemble instances.
+**Status:** LAN discovery, heartbeat presence, live peer inspection, and Control Center visibility are implemented. Delegated task execution now dispatches through the core per-instance Orchestrator and registered task handlers. Task execution and persistence now use transport-neutral `TaskRequest`, `TaskSubmission`, `TaskRecord`, `Orchestrator`, and `SqliteTaskStore` contracts. Startup migrates the old federation-named database and table. Artifact exchange remains incomplete; federation currently relies on the operator-controlled network boundary. Federation does not require a general-purpose reliable messaging subsystem; delegated tasks are persisted by the receiving instance and their status/results are queried from that instance when reachable. See [Orchestration](orchestration.md).
+**Scope:** Discovery, presence, direct peer communication, delegation, and exchange between independently operated Ensemble instances on an operator-controlled network.
 
 ## 1. Purpose and operating model
 
@@ -17,7 +17,7 @@ Ensemble is the platform and orchestration authority, not an AI client. Client-s
 
 ### Implemented LAN discovery slice
 
-The current application broadcasts a small JSON presence announcement over IPv4 multicast by default, listens on the same group, ignores its own instance ID, and maintains an in-memory peer registry. The Control Center polls `/federation/status` and renders discovered peers, capabilities, endpoints, last-seen age, and online/offline status. Expired peers remain visible as offline for a bounded retention period before being pruned. This is discovery only: it does not establish peer trust. The current `search.query` operation is the first registered orchestrator handler. Federation submits accepted peer requests to the core Orchestrator; the API no longer owns a dedicated delegated-task worker loop. Federation maps its peer envelope into the shared task contract; the legacy `ensemble.federated_tasks` module remains only as compatibility aliases.
+The current application broadcasts a small JSON presence announcement over IPv4 multicast by default, listens on the same group, ignores its own instance ID, and maintains an in-memory peer registry. The Control Center polls `/federation/status` and renders discovered peers, capabilities, endpoints, last-seen age, and online/offline status. Expired peers remain visible as offline for a bounded retention period before being pruned. This is discovery and presence on the configured network. The current `search.query` operation is the first registered orchestrator handler. Federation submits accepted peer requests to the core Orchestrator; the API no longer owns a dedicated delegated-task worker loop. Federation maps its peer envelope into the shared task contract; the legacy `ensemble.federated_tasks` module remains only as compatibility aliases.
 
 Current defaults: multicast group `239.255.76.76`, UDP port `47676`, heartbeat 30 seconds, and presence TTL 90 seconds. Configure with `ENSEMBLE_FEDERATION_ENABLED`, `ENSEMBLE_FEDERATION_GROUP`, `ENSEMBLE_FEDERATION_PORT`, `ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS`, and `ENSEMBLE_FEDERATION_TTL_SECONDS`. The UDP group and port are configurable; multicast is link-local and best effort.
 
@@ -86,7 +86,7 @@ Transport adapters must delegate to the same application/domain contracts and en
 
 ### 5.1 Service delegation
 
-A requester may invoke a specific versioned service on a peer and receive a bounded response while retaining ownership of its parent task. This is a direct request/response operation, not a task submission: it does not create a provider task record or transfer work ownership to the provider's Orchestrator. The provider executes the existing domain capability implementation and returns a typed response. The explicit operation registry is exposed through `GET /federation/services`; each entry declares its capability, operation, description, and JSON payload schema. The initial registered operations are `search.retrieve`, `chunking.chunk`, `tokenization.tokenize`, and `entities.extract`, each backed by the existing local domain service/function. A requester reads the peer's catalogue before invoking it through `POST /federation/peers/{peer_id}/services`; the provider dispatches through that same registry at `POST /federation/services`. The versioned `ServiceRequest`/`ServiceResponse` contracts carry request identity, requester/provider identity, capability, operation, payload, optional deadline, correlation ID, and result. The current implementation uses a bounded HTTP request, validates the operation against the local registry and validates each operation's payload, rejects expired deadlines, and checks that the returned request ID, provider instance ID, and operation match the selected peer and invocation. This is response consistency checking, not peer authentication. It is deliberately not a general RPC framework: network-level access control, cancellation, usage accounting, richer structured errors, and multi-hop delegation remain future work. Service calls do not enter the task store and do not require reliable messaging.
+A requester may invoke a specific versioned service on a peer and receive a bounded response while retaining ownership of its parent task. This is a direct request/response operation, not a task submission: it does not create a provider task record or transfer work ownership to the provider's Orchestrator. The provider executes the existing domain capability implementation and returns a typed response. The explicit operation registry is exposed through `GET /federation/services`; each entry declares its capability, operation, description, and JSON payload schema. The initial registered operations are `search.retrieve`, `chunking.chunk`, `tokenization.tokenize`, and `entities.extract`, each backed by the existing local domain service/function. A requester reads the peer's catalogue before invoking it through `POST /federation/peers/{peer_id}/services`; the provider dispatches through that same registry at `POST /federation/services`. The versioned `ServiceRequest`/`ServiceResponse` contracts carry request identity, requester/provider identity, capability, operation, payload, optional deadline, correlation ID, and result. The current implementation uses a bounded HTTP request, validates the operation against the local registry and validates each operation's payload, rejects expired deadlines, and checks that the returned request ID, provider instance ID, and operation match the selected peer and invocation. This is response consistency checking, not cryptographic authentication. It is deliberately not a general RPC framework: network-level access control, cancellation, usage accounting, richer structured errors, and multi-hop delegation remain future work. Service calls do not enter the task store and do not require reliable messaging.
 
 ### 5.2 Task delegation
 
@@ -142,12 +142,10 @@ Use bounded retries with backoff, idempotency keys, deadlines, checkpoints, dura
 
 The Control Center is the operator interface to federation, not an AI client. Its federation workbench should expose:
 
-- Discovered candidates separately from trusted peers.
-- Peer identity, trust status, endpoint, protocol compatibility, and last-seen/expiry.
+- Discovered peers, stable instance IDs, endpoints, protocol compatibility, and last-seen/expiry.
 - Availability and capability inventory with version information.
 - Active service and task delegations, progress, deadlines, and outcomes.
 - Artifact-transfer status, checkpoints, retries, and failures.
-- Revocation and explicit trust-management operations with confirmation.
 - Audit/provenance links and clear disconnected/degraded states.
 
 The browser remains a consumer of Ensemble REST contracts. It must not connect directly to peer databases or bypass platform authorization.
@@ -160,8 +158,7 @@ Prefer Python-native components and avoid mandatory infrastructure:
 - `zeroconf` for mDNS/DNS-SD.
 - `grpcio` and `grpcio-tools` for typed peer communication.
 - Existing FastAPI contracts for REST.
-- `cryptography` and established TLS facilities for peer identity and trust.
-- SQLite per instance for local peer registry, trust metadata, task state, and transfer checkpoints where appropriate.
+- SQLite per instance for local peer registry, task state, and transfer checkpoints where appropriate.
 
 Do not introduce ZooKeeper, a global database, mandatory Kafka/RabbitMQ, a service mesh, or distributed consensus for the initial federation implementation. A peer must be fully useful without any of these systems.
 
@@ -173,8 +170,6 @@ ensemble/
     discovery.py
     announcements.py
     peers.py
-    identity.py
-    trust.py
     health.py
     capabilities.py
     transport.py
@@ -194,7 +189,7 @@ Configuration must make federation behavior explicit and safe. The eventual conf
 - Operator-controlled network exposure and any deployment-specific access restrictions.
 - Resource, transfer, retry, and hop limits.
 
-Defaults: federation enabled for peer discovery/presence in a federation-capable deployment; minimal non-sensitive announcements; no automatic trust; no automatic data sharing; no unrestricted delegation. Operators may disable or scope discovery explicitly.
+Defaults: federation enabled for peer discovery/presence in a federation-capable deployment; minimal non-sensitive announcements; no automatic data sharing; no unrestricted delegation. Operators may disable or scope discovery explicitly.
 
 This section defines intended configuration, not current environment-variable names or a working configuration surface.
 
@@ -215,6 +210,6 @@ Federation is not complete until automated and multi-process tests prove:
 11. Artifact exchange proves snapshot and incremental transfer, checkpoint recovery, deduplication, integrity, compatibility, invalidation, conflict handling, and import through different local storage adapters without database-file copying.
 12. Disconnect/reconnect, peer restart, partial failure, timeout, cancellation, duplicate requests, ambiguous timeouts, and revocation are exercised across independently running instances.
 13. Control Center reports discovered/trusted/unavailable peers and active delegations from real API data, including explicit degraded states.
-14. Audit records identify the acting instance, peer, task/request, capability, authorization decision, data scope, artifact provenance, and outcome without recording secrets.
+14. Audit records identify the acting instance, peer, task/request, capability, applicable local policy decision, data scope, artifact provenance, and outcome.
 
 Until these tests pass, federation remains a required but incomplete capability.
