@@ -63,6 +63,7 @@ from .context_tokens import ContextTokenCounter, ApproximateContextTokenCounter,
 from .source_schedule_store import SourceScheduleStore, SqliteSourceScheduleStore, InMemorySourceScheduleStore
 from .execution_trace_store import ExecutionTraceStore, SqliteExecutionTraceStore, InMemoryExecutionTraceStore, traces as execution_traces
 from .collaboration import CollaborationStore, SynthesisStrategy, SqliteCollaborationStore, InMemoryCollaborationStore, create_collaboration_router
+from .core import CapabilityLifecycle, CapabilityRegistry, RuntimeContext, RuntimeProfile
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -259,7 +260,12 @@ def create_app(
     collaboration_store: CollaborationStore | None = None,
     synthesis_strategy: SynthesisStrategy | None = None,
     run_reclamation_worker: bool = True,
+    profile: RuntimeProfile | str = RuntimeProfile.FULL,
+    capability_registry: CapabilityRegistry | None = None,
 ) -> FastAPI:
+    selected_profile = RuntimeProfile(profile)
+    registry = capability_registry or CapabilityRegistry()
+    capability_lifecycle = CapabilityLifecycle(registry, RuntimeContext(profile=selected_profile))
     database_url = resolve_database_url(database_url)
     context_token_counter = configured_context_token_counter()
     document_store = store or SqlDocumentStore(database_url)
@@ -685,8 +691,10 @@ def create_app(
             crawl_worker_task = asyncio.create_task(crawl_worker())
             schedule_worker_task = asyncio.create_task(source_schedule_worker())
             try:
+                await capability_lifecycle.start()
                 yield
             finally:
+                await capability_lifecycle.stop()
                 if worker_task is not None:
                     worker_task.cancel()
                 crawl_worker_task.cancel()
@@ -721,6 +729,9 @@ def create_app(
         description="REST-first memory, knowledge, and retrieval platform.",
         lifespan=lifespan,
     )
+    app.state.runtime_profile = selected_profile.value
+    app.state.capability_registry = registry
+    app.state.capability_lifecycle = capability_lifecycle
     app.middleware("http")(partition_scope_middleware)
     app.include_router(create_collaboration_router(active_collaboration_store, synthesis_strategy))
     app.state.execution_trace_store = active_execution_trace_store
