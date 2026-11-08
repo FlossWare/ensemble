@@ -24,6 +24,8 @@ ledger_state = Table(
 )
 ledger_entries = Table(
     "ensemble_ledger_entries", ledger_metadata,
+    Column("schema_version", Integer, nullable=False),
+    Column("ledger_id", String(64), nullable=False),
     Column("sequence", BigInteger, primary_key=True),
     Column("event_id", String(256), nullable=False, unique=True),
     Column("event_type", String(256), nullable=False),
