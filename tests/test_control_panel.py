@@ -45,7 +45,7 @@ def test_control_panel_is_served_by_the_api():
         assert "refreshCapabilityTable" in script.text
         assert "/api/v1/index/tombstones" in script.text
         assert "/api/v1/ingest/sessions" in script.text
-        assert "/federation/status" in script.text
+        assert "/federation/overview" in script.text
         assert "refreshFederation" in script.text
 
 
