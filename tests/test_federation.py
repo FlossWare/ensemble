@@ -90,3 +90,13 @@ def test_inspect_peer_reports_unreachable_peer(monkeypatch):
     result = asyncio.run(federation.inspect_peer(peer))
     assert result["remote_status"] == "unreachable"
     assert result["capabilities"] == peer["capabilities"]
+
+
+
+def test_host_metrics_reports_cpu_and_disk_fields(tmp_path):
+    from ensemble.federation import host_metrics
+
+    metrics = host_metrics(tmp_path)
+    assert metrics["cpu_count"] is None or metrics["cpu_count"] >= 1
+    assert "load_average" in metrics
+    assert metrics["persistence_disk"]["total_bytes"] >= metrics["persistence_disk"]["free_bytes"]
