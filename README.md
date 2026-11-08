@@ -56,6 +56,10 @@ pytest
 
 All source ingestion uses the canonical /api/v1/ingest/... namespace: documents, files, URLs (including preview), and transcripts. The browser Control Center is available at /control. It includes live capability health/readiness checks, a retrieval explorer with optional reranking, structured transcript-session ingestion, Index and Vector inspection, Memory and Knowledge inspection, source lookup and confirmed permanent tombstoning, bounded URI crawl preview plus durable queue/status/retry, explicit batch ingestion, and recurring source schedule management, PDF upload ingestion, raw JSONL transcript ingestion, GA run/history/candidate inspection and approval-to-export, Thompson model inspection/selection/reset, and Learning report/outcome/artifact inspection with confirmed reset. GA candidates are not applied to live settings. Single-page URI preview displays discovered links without following them; bounded crawl preview follows only robots-allowed, same-origin links within its configured limits. API documentation is available at /docs; the OpenAPI document is at /openapi.json.
 
+## Worker runtime
+
+A standalone, stateless worker runtime is available through `ensemble-worker`. It loads operator-installed capability adapters, exposes health/status/capability endpoints, and executes bounded direct request/response invocations without initializing Ensemble persistence or Control Center subsystems. Automatic federation registration and built-in provider adapters are not yet implemented. See [Worker Runtime](docs/worker-runtime.md).
+
 ## Scope
 
 This repository contains the Ensemble platform only.
