@@ -794,9 +794,29 @@ def create_app(
                     json=request_body.model_dump(mode="json"),
                 )
         except httpx.TimeoutException as exc:
-            raise HTTPException(status_code=504, detail="peer task submission timed out") from exc
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "code": "submission_outcome_unknown",
+                    "message": "peer response timed out; the task may have been accepted",
+                    "peer_id": peer_id,
+                    "task_id": str(submission.task_id),
+                    "status_url": f"/federation/peers/{peer_id}/tasks/{submission.task_id}",
+                    "retry_with_same_task_id_and_idempotency_key": True,
+                },
+            ) from exc
         except httpx.RequestError as exc:
-            raise HTTPException(status_code=502, detail="peer task submission failed") from exc
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "submission_outcome_unknown",
+                    "message": "peer connection failed; the task may have been accepted",
+                    "peer_id": peer_id,
+                    "task_id": str(submission.task_id),
+                    "status_url": f"/federation/peers/{peer_id}/tasks/{submission.task_id}",
+                    "retry_with_same_task_id_and_idempotency_key": True,
+                },
+            ) from exc
         if response.status_code >= 400:
             status = response.status_code if response.status_code < 500 else 502
             raise HTTPException(status_code=status, detail="peer rejected delegated task")
@@ -806,6 +826,8 @@ def create_app(
             raise HTTPException(status_code=502, detail="peer returned an invalid task response") from exc
         return {
             "accepted": True,
+            "task_id": str(submission.task_id),
+            "status_url": f"/federation/peers/{peer_id}/tasks/{submission.task_id}",
             "peer": {"instance_id": peer["instance_id"], "name": peer["name"], "endpoint": peer["endpoint"]},
             "task": remote.get("task"),
         }
