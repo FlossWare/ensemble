@@ -642,3 +642,40 @@ document.getElementById("context-form").addEventListener("submit",async event=>{
  }catch(error){output.textContent="Context assembly failed: "+error.message;}
  finally{button.disabled=false;}
 });
+
+
+async function refreshFederation(){
+ const summary=document.getElementById("federation-summary");
+ const rows=document.getElementById("federation-rows");
+ const details=document.getElementById("federation-details");
+ try{
+  const response=await fetch("/federation/status");
+  const result=await response.json();
+  if(!response.ok)throw new Error(result.detail||response.statusText);
+  summary.textContent=result.enabled
+   ? (result.discovery==="multicast"?"LAN discovery active":"LAN discovery "+result.discovery)+(result.discovery_error?": "+result.discovery_error:"")+" · "+result.peer_count+" peers"
+   : "Federation discovery disabled";
+  rows.replaceChildren();
+  for(const peer of result.peers||[]){
+   const row=document.createElement("tr");
+   for(const value of [peer.name,peer.endpoint,peer.status,(peer.capabilities||[]).join(", "),peer.seconds_since_seen+"s ago"]){
+    const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);
+   }
+   row.addEventListener("click",()=>{details.textContent=JSON.stringify(peer,null,2);});
+   row.style.cursor="pointer";
+   rows.append(row);
+  }
+  if(!(result.peers||[]).length){
+   const row=document.createElement("tr"),cell=document.createElement("td");
+   cell.colSpan=5;cell.textContent="No other Ensemble instances discovered yet.";
+   row.append(cell);rows.append(row);
+  }
+  details.textContent=JSON.stringify({local:result.instance,heartbeat_seconds:result.heartbeat_seconds,ttl_seconds:result.ttl_seconds,peers:result.peers},null,2);
+ }catch(error){
+  summary.textContent="Federation status unavailable: "+error.message;
+  details.textContent=error.stack||error.message;
+ }
+}
+document.getElementById("refresh-federation").addEventListener("click",refreshFederation);
+refreshFederation();
+setInterval(refreshFederation,10000);
