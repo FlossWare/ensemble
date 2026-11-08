@@ -1,6 +1,6 @@
 # Ensemble Federation
 
-**Status:** LAN discovery, heartbeat presence, live peer inspection, and Control Center visibility are implemented. A durable, idempotent federated task inbox contract is implemented. Task execution/delegation, reliable messaging, trust establishment, and artifact exchange remain incomplete.
+**Status:** LAN discovery, heartbeat presence, live peer inspection, and Control Center visibility are implemented. A durable, idempotent task inbox and the first executable delegated task type (`search.query`) are implemented. General orchestration, requester-side peer submission/tracking, reliable messaging, trust establishment, and artifact exchange remain incomplete.
 **Scope:** Discovery, presence, trust establishment, peer communication, delegation, and exchange between independently operated Ensemble instances.
 
 ## 1. Purpose and operating model
@@ -17,7 +17,7 @@ Ensemble is the platform and orchestration authority, not an AI client. Client-s
 
 ### Implemented LAN discovery slice
 
-The current application broadcasts a small JSON presence announcement over IPv4 multicast by default, listens on the same group, ignores its own instance ID, and maintains an in-memory peer registry. The Control Center polls `/federation/status` and renders discovered peers, capabilities, endpoints, last-seen age, and online/offline status. Expired peers remain visible as offline for a bounded retention period before being pruned. This is discovery only: it does not establish peer trust or execute remote tasks. The separate task inbox accepts and durably records bounded task requests, but no worker currently claims or executes them.
+The current application broadcasts a small JSON presence announcement over IPv4 multicast by default, listens on the same group, ignores its own instance ID, and maintains an in-memory peer registry. The Control Center polls `/federation/status` and renders discovered peers, capabilities, endpoints, last-seen age, and online/offline status. Expired peers remain visible as offline for a bounded retention period before being pruned. This is discovery only: it does not establish peer trust. A separate durable task inbox and local worker execute the initial `search.query` task type; general-purpose remote orchestration is not yet implemented.
 
 Current defaults: multicast group `239.255.76.76`, UDP port `47676`, heartbeat 30 seconds, and presence TTL 90 seconds. Configure with `ENSEMBLE_FEDERATION_ENABLED`, `ENSEMBLE_FEDERATION_GROUP`, `ENSEMBLE_FEDERATION_PORT`, `ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS`, and `ENSEMBLE_FEDERATION_TTL_SECONDS`. The UDP group and port are configurable; multicast is link-local and best effort.
 
@@ -115,7 +115,7 @@ The first task-delegation slice defines a versioned-by-API JSON contract and dur
 - The receiver rejects a request targeting an unavailable advertised capability, a self-originated request, oversized payloads, and reuse of an idempotency key with different content.
 - Repeated identical submissions return the original accepted record rather than creating duplicate work.
 
-This is an inbox and contract foundation, not working remote execution. Records remain in `accepted`; worker claiming, execution through the local orchestration path, progress/state transitions, cancellation, result delivery, and requester-side tracking are the next implementation steps. No endpoint claims that a task has started or completed.
+The current worker claims `search.query` tasks with a single-owner SQLite transition, invokes the existing local `SearchService`, and persists a succeeded result containing serialized search hits and provenance. Failed executions are recorded as failed with a bounded error description. On process startup, interrupted running tasks are returned to the accepted queue for recovery. The first worker is intentionally narrow: it does not yet provide arbitrary tool execution, planning, child-task orchestration, progress streaming, cancellation, or a durable requester-side parent-task record.
 
 ### 5.3 Federated RAG
 
