@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from types import ModuleType
 
+from fastapi.testclient import TestClient
+
+from ensemble.store import InMemoryDocumentStore
 from ensemble.core import (
     CapabilityLifecycle,
     CapabilityRegistry,
@@ -90,3 +95,33 @@ def test_configured_module_adapter_loader_registers_operations(monkeypatch):
         assert await capability.invoke({"query": "search"}) == {"scores": [6.0]}
 
     asyncio.run(scenario())
+
+
+
+def test_full_api_loads_configured_worker_adapter_into_capability_context(monkeypatch):
+    from ensemble.api import create_app
+
+    module = ModuleType("test_ensemble_api_adapter")
+
+    def register(runtime):
+        runtime.register(
+            "embeddings",
+            "encode",
+            lambda payload: {"length": len(payload["text"])},
+        )
+
+    module.register = register
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setenv("ENSEMBLE_WORKER_ADAPTER", "test_ensemble_api_adapter:register")
+
+    app = create_app(
+        profile=RuntimeProfile.FULL,
+        store=InMemoryDocumentStore(),
+        run_reclamation_worker=False,
+    )
+
+    with TestClient(app):
+        assert "worker-adapter.embeddings.encode" in app.state.capability_lifecycle.started
+        operation = app.state.runtime_context.services["worker_operations"]["embeddings.encode"]
+        import asyncio
+        assert asyncio.run(operation.invoke({"text": "FlossWare"})) == {"length": 9}
