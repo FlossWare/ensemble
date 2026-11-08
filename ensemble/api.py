@@ -352,6 +352,14 @@ def create_app(
         else SqliteExecutionTraceStore(database_url)
     )
 
+    registry.register(StoreCapability(
+        CapabilityDescriptor(
+            "thompson",
+            profiles=(RuntimeProfile.STANDARD, RuntimeProfile.FULL),
+        ),
+        active_thompson_store,
+    ))
+
     if active_ga_store is not None:
         async def check_ga_store() -> dict[str, Any]:
             await active_ga_store.list_runs(1)
@@ -698,7 +706,6 @@ def create_app(
             await active_knowledge_store.initialize()
             await active_graph_store.initialize()
             await active_memory_store.initialize()
-            await active_thompson_store.initialize()
             await active_transcript_store.initialize()
             await active_reclamation_store.initialize()
             await active_crawl_store.initialize()
@@ -743,7 +750,6 @@ def create_app(
                 finally:
                     await capability_lifecycle.stop()
         finally:
-            await active_thompson_store.close()
             await active_memory_store.close()
             await active_graph_store.close()
             await active_knowledge_store.close()
