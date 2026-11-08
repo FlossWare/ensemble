@@ -105,3 +105,12 @@ Implemented in the current partition-isolation branch:
 Verification on the latest successful partition CI run: **166 passed, 1 skipped**. This includes end-to-end ingestion/retrieval isolation, Memory/Knowledge/Graph/Vector separation, token allow-list checks, physical database separation for duplicate source IDs, remote-request rejection in local mode, and non-loopback listener authentication configuration.
 
 Still required before partition isolation is review-ready: broader adversarial coverage across all capability types and destructive operations; backup/restore verification for the complete partition directory; key rotation/revocation and credential administration; rate limiting and audit/diagnostic coverage; and a security review of the Control Center and remote capability trust boundary. In-memory adapters remain test-only and are rejected when partition credentials are configured.
+
+
+## Federation status: required, not implemented
+
+The accepted target architecture is documented in [Federation](federation.md). The current repository snapshot does not implement multi-instance peer discovery, automatic presence announcements, mutual peer identity/trust, authenticated peer transport, messaging, service/task delegation, federated RAG, or derived-artifact exchange. Do not configure production deployments on the assumption that these features are available.
+
+Required behavior includes automatic presence broadcast and listening by default when federation is enabled, startup/change/heartbeat/departure announcements, TTL expiry, mDNS/DNS-SD and scoped UDP discovery, non-LAN peer configuration, authenticated gRPC peer communication, and explicit trust/authorization. UDP remains best-effort discovery only. SSH remains the constrained remote-worker transport.
+
+Implementation acceptance must run against independently deployed instances and prove disconnected local operation, trust denial/revocation, discovery freshness, delegation ownership, durable messaging, federated retrieval authorization, and storage-independent artifact transfer across different local persistence adapters. Documentation alone does not satisfy these gates.
