@@ -59,7 +59,7 @@ Back up the configured persistence root while Ensemble is stopped, or use a SQLi
 
 ## Configure authenticated partitions
 
-The default installation uses the existing `default` SQLite database. For this federation milestone, the default partition can be accessed over the configured LAN listener without authentication. This is intentionally simple and must not be exposed to untrusted networks. FlossWare proper is responsible for the production security model. To enable named partitions and token enforcement, create a high-entropy Bearer token for each principal and place only its SHA-256 digest in the service environment file. For example:
+The default installation listens on all interfaces (`0.0.0.0`) so LAN federation works without a separate bind-host change, and uses the existing `default` SQLite database. For this federation milestone, the default partition can be accessed over the configured LAN listener without authentication. This is intentionally simple and must not be exposed to untrusted networks. FlossWare proper is responsible for the production security model. To enable named partitions and token enforcement, create a high-entropy Bearer token for each principal and place only its SHA-256 digest in the service environment file. For example:
 
 ```bash
 TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
