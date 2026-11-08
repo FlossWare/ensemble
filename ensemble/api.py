@@ -263,7 +263,8 @@ def create_app(
 ) -> FastAPI:
     selected_profile = RuntimeProfile(profile)
     registry = capability_registry or CapabilityRegistry()
-    capability_lifecycle = CapabilityLifecycle(registry, RuntimeContext(profile=selected_profile))
+    runtime_context = RuntimeContext(profile=selected_profile)
+    capability_lifecycle = CapabilityLifecycle(registry, runtime_context)
     database_url = resolve_database_url(database_url)
     context_token_counter = configured_context_token_counter()
     document_store = store or SqlDocumentStore(database_url)
@@ -736,6 +737,8 @@ def create_app(
     app.state.runtime_profile = selected_profile.value
     app.state.capability_registry = registry
     app.state.capability_lifecycle = capability_lifecycle
+    app.state.runtime_context = runtime_context
+    runtime_context.services["app"] = app
     app.middleware("http")(partition_scope_middleware)
     app.include_router(create_collaboration_router(active_collaboration_store, synthesis_strategy))
     app.state.execution_trace_store = active_execution_trace_store
@@ -784,6 +787,27 @@ def create_app(
         }),
     )
     ranking_provider = configured_ranking_provider(active_reranker)
+    runtime_context.settings.update({"database_url": database_url})
+    runtime_context.services.update({
+        "documents": document_store,
+        "vectors": active_vector_store,
+        "index": active_index_store,
+        "knowledge": active_knowledge_store,
+        "graph": active_graph_store,
+        "memory": active_memory_store,
+        "ga": active_ga_store,
+        "thompson": active_thompson_store,
+        "learning": active_learning_store,
+        "transcripts": active_transcript_store,
+        "crawl": active_crawl_store,
+        "source_schedule": active_source_schedule_store,
+        "collaboration": active_collaboration_store,
+        "embeddings": embeddings,
+        "reranker": active_reranker,
+        "document_service": documents,
+        "search_service": search,
+        "ranking_provider": ranking_provider,
+    })
 
     async def active_generation_id() -> str | None:
         internal = InternalRestClient(app, {"index": os.getenv("ENSEMBLE_INDEX_REST_URL")})
