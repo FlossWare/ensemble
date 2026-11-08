@@ -8,15 +8,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_poc_service_runtime_libraries_are_declared_in_ensemble():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    required = project["project"]["dependencies"]
     optional = project["project"]["optional-dependencies"]
-
-    assert any(item.lower().startswith("chromadb") for item in required)
-    assert any(item.lower().startswith("networkx") for item in required)
-    assert any(item.lower().startswith("numpy") for item in required)
 
     def declared(extra: str, package: str) -> bool:
         return any(item.lower().startswith(package.lower()) for item in optional[extra])
+
+    # Keep the base install small for the standalone worker. The POC's
+    # persistent vector store, graph, and embedding math belong to the
+    # Standard and Full application profiles, not the worker's base runtime.
+    for extra in ("standard", "full"):
+        for package in ("chromadb", "networkx", "numpy"):
+            assert declared(extra, package), f"{package} is missing from the {extra} profile"
 
     assert declared("local-embeddings", "tokenizers")
     assert declared("local-embeddings", "onnxruntime")
@@ -39,12 +41,10 @@ def test_postgresql_clients_are_not_part_of_ensemble_runtime():
     assert "asyncpg" not in names
 
 
-
 def test_chroma_migration_scripts_compile():
     for name in ("import-poc-chroma.py", "migrate-sqlite-vectors-to-chroma.py"):
         path = ROOT / "scripts" / name
         compile(path.read_text(encoding="utf-8"), str(path), "exec")
-
 
 
 def test_poc_node_adapter_dependencies_are_preserved_without_postgresql():
