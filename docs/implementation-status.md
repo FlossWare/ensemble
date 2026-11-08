@@ -4,6 +4,17 @@
 
 Ensemble is implemented in Python. This is an Ensemble-specific choice and does not establish a language standard for the wider FlossWare ecosystem. REST contracts remain language-neutral.
 
+## Federation discovery milestone
+
+Implemented on the review branch:
+- Stable per-installation instance identity persisted beneath the configured persistence root.
+- IPv4 multicast presence announcements and listener enabled by default, with configurable group, port, heartbeat interval, and TTL.
+- In-memory peer registry with self-announcement filtering, basic payload validation, duplicate heartbeat refresh, offline visibility, and stale-peer pruning.
+- Read-only `/federation/status` and `/federation/peers` endpoints.
+- Control Center Federation workbench with automatic refresh, peer endpoints, capability list, last-seen age, online/offline state, and peer detail inspection.
+
+Not yet implemented: reliable peer transport, trust/session establishment, messaging, remote service/task delegation, federated RAG, and federated derived-artifact exchange. Discovery is not evidence that those capabilities work.
+
 ## Durable persistence milestone
 
 Implemented:
