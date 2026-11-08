@@ -5114,4 +5114,4 @@ def create_app(
     return app
 
 
-app = create_app()
+app = create_app(profile=os.getenv("ENSEMBLE_PROFILE", RuntimeProfile.FULL.value))
