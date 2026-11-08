@@ -59,7 +59,7 @@ Back up the configured persistence root while Ensemble is stopped, or use a SQLi
 
 ## Configure authenticated partitions
 
-The default installation remains local-only and uses the existing `default` SQLite database. To enable named partitions, create a high-entropy Bearer token for each principal and place only its SHA-256 digest in the service environment file. For example:
+The default installation uses the existing `default` SQLite database. For this federation milestone, the default partition can be accessed over the configured LAN listener without authentication. This is intentionally simple and must not be exposed to untrusted networks. FlossWare proper is responsible for the production security model. To enable named partitions and token enforcement, create a high-entropy Bearer token for each principal and place only its SHA-256 digest in the service environment file. For example:
 
 ```bash
 TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -109,7 +109,7 @@ ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS=30
 ENSEMBLE_FEDERATION_TTL_SECONDS=90
 ```
 
-A non-loopback listener currently requires the existing partition-token configuration. Use a distinct `ENSEMBLE_NAME` per instance. Ensure the host firewall permits the configured UDP multicast traffic and the advertised HTTP endpoint between the instances. Multicast normally does not cross routers or VLAN boundaries; routed/VPN peer configuration is not implemented yet.
+A non-loopback listener is currently allowed to use the default unauthenticated `default` partition so LAN federation can work without setup. This is intentionally a development/home-LAN posture, not a production security boundary. Use a distinct `ENSEMBLE_NAME` per instance. Ensure the host firewall permits the configured UDP multicast traffic and the advertised HTTP endpoint between the instances. Multicast normally does not cross routers or VLAN boundaries; routed/VPN peer configuration is not implemented yet.
 
 The local identity is generated once and stored as `instance-id` beneath the persistence root. Do not copy that file when cloning an instance; each deployment needs its own identity. The discovery registry is currently in memory, so peers are rediscovered after restart.
 
