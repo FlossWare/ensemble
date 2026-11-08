@@ -61,33 +61,21 @@ Announcements are small, versioned, non-sensitive discovery hints. They may cont
 - Monotonic announcement sequence or equivalent freshness metadata.
 - Issued-at time and expiry/TTL information.
 
-Do not broadcast credentials, bearer tokens, private keys, certificates, task content, user data, source content, database details, or sensitive internal state. Detailed capability metadata is exchanged only after an authenticated session is established and authorized.
+Do not broadcast credentials, task content, user data, source content, database details, or sensitive internal state. Presence announcements contain discovery metadata only.
 
-Treat every announcement as untrusted input. Validate size, schema, version, address handling, freshness, rate, and resource use. An announcement never establishes trust or grants access.
+Validate announcement size, schema, version, address handling, freshness, rate, and resource use. Ensemble federation currently assumes peers operate on a network the operator already trusts; it does not provide an authentication or authorization layer.
 
-## 3. Peer identity and trust handshake
+## 3. Peer identity and network boundary
 
-Discovery produces candidate peers, not trusted peers. Before invoking a peer capability or exchanging protected data, the instances MUST complete a mutually authenticated handshake.
+Each instance has a stable locally persisted instance ID. Discovery announcements identify candidate instances and advertise their reachable endpoints and capabilities. The instance ID is an identifier for routing and lineage, not cryptographic proof of identity.
 
-The handshake validates:
-
-1. Stable peer identity and proof of private-key possession.
-2. Certificate or equivalent trust-chain validity and configured trust policy.
-3. Peer endpoint and protocol compatibility.
-4. Supported contract and schema versions.
-5. Requested relationship and capability scopes.
-6. Local authorization and policy approval.
-7. Resource limits, delegation constraints, and applicable data partitions.
-
-Trust is explicit and revocable. Unknown peers are not automatically trusted merely because they are on the same LAN, share a VPN, or announce a familiar name. Revocation must prevent new work and define how in-flight work and retained artifacts are handled.
-
-The exact certificate provisioning, rotation, and revocation mechanism remains an implementation decision. Do not invent a custom cryptographic protocol; use established mutual-TLS and certificate-validation libraries and document the chosen trust lifecycle.
+The current federation model does not require shared secrets, certificates, key exchange, mutual TLS, or a credential-provisioning workflow. It assumes the operator controls the network on which federation endpoints are reachable. Do not expose federation endpoints to untrusted networks. If deployments later need federation across untrusted networks, that is a separate security feature requiring an explicit design, not a reason to burden the current LAN deployment with secrets.
 
 ## 4. Peer communication and interfaces
 
 The peer transport is separate from discovery. The current implementation provides direct REST request/response for service calls and direct REST submission/status lookup for delegated tasks. gRPC remains a possible typed transport adapter, not a prerequisite for the current slice:
 
-- **gRPC over authenticated TLS** is the initial preferred peer-to-peer transport for typed service calls and task operations. Use streaming only where it materially improves a specific operation; it is not a durable messaging guarantee.
+- **gRPC** is a possible typed peer-to-peer transport for service calls and task operations. Use streaming only where it materially improves a specific operation; it is not a durable messaging guarantee.
 - **REST/HTTP** remains available for resource-oriented operations, administration, diagnostics, and compatibility.
 - **SSH** is the standard transport for constrained remote execution workers. SSH is not the federation protocol, peer discovery mechanism, or authorization model.
 - MCP and GraphQL remain supported external interfaces to the same core application/domain services; they do not create separate federation business logic.
@@ -98,7 +86,7 @@ Transport adapters must delegate to the same application/domain contracts and en
 
 ### 5.1 Service delegation
 
-A requester may invoke a specific versioned service on a peer and receive a bounded response while retaining ownership of its parent task. This is a direct request/response operation, not a task submission: it does not create a provider task record or transfer work ownership to the provider's Orchestrator. The provider executes the existing domain capability implementation and returns a typed response. The explicit operation registry is exposed through `GET /federation/services`; each entry declares its capability, operation, description, and JSON payload schema. The initial registered operations are `search.retrieve`, `chunking.chunk`, `tokenization.tokenize`, and `entities.extract`, each backed by the existing local domain service/function. A requester reads the peer's catalogue before invoking it through `POST /federation/peers/{peer_id}/services`; the provider dispatches through that same registry at `POST /federation/services`. The versioned `ServiceRequest`/`ServiceResponse` contracts carry request identity, requester/provider identity, capability, operation, payload, optional deadline, correlation ID, and result. The current implementation uses a bounded HTTP request, validates the operation against the local registry and validates each operation's payload, rejects expired deadlines, and checks that the returned request ID, provider instance ID, and operation match the selected peer and invocation. This is response consistency checking, not peer authentication. It is deliberately not a general RPC framework: authentication/trust, policy enforcement, cancellation, usage accounting, richer structured errors, and multi-hop delegation remain future work. Service calls do not enter the task store and do not require reliable messaging.
+A requester may invoke a specific versioned service on a peer and receive a bounded response while retaining ownership of its parent task. This is a direct request/response operation, not a task submission: it does not create a provider task record or transfer work ownership to the provider's Orchestrator. The provider executes the existing domain capability implementation and returns a typed response. The explicit operation registry is exposed through `GET /federation/services`; each entry declares its capability, operation, description, and JSON payload schema. The initial registered operations are `search.retrieve`, `chunking.chunk`, `tokenization.tokenize`, and `entities.extract`, each backed by the existing local domain service/function. A requester reads the peer's catalogue before invoking it through `POST /federation/peers/{peer_id}/services`; the provider dispatches through that same registry at `POST /federation/services`. The versioned `ServiceRequest`/`ServiceResponse` contracts carry request identity, requester/provider identity, capability, operation, payload, optional deadline, correlation ID, and result. The current implementation uses a bounded HTTP request, validates the operation against the local registry and validates each operation's payload, rejects expired deadlines, and checks that the returned request ID, provider instance ID, and operation match the selected peer and invocation. This is response consistency checking, not peer authentication. It is deliberately not a general RPC framework: network-level access control, cancellation, usage accounting, richer structured errors, and multi-hop delegation remain future work. Service calls do not enter the task store and do not require reliable messaging.
 
 ### 5.2 Task delegation
 
@@ -114,7 +102,7 @@ The branch currently contains a narrow end-to-end `search.query` proof of concep
 
 This proves a basic peer-to-peer request path. The core Orchestrator now owns worker scheduling and handler dispatch, and the FastAPI lifecycle starts/stops the orchestrator as a service. Task persistence now uses the transport-neutral `SqliteTaskStore` and canonical task models. Existing federation-named database files and tables are migrated to the canonical task store on startup. Do not reintroduce worker loops into federation or API routes.
 
-Requester-side parent/child references are now persisted before outbound task submission, including an explicit `submitted` state for ambiguous outcomes. A separate direct service request/response path now exists for `search.retrieve`; it does not create task records. Policy enforcement, trust establishment, broader service coverage, and artifact exchange remain incomplete. Federation must remain a thin adapter. The requester can query the provider's persisted task resource for status and results; there is no requirement for guaranteed push delivery or a separate messaging subsystem.
+Requester-side parent/child references are now persisted before outbound task submission, including an explicit `submitted` state for ambiguous outcomes. A separate direct service request/response path now exists for `search.retrieve`; it does not create task records. Policy enforcement, broader service coverage, and artifact exchange remain incomplete. Federation must remain a thin adapter. The requester can query the provider's persisted task resource for status and results; there is no requirement for guaranteed push delivery or a separate messaging subsystem.
 
 ### 5.3 Federated RAG
 
@@ -144,7 +132,7 @@ Each instance remains independently operational without network access. Federati
 - Peer restart, address changes, capability changes, and protocol-version mismatch.
 - Request timeout, cancellation, partial failure, and provider overload.
 - Duplicate requests and repeated artifact delivery.
-- Revoked trust and changed authorization.
+- Changed network reachability and operator-controlled access policy.
 - Interrupted transfers and consumer restart.
 - Stale, incompatible, conflicting, or integrity-invalid artifacts.
 
@@ -203,8 +191,7 @@ Configuration must make federation behavior explicit and safe. The eventual conf
 - Discovery transports, interfaces, multicast scope, and announcement interval.
 - Presence TTL and peer expiry.
 - Static peers and optional DNS/rendezvous sources.
-- Trust roots, local identity, certificate rotation, and revocation.
-- Allowed peer identities, capabilities, partitions, and delegation scopes.
+- Operator-controlled network exposure and any deployment-specific access restrictions.
 - Resource, transfer, retry, and hop limits.
 
 Defaults: federation enabled for peer discovery/presence in a federation-capable deployment; minimal non-sensitive announcements; no automatic trust; no automatic data sharing; no unrestricted delegation. Operators may disable or scope discovery explicitly.
@@ -219,8 +206,8 @@ Federation is not complete until automated and multi-process tests prove:
 2. Startup, periodic, change, and departure announcements work; TTL expiry detects unexpected disappearance.
 3. mDNS/DNS-SD and scoped UDP discovery work on supported LAN configurations; static/DNS configuration works where multicast is unavailable.
 4. Duplicate, malformed, stale, oversized, and spoofed announcements are safely rejected or rate-limited.
-5. Discovery never grants trust; mutual authentication, authorization, protocol negotiation, and revocation are enforced.
-6. Untrusted peers cannot enumerate protected capabilities or invoke services.
+5. Discovery and presence identify peers on the configured trusted network; instance IDs remain identifiers, not authentication credentials.
+6. Federation endpoints are not exposed to untrusted networks.
 7. Service delegation preserves requester parent-task ownership and provider request ownership.
 8. Task delegation preserves task lineage, bounded authority, cancellation, recovery, and provenance.
 9. Federated RAG enforces source authorization and partition isolation before fusion/reranking.
