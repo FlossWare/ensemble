@@ -1,6 +1,6 @@
 # Ensemble Orchestration
 
-**Status:** Architecture contract. The repository does not yet contain a general-purpose orchestration engine. Existing GA runs and transcript jobs have domain-specific lifecycle stores; the federated search inbox is an implementation spike, not the target task architecture.
+**Status:** Initial core Orchestrator and handler dispatch are implemented. The first registered handler is federated `search.query`. Task persistence and request/record types still use the legacy federation-specific implementation and are the next migration target. Existing GA runs and transcript jobs retain their domain-specific lifecycle stores.
 
 ## 1. Ownership
 
@@ -67,17 +67,17 @@ The current code has useful domain-specific lifecycle foundations:
 - GA runs persist pending/running/completed/failed state in `GAStore`.
 - Transcript ingestion jobs persist attempts, status, results and interrupted-job recovery in `TranscriptCheckpointStore`.
 - Generation and indexing workflows have their own durable lifecycle and recovery rules.
-- The federated search spike uses `FederatedTaskStore` and a worker loop started directly by the FastAPI lifespan.
+- The initial federation implementation used `FederatedTaskStore` and an API-owned worker loop. The worker loop has been moved into the core `Orchestrator`, which owns handler registration, scheduling, dispatch, execution, and worker lifecycle. The persistence adapter and task models still carry federation-specific names and are not yet the final transport-neutral contract.
 
-These are not yet one coherent orchestration system. The federated task store and API-owned worker are especially problematic as a parallel task subsystem. They must not become the permanent architecture or be expanded with more task types.
+These are not yet one fully coherent orchestration system. GA and transcript lifecycles remain domain-specific and must be mapped deliberately, preserving their recovery semantics.
 
 ## 6. Migration sequence
 
-1. Define the transport-neutral task, task-event, execution-handler and orchestrator interfaces, including state-transition invariants.
-2. Inventory and map existing GA, transcript, generation and indexing lifecycle behavior. Preserve domain-specific state and recovery semantics; do not blindly replace mature stores with a generic blob.
-3. Implement the canonical orchestrator and worker/scheduler lifecycle. It must support local submissions before federation is connected.
-4. Adapt one existing domain operation as the first registered handler and prove local submit, execution, progress, cancellation, restart recovery and result retrieval.
-5. Replace the federated search worker/inbox with a thin federation adapter that submits to the orchestrator. Retain compatibility only as needed during migration; do not expose the inbox store as a separate public concept.
+1. Generalize the federation-specific request/record/store into a transport-neutral task contract and canonical task persistence schema.
+2. Add local task submission so the orchestrator is exercised without federation; local and remote submissions must share one path.
+3. Inventory and map existing GA, transcript, generation and indexing lifecycle behavior. Preserve domain-specific state and recovery semantics; do not blindly replace mature stores with a generic blob.
+4. Add explicit task events, progress, cancellation, deadlines, bounded retry policy, and parent/child lineage to the canonical lifecycle.
+5. Adapt GA and transcript operations through registered handlers where appropriate, retaining domain-specific checkpoint stores for their own work units.
 6. Add requester-side parent/child tracking and reliable lifecycle/result delivery over messaging.
 7. Move Control Center task views to canonical orchestrator APIs.
 8. Add further handlers only after the shared lifecycle works end to end.
