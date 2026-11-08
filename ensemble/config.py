@@ -8,7 +8,7 @@ from sqlalchemy.engine import make_url
 
 
 DEFAULT_PORT = 8090
-DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = "0.0.0.0"
 
 
 @dataclass(frozen=True)
