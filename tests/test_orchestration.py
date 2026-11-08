@@ -69,3 +69,55 @@ def test_orchestrator_requires_registered_handler_and_single_registration(tmp_pa
 def test_orchestrator_rejects_invalid_worker_configuration(tmp_path: Path):
     with pytest.raises(ValueError, match="worker_count"):
         Orchestrator(FederatedTaskStore(tmp_path), "local-instance", worker_count=0)
+
+
+def test_task_store_migrates_legacy_federation_database_without_losing_tasks(tmp_path: Path):
+    import hashlib
+    import json
+    import sqlite3
+    from datetime import datetime, timezone
+
+    from ensemble.task_store import SqliteTaskStore, TaskRecord, TaskRequest
+
+    legacy_path = tmp_path / "federated-tasks.sqlite3"
+    request = TaskRequest(
+        idempotency_key="legacy-task-1",
+        origin_instance_id="remote-instance",
+        target_capability="search",
+        task_type="search.query",
+        payload={"query": "legacy task"},
+    )
+    now = datetime.now(timezone.utc)
+    body = request.model_dump(mode="json")
+    record = TaskRecord(
+        **body, state="accepted", accepted_at=now, updated_at=now,
+    )
+    with sqlite3.connect(legacy_path) as db:
+        db.execute("""
+            CREATE TABLE federated_tasks (
+                task_id TEXT PRIMARY KEY,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                request_sha256 TEXT NOT NULL,
+                record_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        db.execute(
+            "INSERT INTO federated_tasks VALUES(?,?,?,?,?,?)",
+            (
+                str(request.task_id), request.idempotency_key,
+                hashlib.sha256(b"legacy").hexdigest(), record.model_dump_json(),
+                now.isoformat(), now.isoformat(),
+            ),
+        )
+
+    store = SqliteTaskStore(tmp_path)
+    store.initialize()
+
+    migrated = store.get(request.task_id)
+    assert migrated is not None
+    assert migrated.task_id == request.task_id
+    assert migrated.payload == {"query": "legacy task"}
+    assert (tmp_path / "tasks.sqlite3").exists()
+    assert not legacy_path.exists()
