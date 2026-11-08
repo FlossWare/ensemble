@@ -1,6 +1,6 @@
 # Ensemble Federation
 
-**Status:** LAN discovery, heartbeat presence, in-memory peer registry, and Control Center visibility are implemented. Reliable peer messaging, trust establishment, delegation, and artifact exchange remain planned.
+**Status:** LAN discovery, heartbeat presence, live peer inspection, and Control Center visibility are implemented. A durable, idempotent federated task inbox contract is implemented. Task execution/delegation, reliable messaging, trust establishment, and artifact exchange remain incomplete.
 **Scope:** Discovery, presence, trust establishment, peer communication, delegation, and exchange between independently operated Ensemble instances.
 
 ## 1. Purpose and operating model
@@ -17,7 +17,7 @@ Ensemble is the platform and orchestration authority, not an AI client. Client-s
 
 ### Implemented LAN discovery slice
 
-The current application broadcasts a small JSON presence announcement over IPv4 multicast by default, listens on the same group, ignores its own instance ID, and maintains an in-memory peer registry. The Control Center polls `/federation/status` and renders discovered peers, capabilities, endpoints, last-seen age, and online/offline status. Expired peers remain visible as offline for a bounded retention period before being pruned. This is discovery only: it does not yet establish peer sessions or enable remote task execution.
+The current application broadcasts a small JSON presence announcement over IPv4 multicast by default, listens on the same group, ignores its own instance ID, and maintains an in-memory peer registry. The Control Center polls `/federation/status` and renders discovered peers, capabilities, endpoints, last-seen age, and online/offline status. Expired peers remain visible as offline for a bounded retention period before being pruned. This is discovery only: it does not establish peer trust or execute remote tasks. The separate task inbox accepts and durably records bounded task requests, but no worker currently claims or executes them.
 
 Current defaults: multicast group `239.255.76.76`, UDP port `47676`, heartbeat 30 seconds, and presence TTL 90 seconds. Configure with `ENSEMBLE_FEDERATION_ENABLED`, `ENSEMBLE_FEDERATION_GROUP`, `ENSEMBLE_FEDERATION_PORT`, `ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS`, and `ENSEMBLE_FEDERATION_TTL_SECONDS`. The UDP group and port are configurable; multicast is link-local and best effort.
 
@@ -103,6 +103,19 @@ A requester may invoke a specific versioned service on an authorized peer while 
 ### 5.2 Task delegation
 
 A requester may assign a bounded task to another Ensemble. The receiving peer owns planning and execution of that delegated task under its own policies. The requester retains ownership of the parent task and overall outcome. Preserve task identity and lineage, scope, policy constraints, checkpoints, evidence, artifacts, status, cancellation, recovery, and result provenance.
+
+#### Current task-inbox implementation
+
+The first task-delegation slice defines a versioned-by-API JSON contract and durable per-instance SQLite inbox:
+
+- `POST /federation/tasks` accepts a task request and returns HTTP 202 with its stable task ID and `accepted` state.
+- `GET /federation/tasks/{task_id}` retrieves the durable record.
+- `GET /federation/tasks?limit=...` lists a bounded recent inbox.
+- Requests carry origin instance, target capability, task type, JSON payload, idempotency key, timestamps, optional deadline, and correlation/causation IDs.
+- The receiver rejects a request targeting an unavailable advertised capability, a self-originated request, oversized payloads, and reuse of an idempotency key with different content.
+- Repeated identical submissions return the original accepted record rather than creating duplicate work.
+
+This is an inbox and contract foundation, not working remote execution. Records remain in `accepted`; worker claiming, execution through the local orchestration path, progress/state transitions, cancellation, result delivery, and requester-side tracking are the next implementation steps. No endpoint claims that a task has started or completed.
 
 ### 5.3 Federated RAG
 
