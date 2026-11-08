@@ -173,3 +173,25 @@ def test_ledger_empty_status_and_external_checkpoint(tmp_path):
         assert (await store.verify(from_sequence=2, checkpoint=checkpoint))["ok"]
         await engine.dispose()
     asyncio.run(run())
+
+def test_shared_contract_fixture(tmp_path):
+    import json
+    from pathlib import Path
+    async def run():
+        fixture_path = Path(__file__).resolve().parents[1] / "parity" / "ledger-contract.json"
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'contract.db'}")
+        store = SqliteLedgerStore(engine)
+        await store.initialize()
+        for item in fixture["events"]:
+            await store.append(item)
+        page = await store.pull(limit=fixture["expectations"]["max_page_size"])
+        assert [item["sequence"] for item in page["entries"]] == [1, 2]
+        assert page["next_after_sequence"] == 2 and page["has_more"]
+        filtered = await store.pull(event_type=fixture["expectations"]["filter_event_type"], limit=2)
+        assert [item["event_id"] for item in filtered["entries"]] == fixture["expectations"]["filtered_event_ids"]
+        replayed = await store.replay(limit=10)
+        assert [item["event_id"] for item in replayed["entries"]] == fixture["expectations"]["event_ids"]
+        assert (await store.verify())["ok"]
+        await engine.dispose()
+    asyncio.run(run())
