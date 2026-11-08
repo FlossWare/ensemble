@@ -70,3 +70,8 @@ A future correlated trace must be emitted by the actual ingestion/retrieval exec
 - URI ingestion is a bounded single-page fetch, not a crawler.
 - Authentication, authorization, partition enforcement, rate limits, and production observability remain open.
 - Keep every workbench backed by the canonical REST contract. Do not move business logic or persistence into browser code.
+
+
+## Federation workbench status
+
+The Control Center requirements now include a Federation workbench, but it is **not implemented** in this repository snapshot. The planned workbench will distinguish discovered candidates from trusted peers and display peer identity, trust/authorization, endpoint and protocol compatibility, last-seen/TTL state, versioned capabilities, active service/task delegations, messaging and artifact-transfer checkpoints, provenance, and explicit degraded/revoked states. Trust approval and revocation are audited, confirmed operations. The browser will consume Ensemble REST contracts only; it will not implement peer discovery or access peer persistence directly. See [Control Center Requirements](control-center-requirements.md) and [Federation](federation.md).
