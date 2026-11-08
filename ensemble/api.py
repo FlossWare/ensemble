@@ -679,7 +679,7 @@ def create_app(
         instance_id=federation_instance_id,
         name=federation_name,
         endpoint=federation_endpoint,
-        capabilities=["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning"],
+        capabilities=["documents", "search", "lexical", "hybrid", "chunking", "embeddings", "vector", "index", "knowledge", "tokenization", "intent", "ranking", "reranking", "graph", "entities", "memory", "context", "ga", "thompson", "learning"],
         heartbeat_seconds=federation_heartbeat,
         ttl_seconds=federation_ttl,
         group=federation_group,
