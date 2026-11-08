@@ -44,13 +44,11 @@ from .file_ingestion import extract_pdf, PDFExtractionError, MAX_PDF_BYTES
 from .image_ingestion import extract_image_metadata, image_metadata_text, ImageExtractionError, MAX_IMAGE_BYTES
 from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
 from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
-from .ga_config import load_ga_config
 from .ga_artifacts import build_ga_learning_artifact
 from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
 from .thompson import select_model as thompson_select_model
 from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompsonStore
 from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
-from .learning_analytics import analyze_outcomes
 from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryReclamationStore
 from .deletion import AuditingDeletionDecorator, DeletionContext, DeletionStrategy, DeferredReclamationStrategy, ReclamationJob
 from .rebuild import IndexGenerationBuilder
@@ -293,19 +291,19 @@ def create_app(
         InMemoryMemoryStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteMemoryStore(database_url)
     )
-    active_ga_store = ga_store or (
+    active_ga_store = None if selected_profile is RuntimeProfile.STANDARD else (ga_store or (
         InMemoryGAStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteGAStore(database_url)
-    )
+    ))
     active_thompson_store = thompson_store or (
         InMemoryThompsonStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteThompsonStore(database_url)
     )
     thompson_rng = random.Random()
-    active_learning_store = learning_store or (
+    active_learning_store = None if selected_profile is RuntimeProfile.STANDARD else (learning_store or (
         InMemoryLearningStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteLearningStore(database_url)
-    )
+    ))
     active_transcript_store = transcript_store or (
         InMemoryTranscriptCheckpointStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteTranscriptCheckpointStore(database_url)
@@ -667,10 +665,12 @@ def create_app(
             await active_knowledge_store.initialize()
             await active_graph_store.initialize()
             await active_memory_store.initialize()
-            await active_ga_store.initialize()
-            await active_ga_store.recover_interrupted_runs()
+            if active_ga_store is not None:
+                await active_ga_store.initialize()
+                await active_ga_store.recover_interrupted_runs()
             await active_thompson_store.initialize()
-            await active_learning_store.initialize()
+            if active_learning_store is not None:
+                await active_learning_store.initialize()
             await active_transcript_store.initialize()
             await active_reclamation_store.initialize()
             await active_crawl_store.initialize()
@@ -713,9 +713,11 @@ def create_app(
                 await active_transcript_store.close()
                 await capability_lifecycle.stop()
         finally:
-            await active_learning_store.close()
+            if active_learning_store is not None:
+                await active_learning_store.close()
             await active_thompson_store.close()
-            await active_ga_store.close()
+            if active_ga_store is not None:
+                await active_ga_store.close()
             await active_memory_store.close()
             await active_graph_store.close()
             await active_knowledge_store.close()
@@ -3097,6 +3099,7 @@ def create_app(
         try:
             outcomes = await active_learning_store.recent_outcomes(days)
             cache_root = os.getenv("ENSEMBLE_ANALYTICS_CACHE_DIR", ".ensemble/analytics")
+            from .learning_analytics import analyze_outcomes
             report = await asyncio.to_thread(
                 analyze_outcomes, outcomes, cache_dir=cache_root,
                 contamination=contamination,
@@ -3331,6 +3334,7 @@ def create_app(
         if unknown:
             raise HTTPException(status_code=400, detail=f"unsupported GA config fields: {', '.join(sorted(unknown))}")
         try:
+            from .ga_config import load_ga_config
             defaults = load_ga_config()
         except ValueError as exc:
             raise HTTPException(status_code=500, detail=f"GA configuration is invalid: {exc}") from exc
@@ -5061,6 +5065,18 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail="search failed") from exc
 
+    if selected_profile is RuntimeProfile.STANDARD:
+        # GA and Learning are optional intelligence capabilities. Their stores are
+        # not constructed or initialized in Standard, and their routes are absent.
+        app.router.routes = [
+            route for route in app.router.routes
+            if not (set(getattr(route, "tags", []) or []) & {"ga", "learning"})
+        ]
+    app.state.enabled_capability_groups = (
+        ["core", "retrieval", "memory", "knowledge", "graph", "thompson", "collaboration"]
+        if selected_profile is RuntimeProfile.STANDARD
+        else ["core", "retrieval", "memory", "knowledge", "graph", "thompson", "collaboration", "ga", "learning"]
+    )
     return app
 
 
