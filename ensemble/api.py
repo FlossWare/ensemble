@@ -55,7 +55,7 @@ from .partitioning import partition_scope_middleware
 from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id, host_metrics, inspect_peer
 from .task_store import TaskRequest, TaskSubmission, SqliteTaskStore
 from .orchestration import Orchestrator
-from .service_delegation import ServiceInvocation, ServiceRequest, ServiceResponse
+from .service_delegation import ServiceInvocation, ServiceOperationRegistry, ServiceRequest, ServiceResponse
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -353,6 +353,87 @@ def create_app(
         document_store, embeddings, active_reranker, active_vector_store, active_index_store,
     )
     ranking_provider = configured_ranking_provider(active_reranker)
+
+    service_operations = ServiceOperationRegistry()
+
+    async def service_search_retrieve(payload: dict[str, Any]) -> dict[str, Any]:
+        query = payload.get("query")
+        limit = payload.get("limit", 10)
+        rerank = payload.get("rerank", False)
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("search.retrieve requires a non-empty payload.query")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("search.retrieve payload.limit must be an integer from 1 to 100")
+        if not isinstance(rerank, bool):
+            raise ValueError("search.retrieve payload.rerank must be a boolean")
+        return await search.search_with_status(query, limit, rerank=rerank)
+
+    async def service_chunking_chunk(payload: dict[str, Any]) -> dict[str, Any]:
+        profile, source_id, text_value = payload.get("profile"), payload.get("source_id"), payload.get("text")
+        if not isinstance(source_id, str) or not source_id or len(source_id) > 512:
+            raise ValueError("chunking.chunk requires a non-empty source_id of at most 512 characters")
+        try:
+            chunks = chunk_text(profile, source_id, text_value, payload.get("media_type", "text/plain"))
+        except ChunkingError as exc:
+            raise ValueError(str(exc)) from exc
+        return {
+            "profile": {"name": profile, "version": CHUNKING_PROFILES[profile]["version"]},
+            "chunks": chunks,
+        }
+
+    async def service_tokenization_tokenize(payload: dict[str, Any]) -> dict[str, Any]:
+        profile = payload.get("profile")
+        try:
+            tokens = tokenize(profile, payload.get("text"))
+        except TokenizationError as exc:
+            raise ValueError(str(exc)) from exc
+        return {
+            "profile": {"name": profile, "version": TOKENIZATION_PROFILES[profile]["version"]},
+            "tokens": tokens,
+        }
+
+    async def service_entities_extract(payload: dict[str, Any]) -> dict[str, Any]:
+        source = payload.get("source")
+        if source is not None and (not isinstance(source, str) or len(source) > 512):
+            raise ValueError("entities.extract source must be a string of at most 512 characters")
+        try:
+            entities = extract(payload.get("text"), source=source)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError(str(exc)) from exc
+        return {"entities": entities, "count": len(entities)}
+
+    service_operations.register(
+        "search", "search.retrieve", "Retrieve ranked search results from this instance.",
+        {"type": "object", "required": ["query"], "properties": {
+            "query": {"type": "string", "minLength": 1},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+            "rerank": {"type": "boolean", "default": False},
+        }}, service_search_retrieve,
+    )
+    service_operations.register(
+        "chunking", "chunking.chunk", "Chunk supplied text using a named local chunking profile.",
+        {"type": "object", "required": ["profile", "source_id", "text"], "properties": {
+            "profile": {"type": "string", "enum": sorted(CHUNKING_PROFILES)},
+            "source_id": {"type": "string", "maxLength": 512},
+            "text": {"type": "string"},
+            "media_type": {"type": "string", "default": "text/plain"},
+        }}, service_chunking_chunk,
+    )
+    service_operations.register(
+        "tokenization", "tokenization.tokenize", "Tokenize supplied text using a named local profile.",
+        {"type": "object", "required": ["profile", "text"], "properties": {
+            "profile": {"type": "string", "enum": sorted(TOKENIZATION_PROFILES)},
+            "text": {"type": "string"},
+        }}, service_tokenization_tokenize,
+    )
+    service_operations.register(
+        "entities", "entities.extract", "Extract entity candidates from supplied text.",
+        {"type": "object", "required": ["text"], "properties": {
+            "text": {"type": "string"},
+            "source": {"type": "string", "maxLength": 512},
+        }}, service_entities_extract,
+    )
+    app.state.service_operations = service_operations
 
     async def execute_search_task(task):
         query = task.payload["query"]
