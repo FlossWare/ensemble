@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import os
+import socket
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -56,8 +57,10 @@ class WorkerRuntime:
         labels: dict[str, str] | None = None,
     ) -> None:
         self.worker_id = worker_id or os.getenv("ENSEMBLE_WORKER_ID") or str(uuid4())
-        self.name = name or os.getenv("ENSEMBLE_WORKER_NAME") or os.uname().nodename
-        configured = max_concurrency or int(os.getenv("ENSEMBLE_WORKER_MAX_CONCURRENCY", "2"))
+        self.name = name or os.getenv("ENSEMBLE_WORKER_NAME") or socket.gethostname()
+        configured = max_concurrency if max_concurrency is not None else int(
+            os.getenv("ENSEMBLE_WORKER_MAX_CONCURRENCY", "2")
+        )
         if configured < 1 or configured > 256:
             raise ValueError("max_concurrency must be between 1 and 256")
         self.max_concurrency = configured
@@ -140,13 +143,17 @@ class WorkerRuntime:
             started = time.perf_counter()
             self._active += 1
             try:
-                result = operation.handler(request.payload)
+                if inspect.iscoroutinefunction(operation.handler):
+                    pending = operation.handler(request.payload)
+                else:
+                    pending = asyncio.to_thread(operation.handler, request.payload)
+                if request.deadline_unix_ms is None:
+                    result = await pending
+                else:
+                    remaining = max(0.0, (request.deadline_unix_ms / 1000) - time.time())
+                    result = await asyncio.wait_for(pending, timeout=remaining)
                 if inspect.isawaitable(result):
-                    if request.deadline_unix_ms is None:
-                        result = await result
-                    else:
-                        remaining = max(0.0, (request.deadline_unix_ms / 1000) - time.time())
-                        result = await asyncio.wait_for(result, timeout=remaining)
+                    result = await result
                 if not isinstance(result, dict):
                     raise TypeError("worker handlers must return a JSON object")
                 self._completed += 1
@@ -213,7 +220,8 @@ def _memory_limit_bytes() -> int | None:
     """Return a Linux cgroup memory limit when present, otherwise None."""
     for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
         try:
-            value = open(path, encoding="ascii").read().strip()
+            with open(path, encoding="ascii") as source:
+                value = source.read().strip()
         except OSError:
             continue
         if value == "max":
