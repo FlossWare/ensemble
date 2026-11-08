@@ -45,3 +45,13 @@ def test_registry_marks_expired_peer_offline_then_eventually_prunes_it():
     assert len(registry.list(now=131)) == 1
     assert registry.expire(now=221) == 1
     assert registry.list(now=221) == []
+
+
+
+def test_graceful_departure_marks_peer_offline():
+    registry = PeerRegistry("local", ttl_seconds=30)
+    assert registry.observe(_announcement(), now=100)
+    assert registry.depart("peer-1", now=105)
+    peer = registry.list(now=106)[0]
+    assert peer["status"] == "offline"
+    assert peer["seconds_since_seen"] == 6
