@@ -170,3 +170,69 @@ def test_requester_rejects_response_from_unselected_peer(tmp_path, monkeypatch):
 
         assert response.status_code == 502
         assert "does not match" in response.json()["detail"]
+
+
+def test_service_catalogue_exposes_explicit_domain_operations(tmp_path):
+    with _client(tmp_path) as client:
+        response = client.get("/federation/services")
+        assert response.status_code == 200
+        operations = {
+            (item["capability"], item["operation"])
+            for item in response.json()["operations"]
+        }
+        assert operations == {
+            ("search", "search.retrieve"),
+            ("chunking", "chunking.chunk"),
+            ("tokenization", "tokenization.tokenize"),
+            ("entities", "entities.extract"),
+        }
+
+
+def test_service_registry_executes_existing_stateless_domain_capabilities(tmp_path):
+    with _client(tmp_path) as client:
+        common = {"requester_instance_id": "requester-instance"}
+
+        chunked = client.post("/federation/services", json={
+            **common,
+            "target_capability": "chunking",
+            "operation": "chunking.chunk",
+            "payload": {
+                "profile": "window-v1",
+                "source_id": "peer-chunk-source",
+                "text": "A bounded chunking operation backed by the existing chunker.",
+            },
+        })
+        assert chunked.status_code == 200, chunked.text
+        assert chunked.json()["result"]["chunks"]
+
+        tokenized = client.post("/federation/services", json={
+            **common,
+            "target_capability": "tokenization",
+            "operation": "tokenization.tokenize",
+            "payload": {"profile": "lexical-v1", "text": "memory-service"},
+        })
+        assert tokenized.status_code == 200, tokenized.text
+        assert any(
+            item["term"] == "memory-service"
+            for item in tokenized.json()["result"]["tokens"]
+        )
+
+        extracted = client.post("/federation/services", json={
+            **common,
+            "target_capability": "entities",
+            "operation": "entities.extract",
+            "payload": {"text": "Track CPSEARCH-10177 in https://example.com/issues/1"},
+        })
+        assert extracted.status_code == 200, extracted.text
+        assert extracted.json()["result"]["count"] >= 2
+
+
+def test_service_registry_rejects_unknown_operation(tmp_path):
+    with _client(tmp_path) as client:
+        response = client.post("/federation/services", json={
+            "requester_instance_id": "requester-instance",
+            "target_capability": "graph",
+            "operation": "graph.query",
+            "payload": {},
+        })
+        assert response.status_code == 409
