@@ -723,6 +723,29 @@ def create_app(
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
         title = "Client Error" if exc.status_code < 500 else "Server Error"
+        if isinstance(exc.detail, dict):
+            extensions = {
+                key: exc.detail[key]
+                for key in (
+                    "peer_id", "task_id", "status_url",
+                    "retry_with_same_task_id_and_idempotency_key",
+                )
+                if key in exc.detail
+            }
+            return JSONResponse(
+                status_code=exc.status_code,
+                media_type="application/problem+json",
+                content={
+                    "type": "about:blank",
+                    "title": title,
+                    "status": exc.status_code,
+                    "detail": str(exc.detail.get("message", title)),
+                    "instance": request.url.path,
+                    "code": str(exc.detail.get("code", "http-error")),
+                    "correlationId": str(uuid4()),
+                    **extensions,
+                },
+            )
         detail = exc.detail if isinstance(exc.detail, str) else title
         return _problem(request, exc.status_code, title, detail, "http-error")
 
