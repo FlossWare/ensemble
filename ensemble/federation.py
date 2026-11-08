@@ -134,7 +134,7 @@ class PeerRegistry:
 
     def expire(self, now: float | None = None) -> int:
         current = time.time() if now is None else now
-        expired = [key for key, peer in self._peers.items() if peer.expires_at <= current]
+        expired = [key for key, peer in self._peers.items() if peer.expires_at + (self.ttl_seconds * 3) <= current]
         for key in expired:
             del self._peers[key]
         return len(expired)
