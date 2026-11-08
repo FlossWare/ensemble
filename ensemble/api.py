@@ -650,7 +650,9 @@ def create_app(
     app.state.index_store = active_index_store
     app.state.knowledge_store = active_knowledge_store
     app.state.graph_store = active_graph_store
-    app.state.memory_store = active_memory_store\n    app.state.ledger_store = active_ledger_store\n    app.include_router(ledger_router)
+    app.state.memory_store = active_memory_store
+    app.state.ledger_store = active_ledger_store
+    app.include_router(ledger_router)
     app.state.ga_store = active_ga_store
     app.state.thompson_store = active_thompson_store
     app.state.learning_store = active_learning_store
