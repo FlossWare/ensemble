@@ -1,6 +1,6 @@
 # Ensemble Federation
 
-**Status:** LAN discovery, heartbeat presence, live peer inspection, and Control Center visibility are implemented. Delegated task execution now dispatches through the core per-instance Orchestrator and registered task handlers. The persistence adapter and public task envelope still carry legacy federation-specific naming and need to be generalized. Reliable lifecycle/result messaging, trust establishment, and artifact exchange remain incomplete. See [Orchestration](orchestration.md).
+**Status:** LAN discovery, heartbeat presence, live peer inspection, and Control Center visibility are implemented. Delegated task execution now dispatches through the core per-instance Orchestrator and registered task handlers. Task execution and persistence now use transport-neutral `TaskRequest`, `TaskSubmission`, `TaskRecord`, `Orchestrator`, and `SqliteTaskStore` contracts. Startup migrates the old federation-named database and table. Reliable lifecycle/result messaging, trust establishment, and artifact exchange remain incomplete. Reliable lifecycle/result messaging, trust establishment, and artifact exchange remain incomplete. See [Orchestration](orchestration.md).
 **Scope:** Discovery, presence, trust establishment, peer communication, delegation, and exchange between independently operated Ensemble instances.
 
 ## 1. Purpose and operating model
@@ -17,7 +17,7 @@ Ensemble is the platform and orchestration authority, not an AI client. Client-s
 
 ### Implemented LAN discovery slice
 
-The current application broadcasts a small JSON presence announcement over IPv4 multicast by default, listens on the same group, ignores its own instance ID, and maintains an in-memory peer registry. The Control Center polls `/federation/status` and renders discovered peers, capabilities, endpoints, last-seen age, and online/offline status. Expired peers remain visible as offline for a bounded retention period before being pruned. This is discovery only: it does not establish peer trust. The current `search.query` operation is the first registered orchestrator handler. Federation submits accepted peer requests to the core Orchestrator; the API no longer owns a dedicated delegated-task worker loop. The remaining federation-specific persistence adapter and task envelope are migration work, not the intended generic task contract.
+The current application broadcasts a small JSON presence announcement over IPv4 multicast by default, listens on the same group, ignores its own instance ID, and maintains an in-memory peer registry. The Control Center polls `/federation/status` and renders discovered peers, capabilities, endpoints, last-seen age, and online/offline status. Expired peers remain visible as offline for a bounded retention period before being pruned. This is discovery only: it does not establish peer trust. The current `search.query` operation is the first registered orchestrator handler. Federation submits accepted peer requests to the core Orchestrator; the API no longer owns a dedicated delegated-task worker loop. Federation maps its peer envelope into the shared task contract; the legacy `ensemble.federated_tasks` module remains only as compatibility aliases.
 
 Current defaults: multicast group `239.255.76.76`, UDP port `47676`, heartbeat 30 seconds, and presence TTL 90 seconds. Configure with `ENSEMBLE_FEDERATION_ENABLED`, `ENSEMBLE_FEDERATION_GROUP`, `ENSEMBLE_FEDERATION_PORT`, `ENSEMBLE_FEDERATION_HEARTBEAT_SECONDS`, and `ENSEMBLE_FEDERATION_TTL_SECONDS`. The UDP group and port are configurable; multicast is link-local and best effort.
 
@@ -108,8 +108,8 @@ A requester may assign a bounded task to another Ensemble. The receiving peer ow
 
 The branch currently contains a narrow end-to-end `search.query` proof of concept:
 - A peer can submit a search request to another discovered peer.
-- The receiving API persists it in a federation-specific SQLite inbox.
-- An API-lifespan worker claims the request, invokes the local search service, and records a result.
+- The receiving API maps it into the canonical per-instance `SqliteTaskStore`.
+- The core Orchestrator claims the request, invokes the registered local search handler, and records a result.
 - The Control Center can inspect recent delegated task records.
 
 This proves a basic peer-to-peer request path. The core Orchestrator now owns worker scheduling and handler dispatch, and the FastAPI lifecycle starts/stops the orchestrator as a service. Task persistence now uses the transport-neutral `SqliteTaskStore` and canonical task models. Existing federation-named database files and tables are migrated to the canonical task store on startup. Do not reintroduce worker loops into federation or API routes.
