@@ -687,12 +687,13 @@ def create_app(
     )
     app.state.federation_registry = federation_registry
     app.state.federation_discovery = federation_discovery
-    app.state.federation_instance = {
+    federation_instance = {
         "instance_id": federation_instance_id,
         "name": federation_name,
         "endpoint": federation_endpoint,
         "protocol_version": "1",
     }
+    app.state.federation_instance = federation_instance
 
     @app.exception_handler(HTTPException)
     async def http_problem(request: Request, exc: HTTPException):
