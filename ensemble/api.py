@@ -787,6 +787,13 @@ def create_app(
             **submission.model_dump(mode="python"),
             origin_instance_id=federation_instance_id,
         )
+        if submission.parent_task_id is not None:
+            try:
+                await active_orchestrator.record_delegated_child(
+                    submission.parent_task_id, peer_id, submission,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.post(
@@ -818,12 +825,21 @@ def create_app(
                 },
             ) from exc
         if response.status_code >= 400:
+            if submission.parent_task_id is not None:
+                await active_orchestrator.update_delegated_child(
+                    peer_id, submission.task_id, state="rejected",
+                    error="peer rejected delegated task",
+                )
             status = response.status_code if response.status_code < 500 else 502
             raise HTTPException(status_code=status, detail="peer rejected delegated task")
         try:
             remote = response.json()
         except ValueError as exc:
             raise HTTPException(status_code=502, detail="peer returned an invalid task response") from exc
+        if submission.parent_task_id is not None:
+            await active_orchestrator.update_delegated_child(
+                peer_id, submission.task_id, state="accepted",
+            )
         return {
             "accepted": True,
             "task_id": str(submission.task_id),
@@ -891,6 +907,22 @@ def create_app(
         if record.origin_instance_id != federation_instance_id:
             raise HTTPException(status_code=404, detail="local task not found")
         return record
+
+    @app.get("/api/v1/tasks/{task_id}/children", tags=["orchestration"])
+    async def list_task_children(task_id: str):
+        from uuid import UUID
+        try:
+            parsed_id = UUID(task_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="task_id must be a UUID") from exc
+        parent = await active_orchestrator.get(parsed_id)
+        if parent is None or parent.origin_instance_id != federation_instance_id:
+            raise HTTPException(status_code=404, detail="local parent task not found")
+        children = await active_orchestrator.list_delegated_children(parsed_id)
+        return {
+            "parent_task_id": str(parsed_id),
+            "children": [child.model_dump(mode="json") for child in children],
+        }
 
     @app.post("/federation/tasks", status_code=202, tags=["federation"])
     async def accept_federated_task(task: TaskRequest):
