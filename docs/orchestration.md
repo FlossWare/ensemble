@@ -19,7 +19,10 @@ A transport adapter must not implement a second task state machine or worker loo
 
 ## 2. Federation boundary
 
-Federation is peer discovery, communication and delegation transport. It is not an execution engine.
+Federation is peer discovery, communication and delegation transport. It is not an execution engine. Keep two distinct peer operations:
+
+- **Service delegation:** bounded direct request/response to a provider capability. The provider invokes its existing domain service and returns a result. No remote task is created and the caller retains its parent-task ownership.
+- **Task delegation:** submits a durable task to the provider's Orchestrator. The provider owns the delegated task lifecycle and exposes its task resource for lookup.
 
 For inbound delegation:
 1. Federation receives and validates the peer request envelope.
@@ -31,7 +34,7 @@ For inbound delegation:
 
 For outbound delegation, the local orchestrator creates and owns the parent task and delegated-child relationship. Federation submits the child request and exposes the provider's task resource for lookup. A network timeout is an ambiguous submission outcome, not remote task failure; retry or lookup must reuse the same child task ID and idempotency key.
 
-Discovery announcements are hints, not authorization. A peer's advertised capability is not proof that a particular task is permitted or executable.
+Discovery announcements are hints, not authorization. A peer's advertised capability is not proof that a particular service call or task is permitted or executable. Service handlers and task handlers reuse domain capability implementations; transport adapters must not fork business logic.
 
 ## 3. Canonical task contract
 
@@ -48,7 +51,11 @@ The core contract should be transport-neutral and versioned. At minimum it carri
 
 Keep task identity separate from an individual HTTP/gRPC request attempt. Repeating a submission after an ambiguous timeout must reuse the same task ID and idempotency key; reusing either with different immutable request content is a conflict.
 
-## 4. Core boundaries
+## 4. Service invocation contract
+
+Direct service delegation uses versioned `ServiceRequest` and `ServiceResponse` models in `ensemble/service_delegation.py`. `POST /federation/peers/{peer_id}/services` forwards a bounded request to the provider's `POST /federation/services` endpoint. The first operation is `search.retrieve`, which invokes the same `SearchService.search_with_status` implementation used by local search. It validates query, limit, rerank flag, and optional deadline. It does not create a `TaskRecord`, touch the task store, or use the Orchestrator. This is an intentionally small capability invocation contract, not a generic RPC framework or reliable messaging layer. Current implementation is unauthenticated MVP; peer trust and authorization remain incomplete.
+
+## 5. Core boundaries
 
 - **Orchestrator:** lifecycle and policy authority.
 - **Scheduler:** selects eligible work and workers; no business-specific task semantics.
@@ -60,7 +67,7 @@ Keep task identity separate from an individual HTTP/gRPC request attempt. Repeat
 
 All client and transport interfaces invoke the same application services. Do not duplicate scheduling, policy, execution, or persistence in REST, MCP, GraphQL, gRPC, or federation adapters.
 
-## 5. Existing implementation assessment
+## 6. Existing implementation assessment
 
 The current code has useful domain-specific lifecycle foundations:
 - GA runs persist their domain-specific result and promotion data in `GAStore`; execution is now scheduled by the core Orchestrator through the `ga.run` handler.
@@ -70,7 +77,7 @@ The current code has useful domain-specific lifecycle foundations:
 
 These are not yet one fully coherent orchestration system. GA and transcript lifecycles remain domain-specific and must be mapped deliberately, preserving their recovery semantics.
 
-## 6. Migration sequence
+## 7. Migration sequence
 
 1. Add task schema versioning, partition-aware persistence, and migration/rollback coverage for the canonical task store.
 2. Inventory and map existing GA, transcript, generation and indexing lifecycle behavior. Preserve domain-specific state and recovery semantics; do not blindly replace mature stores with a generic blob.
@@ -80,7 +87,7 @@ These are not yet one fully coherent orchestration system. GA and transcript lif
 6. Move Control Center task views to canonical orchestrator APIs.
 7. Add further handlers only after the shared lifecycle works end to end.
 
-## 7. Acceptance criteria
+## 8. Acceptance criteria
 
 - Local and federated submissions use the same orchestrator and task state machine.
 - No API route or federation adapter starts its own execution loop.
