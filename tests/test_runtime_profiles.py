@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import sys
 
+from fastapi.testclient import TestClient
+
+from ensemble.store import InMemoryDocumentStore
 from ensemble.runtime import RuntimeProfile, create_runtime
 
 
@@ -31,3 +34,27 @@ def test_standard_profile_omits_optional_ga_and_learning_capabilities():
     assert not any(path.startswith("/api/v1/learning/") for path in paths)
     assert "/api/v1/runtime/capabilities" in paths
     assert "/api/v1/runtime/capabilities/health" in paths
+
+
+
+def test_thompson_store_uses_shared_capability_lifecycle():
+    from ensemble.api import create_app
+
+    app = create_app(
+        profile=RuntimeProfile.STANDARD,
+        store=InMemoryDocumentStore(),
+        run_reclamation_worker=False,
+    )
+    descriptor = app.state.capability_registry.get("thompson").descriptor
+    assert descriptor.profiles == (RuntimeProfile.STANDARD, RuntimeProfile.FULL)
+
+    with TestClient(app) as client:
+        assert "thompson" in app.state.capability_lifecycle.started
+        response = client.get("/api/v1/runtime/capabilities/health")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["profile"] == "standard"
+        thompson = next(item for item in payload["capabilities"] if item["capability"] == "thompson")
+        assert thompson["status"] == "ready"
+
+    assert "thompson" not in app.state.capability_lifecycle.started
