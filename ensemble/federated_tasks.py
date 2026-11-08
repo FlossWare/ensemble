@@ -99,7 +99,8 @@ class FederatedTaskStore:
         if request.origin_instance_id == local_instance_id:
             raise ValueError("origin_instance_id must identify a remote instance")
         body = request.model_dump(mode="json")
-        digest = hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
+        fingerprint = {key: value for key, value in body.items() if key != "created_at"}
+        digest = hashlib.sha256(_canonical(fingerprint).encode("utf-8")).hexdigest()
         now = _now()
         record = FederatedTaskRecord(
             **body, state="accepted",
