@@ -38,7 +38,8 @@ from .scraping import ScrapeError, preview_uri
 from .transcripts import parse_jsonl, MAX_TRANSCRIPT_BYTES
 from .transcript_store import TranscriptCheckpointStore, SqliteTranscriptCheckpointStore, InMemoryTranscriptCheckpointStore
 from .file_ingestion import extract_pdf, PDFExtractionError, MAX_PDF_BYTES
-from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore\nfrom .ledger import SqliteLedgerStore, router as ledger_router
+from .memory_store import MemoryStore, SqliteMemoryStore, InMemoryMemoryStore
+from .ledger import SqliteLedgerStore, router as ledger_router
 from .ga import GAConfig, GeneticAlgorithm, PARAMETERS as GA_PARAMETERS, SYSTEMS as GA_SYSTEMS
 from .ga_store import GAStore, SqliteGAStore, InMemoryGAStore
 from .thompson import select_model as thompson_select_model
@@ -222,6 +223,7 @@ def create_app(
         InMemoryTranscriptCheckpointStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteTranscriptCheckpointStore(database_url)
     )
+    active_ledger_store = SqliteLedgerStore(getattr(active_memory_store, "engine", None))
 
     active_reclamation_store = (
         InMemoryReclamationStore() if isinstance(document_store, InMemoryDocumentStore)
@@ -273,7 +275,8 @@ def create_app(
                 await recover_fence()
             await active_knowledge_store.initialize()
             await active_graph_store.initialize()
-            await active_memory_store.initialize()\n            await active_ledger_store.initialize()
+            await active_memory_store.initialize()
+            await active_ledger_store.initialize()
             await active_ga_store.initialize()
             await active_ga_store.recover_interrupted_runs()
             await active_thompson_store.initialize()
@@ -296,7 +299,8 @@ def create_app(
             await active_learning_store.close()
             await active_thompson_store.close()
             await active_ga_store.close()
-            await active_ledger_store.close()\n            await active_memory_store.close()
+            await active_ledger_store.close()
+            await active_memory_store.close()
             await active_graph_store.close()
             await active_knowledge_store.close()
             await active_index_store.close()
