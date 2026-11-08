@@ -52,7 +52,7 @@ from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
 from .partitioning import partition_scope_middleware
 from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id, host_metrics, inspect_peer
-from .federated_tasks import FederatedTaskRequest, FederatedTaskSubmission, FederatedTaskStore
+from .task_store import TaskRequest, TaskSubmission, SqliteTaskStore
 from .orchestration import Orchestrator
 
 
@@ -679,7 +679,7 @@ def create_app(
     app.state.transcript_store = active_transcript_store
     app.state.settings = settings_from_env(database_url)
     federation_settings = app.state.settings
-    active_federated_task_store = FederatedTaskStore(federation_settings.persistence_root)
+    active_federated_task_store = SqliteTaskStore(federation_settings.persistence_root)
     app.state.federated_task_store = active_federated_task_store
     federation_instance_id = _instance_id(federation_settings.persistence_root)
     active_orchestrator = Orchestrator(
@@ -764,7 +764,7 @@ def create_app(
         return {"instance": federation_instance, "peers": federation_registry.list()}
 
     @app.post("/federation/peers/{peer_id}/tasks", status_code=202, tags=["federation"])
-    async def submit_peer_task(peer_id: str, submission: FederatedTaskSubmission):
+    async def submit_peer_task(peer_id: str, submission: TaskSubmission):
         if not federation_enabled:
             raise HTTPException(status_code=503, detail="federation is disabled")
         peer = next((item for item in federation_registry.list() if item["instance_id"] == peer_id), None)
@@ -782,7 +782,7 @@ def create_app(
             raise HTTPException(status_code=422, detail="search.query requires a non-empty payload.query")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise HTTPException(status_code=422, detail="search.query payload.limit must be between 1 and 100")
-        request_body = FederatedTaskRequest(
+        request_body = TaskRequest(
             **submission.model_dump(mode="python"),
             origin_instance_id=federation_instance_id,
         )
