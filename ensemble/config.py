@@ -49,8 +49,6 @@ def settings_from_env(database_url: str | None = None) -> Settings:
     host = os.getenv("ENSEMBLE_HOST", DEFAULT_HOST).strip()
     if not host:
         raise ValueError("ENSEMBLE_HOST must not be empty")
-    if host.casefold() not in {"127.0.0.1", "::1", "localhost"} and not os.getenv("ENSEMBLE_PARTITION_TOKENS", "").strip():
-        raise ValueError("non-loopback listeners require ENSEMBLE_PARTITION_TOKENS authentication")
     raw_port = os.getenv("ENSEMBLE_PORT", str(DEFAULT_PORT))
     try:
         port = int(raw_port)
