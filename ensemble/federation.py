@@ -38,7 +38,7 @@ def _instance_id(root: Path) -> str:
 
 
 def _advertise_host(bind_host: str) -> str:
-    if bind_host not in {"0.0.0.0", "::", ""}:
+    if bind_host not in {"0.0.0.0", "::", "", "127.0.0.1", "::1", "localhost"}:
         return bind_host
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
