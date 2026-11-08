@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import importlib
 import os
 import socket
 import time
@@ -246,4 +247,12 @@ def main() -> None:
     parser.add_argument("--host", default=os.getenv("ENSEMBLE_WORKER_HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.getenv("ENSEMBLE_WORKER_PORT", "8091")))
     args = parser.parse_args()
-    uvicorn.run("ensemble.worker_runtime:app", host=args.host, port=args.port)
+    runtime = WorkerRuntime()
+    adapter_spec = os.getenv("ENSEMBLE_WORKER_ADAPTER", "").strip()
+    if adapter_spec:
+        module_name, separator, factory_name = adapter_spec.partition(":")
+        if not separator or not module_name or not factory_name:
+            parser.error("ENSEMBLE_WORKER_ADAPTER must use module:register format")
+        adapter = getattr(importlib.import_module(module_name), factory_name)
+        adapter(runtime)
+    uvicorn.run(create_worker_app(runtime), host=args.host, port=args.port)
