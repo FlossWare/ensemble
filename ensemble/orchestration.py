@@ -57,6 +57,7 @@ class Orchestrator:
         self._handlers: dict[str, TaskHandler] = {}
         self._workers: list[asyncio.Task[None]] = []
         self._started = False
+        self._wake_event = asyncio.Event()
 
     def register(self, task_type: str, handler: TaskHandler) -> None:
         if self._started:
@@ -79,7 +80,10 @@ class Orchestrator:
             raise RuntimeError("orchestrator is not running")
         if not self.accepts(request.task_type):
             raise ValueError(f"no execution handler registered for {request.task_type}")
-        return await asyncio.to_thread(self.store.accept, request, self.instance_id)
+        result = await asyncio.to_thread(self.store.accept, request, self.instance_id)
+        if result[1]:
+            self._wake_event.set()
+        return result
 
     async def submit_local(
         self, submission: TaskSubmission,
@@ -92,9 +96,12 @@ class Orchestrator:
             **submission.model_dump(mode="python"),
             origin_instance_id=self.instance_id,
         )
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             self.store.accept, request, self.instance_id, allow_local_origin=True,
         )
+        if result[1]:
+            self._wake_event.set()
+        return result
 
     async def get(self, task_id: UUID) -> TaskRecord | None:
         return await asyncio.to_thread(self.store.get, task_id)
@@ -127,9 +134,13 @@ class Orchestrator:
         task_types = sorted(self._handlers)
         while self._started:
             try:
+                self._wake_event.clear()
                 task = await asyncio.to_thread(self.store.claim_next, worker_id, task_types)
                 if task is None:
-                    await asyncio.sleep(self.poll_interval)
+                    try:
+                        await asyncio.wait_for(self._wake_event.wait(), timeout=self.poll_interval)
+                    except TimeoutError:
+                        pass
                     continue
                 try:
                     if task.deadline is not None and task.deadline <= datetime.now(timezone.utc):
