@@ -14,19 +14,28 @@ The `standard` and `full` names are stable deployment intent, not yet independen
 
 ## Run
 
-Run a lightweight worker:
+Install only the worker runtime for a small device:
 
 ```bash
+python -m pip install 'flossware-ensemble[worker]'
 ensemble-runtime --profile worker --host 0.0.0.0 --port 8091
 ```
 
-Run the existing full application:
+Install the existing application dependencies for a Standard deployment:
 
 ```bash
+python -m pip install 'flossware-ensemble[standard]'
+ensemble-runtime --profile standard --host 0.0.0.0 --port 8080
+```
+
+Install the complete optional dependency set for a Full deployment:
+
+```bash
+python -m pip install 'flossware-ensemble[full]'
 ensemble-runtime --profile full --host 0.0.0.0 --port 8080
 ```
 
-The profile can also be selected with `ENSEMBLE_PROFILE=worker|standard|full`. The existing `ensemble` and `ensemble-worker` commands remain available for compatibility.
+The profile can also be selected with `ENSEMBLE_PROFILE=worker|standard|full`. The base package contains only FastAPI and Uvicorn; database, vector, graph, document, and local intelligence dependencies are optional extras. The existing `ensemble` and `ensemble-worker` commands remain available for compatibility.
 
 ## Upgrade path
 
