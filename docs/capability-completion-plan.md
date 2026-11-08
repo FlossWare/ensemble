@@ -184,3 +184,20 @@ These are implemented slices, not a declaration that the platform is production-
 5. Finish Control Center usability and real execution diagnostics, while keeping all operations REST-backed.
 6. Complete operational readiness: backup/restore, migrations/upgrade, observability, rate limits, authentication/authorization, and partition enforcement.
 7. Verify the local embedding/reranking runtime matrix and decide when exact vector scans require a local ANN implementation.
+
+
+## Required federation delivery track (not yet implemented)
+
+Federation is mandatory Ensemble scope, not an optional future integration. Track it as a coordinated workstream after the foundational contracts and operational safety needed to support it. Do not claim completion from documentation or local unit tests alone.
+
+1. **Peer identity and trust:** stable instance identity, mutual TLS, trust roots, explicit peer approval, authorization scopes, certificate rotation/revocation, audit, and resource limits.
+2. **Discovery and presence:** automatic listen/broadcast by default when federation is enabled; startup, periodic heartbeat (initial proposed default 30 seconds), endpoint/capability-change and clean-departure announcements; configurable TTL (initial proposed default three heartbeat intervals); mDNS/DNS-SD and scoped UDP discovery; static/DNS/rendezvous alternatives. Announcements are minimal, untrusted hints.
+3. **Reliable peer transport:** versioned gRPC contracts over authenticated TLS, deadlines, cancellation, streaming where justified, compatibility negotiation, and REST administrative/compatibility operations. SSH remains a constrained remote-worker transport, not federation.
+4. **Messaging:** local and federated point-to-point, pub/sub, request/reply, and streaming with durable local state, acknowledgements, idempotency, bounded retries, ordering scope, offline retention, dead letters, and backpressure. No mandatory external broker.
+5. **Delegation:** service delegation and task delegation with explicit ownership boundaries, lineage, scope, deadlines, cancellation, retries, provenance, and bounded hops.
+6. **Federated RAG:** authorized peer retrieval with source-level policy and partition filtering before local fusion/reranking/context assembly.
+7. **Derived-artifact exchange:** storage-independent manifests, snapshots/deltas, cursors/checkpoints, integrity, deduplication, compatibility, invalidation, artifact-specific conflict rules, and import through independent local storage adapters.
+8. **Operator experience:** Control Center peer inventory, trust state, presence/expiry, capabilities, active delegations, transfer status, audit, and degraded states.
+9. **Multi-instance acceptance:** exercise independent operation, startup/change/heartbeat/departure, spoofed/duplicate/stale announcements, mutual authentication, revocation, protocol mismatch, disconnect/reconnect, timeout/cancellation, partial failure, offline delivery, and cross-store artifact import.
+
+Use Python standard-library asyncio/socket primitives, zeroconf, grpcio/grpcio-tools, established TLS/cryptography libraries, FastAPI, and per-instance SQLite where they fit. Do not introduce ZooKeeper, global consensus, shared persistence, mandatory Kafka/RabbitMQ, or a service mesh for the initial design. The detailed normative contract is [Federation](federation.md).
