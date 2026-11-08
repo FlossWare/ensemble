@@ -82,7 +82,7 @@ def parse_time(value: str | None) -> datetime | None:
 def validate_event(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("entry must be an object")
-    event_id = value.get("event_id") or str(uuid.uuid4())
+    event_id = value.get("event_id", str(uuid.uuid4()))
     event_type, source = value.get("event_type"), value.get("source")
     payload = value.get("payload")
     if not isinstance(event_id, str) or not event_id.strip() or len(event_id) > 256:
