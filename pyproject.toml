@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 ensemble = "ensemble.__main__:main"
+ensemble-worker = "ensemble.worker_runtime:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3,<9", "pytest-cov>=6,<7", "httpx>=0.28,<1"]
