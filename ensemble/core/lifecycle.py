@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from .contracts import Capability, CapabilityDescriptor, RuntimeContext, RuntimeProfile
 
@@ -67,6 +68,47 @@ class CapabilityRegistry:
         for name in sorted(selected):
             visit(name)
         return tuple(ordered)
+
+
+class StoreCapability:
+    """Adapts an existing async store to the shared capability lifecycle."""
+
+    def __init__(
+        self,
+        descriptor: CapabilityDescriptor,
+        store: Any,
+        *,
+        after_initialize: Callable[[], Awaitable[None]] | None = None,
+        health_check: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+    ) -> None:
+        self.descriptor = descriptor
+        self.store = store
+        self.after_initialize = after_initialize
+        self.health_check = health_check
+
+    async def initialize(self, context: RuntimeContext) -> None:
+        try:
+            await self.store.initialize()
+            if self.after_initialize is not None:
+                await self.after_initialize()
+        except Exception:
+            try:
+                await self.store.close()
+            except Exception:
+                pass
+            raise
+
+    async def close(self, context: RuntimeContext) -> None:
+        await self.store.close()
+
+    async def health(self, context: RuntimeContext) -> dict[str, Any]:
+        if self.health_check is not None:
+            result = await self.health_check()
+            return {"status": "ready", **result}
+        check_ready = getattr(self.store, "check_ready", None)
+        if callable(check_ready):
+            await check_ready()
+        return {"status": "ready"}
 
 
 class CapabilityLifecycle:
