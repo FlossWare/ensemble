@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 ensemble = "ensemble.__main__:main"
+ensemble-runtime = "ensemble.runtime:main"
 ensemble-worker = "ensemble.worker_runtime:main"
 
 [project.optional-dependencies]
