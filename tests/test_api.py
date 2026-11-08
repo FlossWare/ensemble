@@ -1376,7 +1376,7 @@ def test_federated_task_inbox_accepts_idempotently_and_survives_restart(tmp_path
     }
     with _client(tmp_path) as client:
         first = client.post("/federation/tasks", json=payload)
-        assert first.status_code == 202
+        assert first.status_code == 202, first.text
         assert first.json()["accepted"] is True
         assert first.json()["created"] is True
         assert first.json()["task"]["state"] == "accepted"
