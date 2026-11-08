@@ -226,3 +226,28 @@ class FederatedTaskStore:
                 (bounded,),
             ).fetchall()
         return [FederatedTaskRecord.model_validate_json(row[0]) for row in rows]
+
+
+class FederatedTaskSubmission(BaseModel):
+    task_id: UUID = Field(default_factory=uuid4)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+    target_capability: str = Field(min_length=1, max_length=128)
+    task_type: str = Field(min_length=1, max_length=128)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    deadline: datetime | None = None
+    correlation_id: str | None = Field(default=None, max_length=256)
+    causation_id: str | None = Field(default=None, max_length=256)
+
+    @field_validator("created_at", "deadline")
+    @classmethod
+    def require_timezone(cls, value):
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("timestamps must include a timezone")
+        return value
+
+    @field_validator("payload")
+    @classmethod
+    def validate_payload(cls, value):
+        _canonical(value)
+        return value
