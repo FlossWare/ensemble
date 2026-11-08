@@ -91,7 +91,6 @@ def test_requester_invokes_peer_service_with_direct_request_response(tmp_path, m
         })
         response = client.post("/federation/peers/remote-peer/services", json={
             "request_id": str(uuid.uuid4()),
-            "requester_instance_id": "caller-supplied-value",
             "target_capability": "search",
             "operation": "search.retrieve",
             "payload": {"query": "direct service", "limit": 3},
