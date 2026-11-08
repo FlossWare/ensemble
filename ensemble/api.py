@@ -687,14 +687,13 @@ def create_app(
             await active_source_schedule_store.initialize()
             await active_execution_trace_store.initialize()
             await active_collaboration_store.initialize()
+            await capability_lifecycle.start()
             worker_task = asyncio.create_task(reclamation_worker()) if run_reclamation_worker else None
             crawl_worker_task = asyncio.create_task(crawl_worker())
             schedule_worker_task = asyncio.create_task(source_schedule_worker())
             try:
-                await capability_lifecycle.start()
                 yield
             finally:
-                await capability_lifecycle.stop()
                 if worker_task is not None:
                     worker_task.cancel()
                 crawl_worker_task.cancel()
@@ -712,6 +711,7 @@ def create_app(
                 await active_crawl_store.close()
                 await active_reclamation_store.close()
                 await active_transcript_store.close()
+                await capability_lifecycle.stop()
         finally:
             await active_learning_store.close()
             await active_thompson_store.close()
