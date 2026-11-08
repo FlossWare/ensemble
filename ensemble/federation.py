@@ -132,6 +132,13 @@ class PeerRegistry:
             for key in sorted(self._peers)
         ]
 
+    def depart(self, instance_id: str, now: float | None = None) -> bool:
+        peer = self._peers.get(instance_id)
+        if peer is None:
+            return False
+        peer.expires_at = time.time() if now is None else now
+        return True
+
     def expire(self, now: float | None = None) -> int:
         current = time.time() if now is None else now
         expired = [key for key, peer in self._peers.items() if peer.expires_at + (self.ttl_seconds * 3) <= current]
@@ -207,6 +214,16 @@ class MulticastDiscovery:
     async def stop(self) -> None:
         if not self._started:
             return
+        if self._socket is not None:
+            departure = {**self.message, "kind": "ensemble.departure"}
+            try:
+                await asyncio.get_running_loop().sock_sendto(
+                    self._socket,
+                    json.dumps(departure, separators=(",", ":")).encode("utf-8"),
+                    (self.group, self.port),
+                )
+            except OSError:
+                pass
         self._started = False
         for task in self._tasks:
             task.cancel()
@@ -244,6 +261,10 @@ class MulticastDiscovery:
                 message = json.loads(payload.decode("utf-8"))
                 if isinstance(message, dict) and message.get("kind") == "ensemble.presence":
                     self.registry.observe(message)
+                elif isinstance(message, dict) and message.get("kind") == "ensemble.departure":
+                    instance_id = message.get("instance_id")
+                    if isinstance(instance_id, str):
+                        self.registry.depart(instance_id)
             except asyncio.CancelledError:
                 raise
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
