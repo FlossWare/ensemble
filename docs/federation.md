@@ -224,6 +224,7 @@ Federation is not complete until automated and multi-process tests prove:
 7. Service delegation preserves requester parent-task ownership and provider request ownership.
 8. Task delegation preserves task lineage, bounded authority, cancellation, recovery, and provenance.
 9. Federated RAG enforces source authorization and partition isolation before fusion/reranking.
+10. Requester-side parent/child references are persisted before submission; ambiguous outcomes remain queryable, and retries reuse the same child task ID and idempotency key.
 11. Artifact exchange proves snapshot and incremental transfer, checkpoint recovery, deduplication, integrity, compatibility, invalidation, conflict handling, and import through different local storage adapters without database-file copying.
 12. Disconnect/reconnect, peer restart, partial failure, timeout, cancellation, duplicate requests, ambiguous timeouts, and revocation are exercised across independently running instances.
 13. Control Center reports discovered/trusted/unavailable peers and active delegations from real API data, including explicit degraded states.
