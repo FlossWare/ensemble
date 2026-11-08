@@ -11,6 +11,7 @@ from ensemble.core import (
     CapabilityRegistry,
     RuntimeContext,
     RuntimeProfile,
+    StoreCapability,
 )
 
 
@@ -104,3 +105,42 @@ def test_duplicate_capability_registration_is_rejected():
     registry.register(FakeCapability("same"))
     with pytest.raises(CapabilityError, match="already registered"):
         registry.register(FakeCapability("same"))
+
+
+
+def test_store_adapter_runs_recovery_and_health_with_lifecycle():
+    class FakeStore:
+        def __init__(self):
+            self.events = []
+
+        async def initialize(self):
+            self.events.append("initialize")
+
+        async def close(self):
+            self.events.append("close")
+
+    async def scenario():
+        store = FakeStore()
+        async def recover():
+            store.events.append("recover")
+        async def health():
+            store.events.append("health")
+            return {"records": 3}
+
+        registry = CapabilityRegistry()
+        registry.register(StoreCapability(
+            CapabilityDescriptor("optional-store", profiles=(RuntimeProfile.FULL,)),
+            store,
+            after_initialize=recover,
+            health_check=health,
+        ))
+        lifecycle = CapabilityLifecycle(registry, RuntimeContext(RuntimeProfile.FULL))
+        await lifecycle.start()
+        assert store.events == ["initialize", "recover"]
+        assert await lifecycle.health() == [
+            {"capability": "optional-store", "status": "ready", "records": 3}
+        ]
+        await lifecycle.stop()
+        assert store.events == ["initialize", "recover", "health", "close"]
+
+    asyncio.run(scenario())
