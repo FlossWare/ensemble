@@ -35,7 +35,7 @@ New records use this logical envelope:
 
 Canonical JSON uses UTF-8, sorted object keys, compact separators, and no NaN/Infinity values. Hash comparisons are constant-time where practical. The exact canonicalization algorithm and hash input fields must be shared by both implementations and covered by fixtures.
 
-Legacy POC records without sequence/hash-chain fields remain readable. Their sequence is their one-based physical append order. A legacy payload digest is not represented as proof of a complete chain; verification must report the legacy assurance level rather than claiming tamper-evident verification.
+Legacy POC records without sequence/hash-chain fields remain readable. Their sequence is their one-based physical append order. Ledger pulls expose these rows as schema-version-0 compatibility envelopes with the original row preserved in provenance, a deterministic synthetic event ID only when the source row has none, and null entry/hash-chain fields. A computed payload digest on this compatibility envelope is not evidence that the original legacy row was tamper-evident. Verification must report the legacy assurance level rather than claiming tamper-evident verification.
 
 ## 3. REST operations
 
@@ -83,7 +83,7 @@ Verification checks, for each record in the requested interval:
 5. Previous-entry hash linkage to the preceding record.
 6. The first record's predecessor against a trusted checkpoint when verification begins after sequence 1.
 
-A range verification response reports the checked range, verified count, first failing sequence, failure category, and assurance level. A partial range without a trusted starting checkpoint must not be reported as fully chain-verified. Full verification begins at sequence 1 or a trusted signed/externally retained checkpoint.
+A range verification response reports the checked range, verified count, first failing sequence, failure category, and assurance level. A partial range without a trusted starting checkpoint must not be reported as fully chain-verified. A normal checkpoint contains ledger_id, sequence, and entry_sha256. The POC may also issue a legacy-prefix checkpoint containing ledger_id, sequence, legacy_prefix_sha256, and legacy_prefix_sequence_count; ranges anchored there retain a legacy-unverified assurance. Checkpoint trust is external to the ledger API and depends on the caller retaining the checkpoint through a trusted channel. Full verification begins at sequence 1 or a trusted signed/externally retained checkpoint.
 
 Legacy records are reported as legacy-unverified unless a verifiable migration/checkpoint procedure has established stronger evidence. Do not silently upgrade a legacy digest into a hash-chain claim.
 
