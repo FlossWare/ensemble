@@ -2,18 +2,9 @@ from __future__ import annotations
 
 import argparse
 import os
-from enum import StrEnum
-from typing import Any
-
 from fastapi import FastAPI
 
-
-class RuntimeProfile(StrEnum):
-    """Supported deployment shapes for one Ensemble codebase."""
-
-    WORKER = "worker"
-    STANDARD = "standard"
-    FULL = "full"
+from .core import RuntimeProfile
 
 
 def create_runtime(profile: RuntimeProfile | str | None = None) -> FastAPI:
@@ -33,7 +24,7 @@ def create_runtime(profile: RuntimeProfile | str | None = None) -> FastAPI:
     # SQLAlchemy, Chroma, graph, memory, GA, Thompson, or learning subsystems.
     from .api import create_app
 
-    app = create_app()
+    app = create_app(profile=selected)
     app.state.runtime_profile = selected.value
     return app
 
