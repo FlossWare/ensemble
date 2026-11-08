@@ -12,7 +12,7 @@ from sqlalchemy import (
     JSON, BigInteger, Column, DateTime, Integer, MetaData, String, Table,
     and_, insert, select, update,
 )
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError\nfrom sqlalchemy.ext.asyncio import create_async_engine
 
 ledger_metadata = MetaData()
 ledger_state = Table(
