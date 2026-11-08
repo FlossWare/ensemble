@@ -53,6 +53,7 @@ from .config import settings_from_env, resolve_database_url
 from .partitioning import partition_scope_middleware
 from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id, host_metrics, inspect_peer
 from .federated_tasks import FederatedTaskRequest, FederatedTaskSubmission, FederatedTaskStore
+from .orchestration import Orchestrator
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -289,8 +290,7 @@ def create_app(
             await active_transcript_store.recover_interrupted()
             await active_reclamation_store.initialize()
             await asyncio.to_thread(active_federated_task_store.initialize)
-            await asyncio.to_thread(active_federated_task_store.recover_interrupted)
-            federated_worker_task = asyncio.create_task(federated_task_worker())
+            await active_orchestrator.start()
             worker_task = asyncio.create_task(reclamation_worker())
             if federation_enabled:
                 await federation_discovery.start()
@@ -298,11 +298,7 @@ def create_app(
                 yield
             finally:
                 await federation_discovery.stop()
-                federated_worker_task.cancel()
-                try:
-                    await federated_worker_task
-                except asyncio.CancelledError:
-                    pass
+                await active_orchestrator.stop()
                 worker_task.cancel()
                 try:
                     await worker_task
@@ -356,40 +352,21 @@ def create_app(
     )
     ranking_provider = configured_ranking_provider(active_reranker)
 
-    async def federated_task_worker() -> None:
-        worker_id = f"{federation_instance_id}:{uuid4()}"
-        while True:
-            try:
-                task = await asyncio.to_thread(
-                    active_federated_task_store.claim_next, worker_id, ["search.query"],
-                )
-                if task is None:
-                    await asyncio.sleep(0.5)
-                    continue
-                try:
-                    if task.deadline is not None:
-                        from datetime import datetime, timezone
-                        if task.deadline <= datetime.now(timezone.utc):
-                            raise TimeoutError("task deadline expired before execution")
-                    query = task.payload["query"]
-                    limit = task.payload.get("limit", 10)
-                    hits = await search.search(query, limit)
-                    result = {
-                        "count": len(hits),
-                        "hits": [hit.model_dump(mode="json") for hit in hits],
-                    }
-                    await asyncio.to_thread(
-                        active_federated_task_store.complete, task.task_id, worker_id, result,
-                    )
-                except Exception as exc:
-                    await asyncio.to_thread(
-                        active_federated_task_store.fail, task.task_id, worker_id,
-                        f"{type(exc).__name__}: delegated task failed",
-                    )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                await asyncio.sleep(1)
+    async def execute_search_task(task):
+        query = task.payload["query"]
+        limit = task.payload.get("limit", 10)
+        hits = await search.search(query, limit)
+        return {
+            "count": len(hits),
+            "hits": [hit.model_dump(mode="json") for hit in hits],
+        }
+
+    active_orchestrator = Orchestrator(
+        active_federated_task_store, federation_instance_id,
+        poll_interval=0.5, worker_count=1,
+    )
+    active_orchestrator.register("search.query", execute_search_task)
+    app.state.orchestrator = active_orchestrator
 
     async def active_generation_id() -> str | None:
         status = await active_index_store.generation_status()
@@ -877,7 +854,7 @@ def create_app(
             raise HTTPException(status_code=422, detail="search.query payload.limit must be between 1 and 100")
         try:
             record, created = await asyncio.to_thread(
-                active_federated_task_store.accept, task, federation_instance_id,
+                active_orchestrator.accept_remote, task,
             )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -887,7 +864,7 @@ def create_app(
     async def list_federated_tasks(limit: int = 100):
         if not 1 <= limit <= 500:
             raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
-        records = await asyncio.to_thread(active_federated_task_store.list, limit)
+        records = await active_orchestrator.list(limit)
         return {"tasks": [record.model_dump(mode="json") for record in records]}
 
     @app.get("/federation/tasks/{task_id}", tags=["federation"])
@@ -897,7 +874,7 @@ def create_app(
             parsed_id = UUID(task_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="task_id must be a UUID") from exc
-        record = await asyncio.to_thread(active_federated_task_store.get, parsed_id)
+        record = await active_orchestrator.get(parsed_id)
         if record is None:
             raise HTTPException(status_code=404, detail="federated task not found")
         return record.model_dump(mode="json")
