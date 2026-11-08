@@ -116,8 +116,9 @@ def envelope_for(ledger_id: str, sequence: int, event: dict[str, Any], captured_
 
 class SqliteLedgerStore:
     """Append-only ledger using the application's SQLite engine and transaction boundary."""
-    def __init__(self, engine):
-        self.engine = engine
+    def __init__(self, engine=None):
+        self._owns_engine = engine is None
+        self.engine = engine or create_async_engine("sqlite+aiosqlite:///:memory:")
 
     async def initialize(self):
         async with self.engine.begin() as conn:
@@ -127,6 +128,10 @@ class SqliteLedgerStore:
                 await conn.execute(insert(ledger_state).values(
                     singleton_id=1, ledger_id=str(uuid.uuid4()), head_sequence=0, head_hash=None
                 ))
+
+    async def close(self):
+        if self._owns_engine:
+            await self.engine.dispose()
 
     async def status(self):
         async with self.engine.connect() as conn:
@@ -197,7 +202,7 @@ class SqliteLedgerStore:
             row = (await conn.execute(select(ledger_entries).where(ledger_entries.c.event_id == event_id))).mappings().first()
             return dict(row) if row else None
 
-    async def verify(self, from_sequence=1, through_sequence=None):
+    async def verify(self, from_sequence=1, through_sequence=None, checkpoint=None):
         state = await self.status()
         end = state["head_sequence"] if through_sequence is None else through_sequence
         if not 1 <= from_sequence <= max(1, end) or end > state["head_sequence"]:
@@ -209,8 +214,11 @@ class SqliteLedgerStore:
         expected = from_sequence
         previous = None
         if from_sequence > 1:
-            # A local predecessor is not a trusted checkpoint: it can be tampered too.
-            return {"ok": False, "first_failing_sequence": from_sequence, "failure_category": "missing_checkpoint", "assurance": "unverified_partial_range", "verified_count": 0}
+            if not isinstance(checkpoint, dict) or checkpoint.get("ledger_id") != state["ledger_id"] or checkpoint.get("sequence") != from_sequence - 1:
+                return {"ok": False, "first_failing_sequence": from_sequence, "failure_category": "missing_checkpoint", "assurance": "unverified_partial_range", "verified_count": 0}
+            previous = checkpoint.get("entry_sha256")
+            if not isinstance(previous, str) or len(previous) != 64:
+                return {"ok": False, "first_failing_sequence": from_sequence, "failure_category": "invalid_checkpoint", "assurance": "unverified_partial_range", "verified_count": 0}
         seen = set()
         for row in rows:
             item = dict(row)
@@ -227,7 +235,7 @@ class SqliteLedgerStore:
             previous, expected = item["entry_sha256"], expected + 1
         if expected <= end:
             return {"ok": False, "first_failing_sequence": expected, "failure_category": "missing_sequence", "assurance": "hash_chain", "verified_count": expected-from_sequence}
-        return {"ok": True, "from_sequence": from_sequence, "through_sequence": end, "verified_count": len(rows), "assurance": "hash_chain" if from_sequence == 1 else "hash_chain_with_local_predecessor"}
+        return {"ok": True, "from_sequence": from_sequence, "through_sequence": end, "verified_count": len(rows), "assurance": "hash_chain" if from_sequence == 1 else "hash_chain_with_external_checkpoint"}
 
     async def import_batch(self, source_ledger_id, entries):
         if not isinstance(source_ledger_id, str) or not source_ledger_id or not isinstance(entries, list) or len(entries) > 1000:
@@ -308,7 +316,7 @@ async def ledger_status(request: Request):
 
 @router.post("/api/v1/ledger/verify")
 async def ledger_verify(payload: dict[str, Any], request: Request):
-    try: return {"ok": True, **(await _store(request).verify(payload.get("from_sequence", 1), payload.get("through_sequence")))}
+    try: return {"ok": True, **(await _store(request).verify(payload.get("from_sequence", 1), payload.get("through_sequence"), payload.get("checkpoint")))}
     except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
