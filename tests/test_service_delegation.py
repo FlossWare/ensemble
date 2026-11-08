@@ -117,3 +117,56 @@ def test_service_request_rejects_expired_deadline(tmp_path):
             "payload": {"query": "expired", "limit": 1},
         })
         assert response.status_code == 408
+
+
+
+def test_requester_rejects_response_from_unselected_peer(tmp_path, monkeypatch):
+    from ensemble import api as api_module
+
+    monkeypatch.setenv("ENSEMBLE_PERSISTENCE_ROOT", str(tmp_path))
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "contract_version": 1,
+                "request_id": request_id,
+                "provider_instance_id": "different-peer",
+                "operation": "search.retrieve",
+                "result": {"results": []},
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json):
+            return FakeResponse()
+
+    monkeypatch.setattr(api_module.httpx, "AsyncClient", FakeClient)
+    request_id = str(uuid.uuid4())
+    with _client(tmp_path) as client:
+        client.app.state.federation_registry.observe({
+            "kind": "ensemble.presence",
+            "protocol_version": "1",
+            "instance_id": "remote-peer",
+            "name": "remote-server",
+            "endpoint": "http://192.0.2.20:8090",
+            "capabilities": ["search"],
+        })
+        response = client.post("/federation/peers/remote-peer/services", json={
+            "request_id": request_id,
+            "target_capability": "search",
+            "operation": "search.retrieve",
+            "payload": {"query": "direct service", "limit": 3},
+        })
+
+        assert response.status_code == 502
+        assert "does not match" in response.json()["detail"]
