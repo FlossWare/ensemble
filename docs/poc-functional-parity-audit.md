@@ -29,7 +29,7 @@ The following are **mandatory Ensemble product capabilities**. They are not opti
 3. **GraphQL API support is required.** Ensemble must expose a first-class GraphQL API for client-driven queries and mutations over its client-neutral domain contracts. GraphQL resolvers must delegate to the same application/domain services as REST and MCP, enforce equivalent authorization and partition isolation, bound query depth/complexity and resource use, and provide stable schema/versioning and error semantics. GraphQL must not create a parallel business-logic or persistence implementation.
 4. **Claude Code integration is separate.** Claude Code hooks, Claude-specific configuration, session lifecycle, and Claude-specific workflows/adapters belong in `ensemble-claude`. This separation does not weaken or remove Ensemble's mandatory MCP or RAG requirements.
 
-**Acceptance rule:** Ensemble cannot be declared functionally complete or at parity while the RAG end-to-end acceptance suite, MCP server contract suite, or GraphQL schema/resolver contract suite is missing, failing, or unrun. Source files, placeholder endpoints, UI previews, and architecture statements do not satisfy these gates. Both interfaces must be exercised against the real core capability implementations, including authorization/partition isolation, persistence/restart, error/degraded behavior, and representative end-to-end scenarios.
+**Acceptance rule:** Ensemble cannot be declared functionally complete or at parity while the RAG end-to-end acceptance suite, MCP server contract suite, or GraphQL schema/resolver contract suite is missing, failing, or unrun. Source files, placeholder endpoints, UI previews, and architecture statements do not satisfy these gates. All three API interfaces must be exercised against the real core capability implementations, including authorization/partition isolation, persistence/restart, error/degraded behavior, and representative end-to-end scenarios.
 
 ## Repository inventory
 
@@ -114,7 +114,7 @@ The current review has been source-based. These scenarios are **NOT_RUN** until 
 
 ## Recommended completion gates
 
-1. **Freeze the parity boundary.** Ensemble is the client-neutral intelligence platform. Its required core includes RAG and a first-class MCP server interface alongside REST. Claude Code hooks/configuration, session lifecycle and Claude-specific workflows/adapters belong in `ensemble-claude`, not `ensemble`. Evaluate other POC runtime capabilities individually for client-neutral reuse.
+1. **Freeze the parity boundary.** Ensemble is the client-neutral intelligence platform. Its required core includes RAG and first-class REST, MCP server, and GraphQL interfaces. Claude Code hooks/configuration, session lifecycle and Claude-specific workflows/adapters belong in `ensemble-claude`, not `ensemble`. Evaluate other POC runtime capabilities individually for client-neutral reuse.
 2. **Build shared black-box fixtures.** Run the same input/output and failure scenarios against POC and Ensemble; compare observable behavior, not implementation technology.
 3. **Close core data-path gaps.** Memory, Graph, Knowledge, Vector, Index, Chunking, Tokenization, Embeddings, Reranking, ingestion and retrieval.
 4. **Close learning/optimization gaps.** Thompson, GA and Learning state, recovery, artifacts, and cross-capability side effects.
