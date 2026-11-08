@@ -5,17 +5,17 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Protocol
 from uuid import UUID
 
-from .federated_tasks import FederatedTaskRecord, FederatedTaskRequest, FederatedTaskSubmission
+from .task_store import TaskRecord, TaskRequest, TaskSubmission
 
 
-TaskHandler = Callable[[FederatedTaskRecord], Awaitable[dict[str, Any]]]
+TaskHandler = Callable[[TaskRecord], Awaitable[dict[str, Any]]]
 
 
 class TaskStore(Protocol):
     """Persistence contract used by the orchestrator, independent of transport."""
 
     def accept(
-        self, request: FederatedTaskRequest, local_instance_id: str,
+        self, request: TaskRequest, local_instance_id: str,
     ) -> tuple[FederatedTaskRecord, bool]: ...
     def claim_next(
         self, worker_id: str, task_types: list[str],
@@ -81,7 +81,7 @@ class Orchestrator:
         return await asyncio.to_thread(self.store.accept, request, self.instance_id)
 
     async def submit_local(
-        self, submission: FederatedTaskSubmission,
+        self, submission: TaskSubmission,
     ) -> tuple[FederatedTaskRecord, bool]:
         if not self._started:
             raise RuntimeError("orchestrator is not running")
