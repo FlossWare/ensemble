@@ -296,14 +296,14 @@ class SqlDocumentStore:
             raise RuntimeError(
                 "Ensemble database schema is not initialized; run 'alembic upgrade head'"
             )
-        missing = {"ensemble_documents", "ensemble_chunks", "ensemble_vector_collections", "ensemble_vector_records", "ensemble_index_sources", "ensemble_knowledge_records", "ensemble_graph_nodes", "ensemble_graph_edges", "ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources", "ensemble_ga_runs", "ensemble_ga_promotions", "ensemble_thompson_models", "ensemble_thompson_events", "ensemble_learning_outcomes", "ensemble_learning_artifacts", "ensemble_lexical_fts", "ensemble_transcript_checkpoints", "ensemble_transcript_jobs", "ensemble_partition_metadata", "ensemble_index_generations", "ensemble_index_generation_control", "ensemble_vector_generation_records", "ensemble_document_generation_records", "ensemble_chunk_generation_records", "ensemble_generation_source_tombstones", "ensemble_index_generation_sources", "ensemble_source_reclamation", "ensemble_index_generation_changes", "ensemble_index_generation_write_fence", "ensemble_knowledge_generation_records"} - set(tables)
+        missing = {"ensemble_documents", "ensemble_chunks", "ensemble_vector_collections", "ensemble_vector_records", "ensemble_index_sources", "ensemble_knowledge_records", "ensemble_graph_nodes", "ensemble_graph_edges", "ensemble_memories", "ensemble_memory_entries", "ensemble_memory_sources", "ensemble_ga_runs", "ensemble_ga_promotions", "ensemble_thompson_models", "ensemble_thompson_events", "ensemble_learning_outcomes", "ensemble_learning_artifacts", "ensemble_lexical_fts", "ensemble_transcript_checkpoints", "ensemble_transcript_jobs", "ensemble_partition_metadata", "ensemble_index_generations", "ensemble_index_generation_control", "ensemble_vector_generation_records", "ensemble_document_generation_records", "ensemble_chunk_generation_records", "ensemble_generation_source_tombstones", "ensemble_index_generation_sources", "ensemble_source_reclamation", "ensemble_index_generation_changes", "ensemble_index_generation_write_fence", "ensemble_knowledge_generation_records", "ensemble_ledger_state", "ensemble_ledger_entries"} - set(tables)
         if missing:
             raise RuntimeError(
                 "Ensemble database schema is incomplete; run 'alembic upgrade head'"
             )
         async with self.engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0028_memory_generation_snapshots":
+        if revision != "0029_append_only_ledger":
             raise RuntimeError(
                 "Ensemble database schema revision is not supported; run 'alembic upgrade head'"
             )
