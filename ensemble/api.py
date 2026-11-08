@@ -837,6 +837,37 @@ def create_app(
     async def federation_metrics():
         return host_metrics(federation_settings.persistence_root)
 
+    @app.post("/api/v1/tasks", status_code=202, tags=["orchestration"])
+    async def submit_local_task(submission: FederatedTaskSubmission):
+        if submission.target_capability != "search" or submission.task_type != "search.query":
+            raise HTTPException(status_code=409, detail="task type is not currently executable by this instance")
+        try:
+            record, created = await active_orchestrator.submit_local(submission)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"accepted": True, "created": created, "task": record.model_dump(mode="json")}
+
+    @app.get("/api/v1/tasks", tags=["orchestration"])
+    async def list_local_tasks(limit: int = 100):
+        if not 1 <= limit <= 500:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+        records = await active_orchestrator.list(limit)
+        return {"tasks": [record.model_dump(mode="json") for record in records]}
+
+    @app.get("/api/v1/tasks/{task_id}", tags=["orchestration"])
+    async def get_local_task(task_id: str):
+        from uuid import UUID
+        try:
+            parsed_id = UUID(task_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="task_id must be a UUID") from exc
+        record = await active_orchestrator.get(parsed_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        if record.origin_instance_id != federation_instance_id:
+            raise HTTPException(status_code=404, detail="local task not found")
+        return record
+
     @app.post("/federation/tasks", status_code=202, tags=["federation"])
     async def accept_federated_task(task: FederatedTaskRequest):
         if not federation_enabled:
