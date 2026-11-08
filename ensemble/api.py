@@ -884,9 +884,7 @@ def create_app(
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise HTTPException(status_code=422, detail="search.query payload.limit must be between 1 and 100")
         try:
-            record, created = await asyncio.to_thread(
-                active_orchestrator.accept_remote, task,
-            )
+            record, created = await active_orchestrator.accept_remote(task)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"accepted": True, "created": created, "task": record.model_dump(mode="json")}
