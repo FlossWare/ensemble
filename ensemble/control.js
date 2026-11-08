@@ -649,7 +649,7 @@ async function refreshFederation(){
  const rows=document.getElementById("federation-rows");
  const details=document.getElementById("federation-details");
  try{
-  const response=await fetch("/federation/status");
+  const response=await fetch("/federation/overview");
   const result=await response.json();
   if(!response.ok)throw new Error(result.detail||response.statusText);
   summary.textContent=result.enabled
@@ -658,7 +658,7 @@ async function refreshFederation(){
   rows.replaceChildren();
   for(const peer of result.peers||[]){
    const row=document.createElement("tr");
-   for(const value of [peer.name,peer.endpoint,peer.status,(peer.capabilities||[]).join(", "),peer.seconds_since_seen+"s ago"]){
+   for(const value of [peer.name,peer.endpoint,(peer.remote_status||peer.status), (peer.capabilities||[]).join(", "),peer.seconds_since_seen+"s ago"]){
     const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);
    }
    row.addEventListener("click",()=>{details.textContent=JSON.stringify(peer,null,2);});
@@ -670,7 +670,7 @@ async function refreshFederation(){
    cell.colSpan=5;cell.textContent="No other Ensemble instances discovered yet.";
    row.append(cell);rows.append(row);
   }
-  details.textContent=JSON.stringify({local:result.instance,heartbeat_seconds:result.heartbeat_seconds,ttl_seconds:result.ttl_seconds,peers:result.peers},null,2);
+  details.textContent=JSON.stringify({local:result.instance,discovery:result.discovery,peer_count:result.peer_count,peers:result.peers},null,2);
  }catch(error){
   summary.textContent="Federation status unavailable: "+error.message;
   details.textContent=error.stack||error.message;
