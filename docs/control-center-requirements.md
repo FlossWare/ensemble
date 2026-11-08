@@ -244,3 +244,20 @@ The Control Center is acceptable when:
 ## Intent and entity workbench
 
 The Control Center exposes a non-persistent entity extraction preview, an explicit action to resolve candidates into canonical Graph identities, and an explicit action to create a typed relationship between two canonical entity IDs. Resolution and linking are mutating operations and must never be triggered by the diagnostic pipeline automatically. The pipeline inspector may call intent classification and entity extraction only.
+
+
+## Federation workbench (required; not yet implemented)
+
+The Control Center must provide an operator-facing Federation workbench backed only by Ensemble REST contracts. It is administrative UI, not an AI client or a peer transport implementation.
+
+The workbench must distinguish discovered candidates from trusted peers and show, where available:
+
+- Stable peer identity, display name, endpoint, protocol versions, trust state, and authorization scope.
+- Discovery source, last announcement, last successful authenticated contact, heartbeat freshness, and TTL/expiry state.
+- Availability and versioned capability inventory.
+- Active service delegations and task delegations, including requester/provider roles, lineage, progress, deadlines, cancellation, and outcomes.
+- Peer messaging and artifact-transfer status, cursors/checkpoints, retry state, failures, and provenance.
+- Federated retrieval source attribution and explicit partial/degraded states.
+- Trust approval, scope changes, and revocation as explicit audited operations with confirmation and clear impact.
+
+A discovery announcement is never displayed as proof of trust. The UI must not imply that a peer is authorized merely because it is visible on the LAN. Sensitive endpoint details and capability metadata must follow the operator's authorization scope. Show unavailable, expired, incompatible, rejected, and revoked peers distinctly. Never fabricate live peer status or metrics when federation is disabled or not implemented.
