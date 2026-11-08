@@ -20,7 +20,7 @@
 | Chunking | Profile inventory and non-persistent chunk preview | `GET /api/v1/chunking/profiles`, `POST /api/v1/chunking/chunk` | No persisted ingestion trace |
 | Tokenization | Analyzer profile inventory and token preview | `GET /api/v1/tokenization/profiles`, `POST /api/v1/tokenization/tokenize` | lexical-v1 only |
 | Pipeline Inspector | Sequential read-only probes for tokenization, entities, intent and chunking | Existing capability preview endpoints | Interactive diagnostic preview, not a correlated trace of a real ingestion |
-| GA | Launch bounded runs, inspect history/results/candidates, approve export candidate | `/api/v1/ga/runs`, `/runs/{run_id}`, `/runs/{run_id}/promote` | Synthetic local evaluators; no live settings are applied |
+| GA | Launch bounded runs through the core Orchestrator, inspect history/results/candidates, approve export candidate | `/api/v1/ga/runs`, `/runs/{run_id}`, `/runs/{run_id}/promote`; canonical task inspection via `/api/v1/tasks/{task_id}` | Synthetic local evaluators; `GAStore` retains domain results; no live settings are applied |
 | Thompson | Inspect state, select model, record outcomes, reset after confirmation | `/api/v1/thompson/*` | task/capability filtering is not implemented |
 | Learning | Report, recent outcomes, artifacts, confirmed reset | `/api/v1/learning/*` | Initial workflow; deeper parity and recovery remain open |
 | Runtime configuration | Display listener and persistence status | `GET /api/v1/system/config` | Deliberately omits filesystem paths and database URLs |
