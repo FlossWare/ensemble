@@ -58,7 +58,7 @@ All source ingestion uses the canonical /api/v1/ingest/... namespace: documents,
 
 ## Deployment profiles
 
-Ensemble supports a single-codebase deployment model with `worker`, `standard`, and `full` profiles. The worker profile is independently composed; standard and full currently retain the existing full application composition while subsystem modularization proceeds. See [Deployment Profiles](docs/deployment-profiles.md).
+Ensemble supports a single-codebase deployment model with `worker`, `standard`, and `full` profiles. Worker is independently composed. Standard omits GA and Learning stores and routes; Full adds those optional intelligence capabilities. Shared lifecycle contracts support further capability extraction. See [Deployment Profiles](docs/deployment-profiles.md).
 
 ## Worker runtime
 
