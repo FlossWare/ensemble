@@ -45,16 +45,18 @@ def test_thompson_store_uses_shared_capability_lifecycle():
         store=InMemoryDocumentStore(),
         run_reclamation_worker=False,
     )
-    descriptor = app.state.capability_registry.get("thompson").descriptor
-    assert descriptor.profiles == (RuntimeProfile.STANDARD, RuntimeProfile.FULL)
+    for name in ("memory", "thompson"):
+        descriptor = app.state.capability_registry.get(name).descriptor
+        assert descriptor.profiles == (RuntimeProfile.STANDARD, RuntimeProfile.FULL)
 
     with TestClient(app) as client:
-        assert "thompson" in app.state.capability_lifecycle.started
+        assert set(app.state.capability_lifecycle.started) == {"memory", "thompson"}
         response = client.get("/api/v1/runtime/capabilities/health")
         assert response.status_code == 200
         payload = response.json()
         assert payload["profile"] == "standard"
-        thompson = next(item for item in payload["capabilities"] if item["capability"] == "thompson")
-        assert thompson["status"] == "ready"
+        for name in ("memory", "thompson"):
+            status = next(item for item in payload["capabilities"] if item["capability"] == name)
+            assert status["status"] == "ready"
 
-    assert "thompson" not in app.state.capability_lifecycle.started
+    assert app.state.capability_lifecycle.started == ()
