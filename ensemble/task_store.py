@@ -95,10 +95,10 @@ class SqliteTaskStore:
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ensemble_tasks'"
             ).fetchone()
             legacy_table = db.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ensemble_tasks'"
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='federated_tasks'"
             ).fetchone()
             if existing is None and legacy_table is not None:
-                db.execute("ALTER TABLE ensemble_tasks RENAME TO ensemble_tasks")
+                db.execute("ALTER TABLE federated_tasks RENAME TO ensemble_tasks")
             db.execute("""
                 CREATE TABLE IF NOT EXISTS ensemble_tasks (
                     task_id TEXT PRIMARY KEY,
