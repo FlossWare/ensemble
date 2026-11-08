@@ -90,3 +90,22 @@ sudo bash scripts/restore-persistence.sh /path/to/backups/ensemble.tar.gz
 ```
 
 The backup script prints a SHA-256 checksum. The restore script validates archive paths, checks SQLite integrity and partition identity markers before replacing anything, and retains the previous persistence root as a rollback directory. If using a custom persistence root or service name, set `ENSEMBLE_PERSISTENCE_ROOT` and `ENSEMBLE_SERVICE_NAME` for the command. Keep backups outside the persistence root.
+
+
+## Federation deployment (planned capability)
+
+Federation is an accepted required capability, but peer discovery, presence broadcasting, trust management, and peer transports are not implemented in the current application. The following is deployment guidance for the target architecture, not a set of currently supported configuration options.
+
+Each Ensemble host will remain independently usable and retain its own persistence root. Do not share SQLite database files between instances and do not expose a database directory over a network filesystem. Federation transfers authorized resources and versioned derived artifacts through application contracts; it does not replicate live database files.
+
+When federation is implemented:
+
+- Enable peer discovery/presence by default in federation-enabled deployments, with operator controls to disable or scope it.
+- Use mDNS/DNS-SD and scoped UDP multicast for LAN discovery where multicast is supported. Multicast normally does not cross routers or VLAN boundaries.
+- Use explicitly configured peers, DNS records, or a rendezvous mechanism for routed/VPN deployments.
+- Permit only the required discovery traffic on the selected interfaces. UDP announcements are non-sensitive hints, not authentication.
+- Configure authenticated peer communication separately from discovery. Unknown peers must not be trusted automatically.
+- Use authenticated gRPC for reliable peer operations; use SSH only for constrained remote execution workers.
+- Configure firewall rules for the actual advertised endpoints and discovery scope once the implementation defines its ports. No UDP or gRPC port is declared by this document as currently active.
+
+The initial design proposes a 30-second presence heartbeat and a TTL of three heartbeat intervals. These are configurable design defaults, not implemented settings. See [Federation](federation.md) for protocol and security requirements.
