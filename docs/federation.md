@@ -114,7 +114,7 @@ The branch currently contains a narrow end-to-end `search.query` proof of concep
 
 This proves a basic peer-to-peer request path. The core Orchestrator now owns worker scheduling and handler dispatch, and the FastAPI lifecycle starts/stops the orchestrator as a service. Task persistence now uses the transport-neutral `SqliteTaskStore` and canonical task models. Existing federation-named database files and tables are migrated to the canonical task store on startup. Do not reintroduce worker loops into federation or API routes.
 
-The remaining migration is to add requester-side parent/child tracking, policy enforcement, and richer execution controls described in [docs/orchestration.md](orchestration.md). Federation must remain a thin adapter. The requester can query the provider's persisted task resource for status and results; there is no requirement for guaranteed push delivery or a separate messaging subsystem.
+Requester-side parent/child references are now persisted before outbound peer submission, including an explicit `submitted` state for ambiguous outcomes. Policy enforcement, richer execution controls, trust establishment, and artifact exchange remain incomplete. Federation must remain a thin adapter. The requester can query the provider's persisted task resource for status and results; there is no requirement for guaranteed push delivery or a separate messaging subsystem.
 
 ### 5.3 Federated RAG
 
