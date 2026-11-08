@@ -58,7 +58,7 @@ The worker reports CPU count and a Linux cgroup memory limit when available. The
 - `GET /worker/capabilities`: versioned operation catalogue.
 - `POST /worker/invoke`: bounded direct request/response invocation.
 
-The request includes a caller-generated request ID, capability, operation, JSON payload, and optional absolute Unix deadline in milliseconds. Synchronous handlers run in a thread so they do not block the event loop; asynchronous handlers are awaited directly. Both are subject to the invocation deadline and concurrency limit. Handlers must return a JSON object.
+The request includes a caller-generated request ID, capability, operation, JSON payload, and optional absolute Unix deadline in milliseconds. Synchronous handlers run in a thread so they do not block the event loop; asynchronous handlers are awaited directly. The runtime bounds how long it waits for either handler, but Python cannot forcibly stop a synchronous function already running in its thread. Provider adapters should therefore use asynchronous HTTP clients with their own request timeouts. Both handler types are subject to the concurrency limit. Handlers must return a JSON object.
 
 This is intentionally a direct invocation protocol. It does not create a durable task record, guarantee delivery, retry calls, or persist results. Callers own retry and ambiguity policy. A timeout does not prove that an external provider did not receive or process the request.
 
