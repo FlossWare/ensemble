@@ -5,13 +5,13 @@ from uuid import uuid4
 
 import pytest
 
-from ensemble.federated_tasks import FederatedTaskRequest, FederatedTaskStore
+from ensemble.task_store import SqliteTaskStore, TaskRequest
 from ensemble.orchestration import Orchestrator
 
 
 def test_orchestrator_dispatches_registered_handler_and_persists_result(tmp_path: Path):
     async def scenario():
-        store = FederatedTaskStore(tmp_path)
+        store = SqliteTaskStore(tmp_path)
         store.initialize()
         orchestrator = Orchestrator(store, "local-instance", poll_interval=0.01)
         invoked = []
@@ -23,7 +23,7 @@ def test_orchestrator_dispatches_registered_handler_and_persists_result(tmp_path
         orchestrator.register("test.double", handler)
         await orchestrator.start()
         try:
-            request = FederatedTaskRequest(
+            request = TaskRequest(
                 task_id=uuid4(),
                 idempotency_key="double-1",
                 origin_instance_id="remote-instance",
