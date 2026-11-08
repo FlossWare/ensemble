@@ -51,6 +51,7 @@ from .rebuild import IndexGenerationBuilder
 from .config import settings_from_env, resolve_database_url
 from .partitioning import partition_scope_middleware
 from .federation import MulticastDiscovery, PeerRegistry, _advertise_host, _instance_id, host_metrics, inspect_peer
+from .federated_tasks import FederatedTaskRequest, FederatedTaskStore
 
 
 def _validate_vector_collection_name(name: str) -> None:
@@ -286,6 +287,7 @@ def create_app(
             await active_transcript_store.initialize()
             await active_transcript_store.recover_interrupted()
             await active_reclamation_store.initialize()
+            await asyncio.to_thread(active_federated_task_store.initialize)
             worker_task = asyncio.create_task(reclamation_worker())
             if federation_enabled:
                 await federation_discovery.start()
@@ -664,6 +666,8 @@ def create_app(
     app.state.transcript_store = active_transcript_store
     app.state.settings = settings_from_env(database_url)
     federation_settings = app.state.settings
+    active_federated_task_store = FederatedTaskStore(federation_settings.persistence_root)
+    app.state.federated_task_store = active_federated_task_store
     federation_instance_id = _instance_id(federation_settings.persistence_root)
     federation_name = os.getenv("ENSEMBLE_NAME", socket.gethostname()).strip() or socket.gethostname()
     federation_enabled = os.getenv("ENSEMBLE_FEDERATION_ENABLED", "true").strip().casefold() not in {"0", "false", "no", "off"}
@@ -742,6 +746,40 @@ def create_app(
     @app.get("/federation/metrics", tags=["federation"])
     async def federation_metrics():
         return host_metrics(federation_settings.persistence_root)
+
+    @app.post("/federation/tasks", status_code=202, tags=["federation"])
+    async def accept_federated_task(task: FederatedTaskRequest):
+        if not federation_enabled:
+            raise HTTPException(status_code=503, detail="federation is disabled")
+        advertised = set(federation_discovery.message["capabilities"])
+        if task.target_capability not in advertised:
+            raise HTTPException(status_code=409, detail="target capability is not available on this instance")
+        try:
+            record, created = await asyncio.to_thread(
+                active_federated_task_store.accept, task, federation_instance_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"accepted": True, "created": created, "task": record.model_dump(mode="json")}
+
+    @app.get("/federation/tasks", tags=["federation"])
+    async def list_federated_tasks(limit: int = 100):
+        if not 1 <= limit <= 500:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+        records = await asyncio.to_thread(active_federated_task_store.list, limit)
+        return {"tasks": [record.model_dump(mode="json") for record in records]}
+
+    @app.get("/federation/tasks/{task_id}", tags=["federation"])
+    async def get_federated_task(task_id: str):
+        from uuid import UUID
+        try:
+            parsed_id = UUID(task_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="task_id must be a UUID") from exc
+        record = await asyncio.to_thread(active_federated_task_store.get, parsed_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="federated task not found")
+        return record.model_dump(mode="json")
 
     @app.get("/federation/overview", tags=["federation"])
     async def federation_overview():
