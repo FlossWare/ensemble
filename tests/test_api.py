@@ -1555,8 +1555,18 @@ def test_peer_task_timeout_reports_ambiguous_outcome_and_stable_identity(tmp_pat
             "endpoint": "http://192.0.2.20:8090",
             "capabilities": ["search"],
         })
+        parent_task_id = str(uuid.uuid4())
+        parent = client.post("/api/v1/tasks", json={
+            "task_id": parent_task_id,
+            "idempotency_key": "ambiguous-parent-1",
+            "target_capability": "search",
+            "task_type": "search.query",
+            "payload": {"query": "parent task", "limit": 1},
+        })
+        assert parent.status_code == 202, parent.text
         response = client.post("/federation/peers/remote-peer/tasks", json={
             "task_id": task_id,
+            "parent_task_id": parent_task_id,
             "idempotency_key": "ambiguous-submit-1",
             "target_capability": "search",
             "task_type": "search.query",
@@ -1569,6 +1579,10 @@ def test_peer_task_timeout_reports_ambiguous_outcome_and_stable_identity(tmp_pat
         assert detail["task_id"] == task_id
         assert detail["status_url"] == f"/federation/peers/remote-peer/tasks/{task_id}"
         assert detail["retry_with_same_task_id_and_idempotency_key"] is True
+        children = client.get(f"/api/v1/tasks/{parent_task_id}/children")
+        assert children.status_code == 200
+        assert children.json()["children"][0]["task_id"] == task_id
+        assert children.json()["children"][0]["state"] == "submitted"
 
 
 def test_local_task_submission_uses_orchestrator_and_hides_remote_tasks(tmp_path, monkeypatch):
