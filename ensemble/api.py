@@ -881,17 +881,8 @@ def create_app(
             raise HTTPException(status_code=503, detail="federation peer is offline")
         if invocation.target_capability not in peer["capabilities"]:
             raise HTTPException(status_code=409, detail="peer does not advertise the requested capability")
-        if invocation.target_capability != "search" or invocation.operation != "search.retrieve":
-            raise HTTPException(status_code=409, detail="service operation is not supported for peer delegation")
-        query = invocation.payload.get("query")
-        limit = invocation.payload.get("limit", 10)
-        rerank = invocation.payload.get("rerank", False)
-        if not isinstance(query, str) or not query.strip():
-            raise HTTPException(status_code=422, detail="search.retrieve requires a non-empty payload.query")
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
-            raise HTTPException(status_code=422, detail="search.retrieve payload.limit must be between 1 and 100")
-        if not isinstance(rerank, bool):
-            raise HTTPException(status_code=422, detail="search.retrieve payload.rerank must be a boolean")
+        if service_operations.resolve(invocation.target_capability, invocation.operation) is None:
+            raise HTTPException(status_code=409, detail="service operation is not supported by this Ensemble version")
         outbound = ServiceRequest(
             **invocation.model_dump(mode="python"),
             requester_instance_id=federation_instance_id,
@@ -927,29 +918,28 @@ def create_app(
             raise HTTPException(status_code=502, detail="peer service response does not match the request or selected peer")
         return service_response.model_dump(mode="json")
 
+    @app.get("/federation/services", tags=["federation"])
+    async def federated_service_catalogue():
+        return service_operations.describe()
+
     @app.post("/federation/services", tags=["federation"])
     async def invoke_local_federated_service(service_request: ServiceRequest):
         if not federation_enabled:
             raise HTTPException(status_code=503, detail="federation is disabled")
-        if service_request.target_capability != "search" or service_request.operation != "search.retrieve":
-            raise HTTPException(status_code=409, detail="service operation is not supported")
         if service_request.deadline is not None and service_request.deadline <= datetime.now(timezone.utc):
             raise HTTPException(status_code=408, detail="service request deadline has expired")
-        query = service_request.payload.get("query")
-        limit = service_request.payload.get("limit", 10)
-        rerank = service_request.payload.get("rerank", False)
-        if not isinstance(query, str) or not query.strip():
-            raise HTTPException(status_code=422, detail="search.retrieve requires a non-empty payload.query")
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
-            raise HTTPException(status_code=422, detail="search.retrieve payload.limit must be between 1 and 100")
-        if not isinstance(rerank, bool):
-            raise HTTPException(status_code=422, detail="search.retrieve payload.rerank must be a boolean")
         try:
-            result = await search.search_with_status(query, limit, rerank=rerank)
+            result = await service_operations.invoke(
+                service_request.target_capability,
+                service_request.operation,
+                service_request.payload,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=502, detail="local search service failed") from exc
+            raise HTTPException(status_code=502, detail="local service operation failed") from exc
         response = ServiceResponse(
             request_id=service_request.request_id,
             provider_instance_id=federation_instance_id,
