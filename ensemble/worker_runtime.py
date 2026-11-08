@@ -239,6 +239,18 @@ def _memory_limit_bytes() -> int | None:
 app = create_worker_app()
 
 
+def configured_worker_runtime() -> WorkerRuntime:
+    runtime = WorkerRuntime()
+    adapter_spec = os.getenv("ENSEMBLE_WORKER_ADAPTER", "").strip()
+    if adapter_spec:
+        module_name, separator, factory_name = adapter_spec.partition(":")
+        if not separator or not module_name or not factory_name:
+            raise ValueError("ENSEMBLE_WORKER_ADAPTER must use module:register format")
+        adapter = getattr(importlib.import_module(module_name), factory_name)
+        adapter(runtime)
+    return runtime
+
+
 def main() -> None:
     import argparse
     import uvicorn
@@ -247,12 +259,8 @@ def main() -> None:
     parser.add_argument("--host", default=os.getenv("ENSEMBLE_WORKER_HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.getenv("ENSEMBLE_WORKER_PORT", "8091")))
     args = parser.parse_args()
-    runtime = WorkerRuntime()
-    adapter_spec = os.getenv("ENSEMBLE_WORKER_ADAPTER", "").strip()
-    if adapter_spec:
-        module_name, separator, factory_name = adapter_spec.partition(":")
-        if not separator or not module_name or not factory_name:
-            parser.error("ENSEMBLE_WORKER_ADAPTER must use module:register format")
-        adapter = getattr(importlib.import_module(module_name), factory_name)
-        adapter(runtime)
+    try:
+        runtime = configured_worker_runtime()
+    except (ImportError, AttributeError, ValueError) as exc:
+        parser.error(str(exc))
     uvicorn.run(create_worker_app(runtime), host=args.host, port=args.port)
