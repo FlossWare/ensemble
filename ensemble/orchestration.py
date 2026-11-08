@@ -16,15 +16,15 @@ class TaskStore(Protocol):
 
     def accept(
         self, request: TaskRequest, local_instance_id: str,
-    ) -> tuple[FederatedTaskRecord, bool]: ...
+    ) -> tuple[TaskRecord, bool]: ...
     def claim_next(
         self, worker_id: str, task_types: list[str],
-    ) -> FederatedTaskRecord | None: ...
+    ) -> TaskRecord | None: ...
     def complete(self, task_id: UUID, worker_id: str, result: dict[str, Any]) -> bool: ...
     def fail(self, task_id: UUID, worker_id: str, error: str) -> bool: ...
     def recover_interrupted(self) -> int: ...
-    def get(self, task_id: UUID) -> FederatedTaskRecord | None: ...
-    def list(self, limit: int = 100) -> list[FederatedTaskRecord]: ...
+    def get(self, task_id: UUID) -> TaskRecord | None: ...
+    def list(self, limit: int = 100) -> list[TaskRecord]: ...
 
 
 class Orchestrator:
@@ -72,8 +72,8 @@ class Orchestrator:
         return task_type in self._handlers
 
     async def accept_remote(
-        self, request: FederatedTaskRequest,
-    ) -> tuple[FederatedTaskRecord, bool]:
+        self, request: TaskRequest,
+    ) -> tuple[TaskRecord, bool]:
         if not self._started:
             raise RuntimeError("orchestrator is not running")
         if not self.accepts(request.task_type):
@@ -82,12 +82,12 @@ class Orchestrator:
 
     async def submit_local(
         self, submission: TaskSubmission,
-    ) -> tuple[FederatedTaskRecord, bool]:
+    ) -> tuple[TaskRecord, bool]:
         if not self._started:
             raise RuntimeError("orchestrator is not running")
         if not self.accepts(submission.task_type):
             raise ValueError(f"no execution handler registered for {submission.task_type}")
-        request = FederatedTaskRequest(
+        request = TaskRequest(
             **submission.model_dump(mode="python"),
             origin_instance_id=self.instance_id,
         )
@@ -95,10 +95,10 @@ class Orchestrator:
             self.store.accept, request, self.instance_id, allow_local_origin=True,
         )
 
-    async def get(self, task_id: UUID) -> FederatedTaskRecord | None:
+    async def get(self, task_id: UUID) -> TaskRecord | None:
         return await asyncio.to_thread(self.store.get, task_id)
 
-    async def list(self, limit: int = 100) -> list[FederatedTaskRecord]:
+    async def list(self, limit: int = 100) -> list[TaskRecord]:
         return await asyncio.to_thread(self.store.list, limit)
 
     async def start(self) -> int:
