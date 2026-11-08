@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -119,6 +120,7 @@ class SqliteLedgerStore:
     def __init__(self, engine=None):
         self._owns_engine = engine is None
         self.engine = engine or create_async_engine("sqlite+aiosqlite:///:memory:")
+        self._write_lock = asyncio.Lock()
 
     async def initialize(self):
         async with self.engine.begin() as conn:
@@ -139,6 +141,10 @@ class SqliteLedgerStore:
             return {"ledger_id": state["ledger_id"], "head_sequence": state["head_sequence"], "head_hash": state["head_hash"]}
 
     async def append(self, value):
+        async with self._write_lock:
+            return await self._append_locked(value)
+
+    async def _append_locked(self, value):
         event = validate_event(value)
         try:
             async with self.engine.begin() as conn:
@@ -238,15 +244,24 @@ class SqliteLedgerStore:
         return {"ok": True, "from_sequence": from_sequence, "through_sequence": end, "verified_count": len(rows), "assurance": "hash_chain" if from_sequence == 1 else "hash_chain_with_external_checkpoint"}
 
     async def import_batch(self, source_ledger_id, entries):
+        async with self._write_lock:
+            return await self._import_batch_locked(source_ledger_id, entries)
+
+    async def _import_batch_locked(self, source_ledger_id, entries):
         if not isinstance(source_ledger_id, str) or not source_ledger_id or not isinstance(entries, list) or len(entries) > 1000:
             raise ValueError("source_ledger_id and up to 1000 entries are required")
         imported, duplicates = [], []
         previous_source_sequence = 0
         async with self.engine.begin() as conn:
+            # Acquire SQLite's writer reservation before reading the head.
+            await conn.execute(update(ledger_state).where(ledger_state.c.singleton_id == 1)
+                               .values(head_sequence=ledger_state.c.head_sequence))
             state = (await conn.execute(select(ledger_state).where(ledger_state.c.singleton_id == 1))).mappings().one()
             seq, previous = state["head_sequence"], state["head_hash"]
             for incoming in entries:
                 event = validate_event(incoming)
+                if incoming.get("ledger_id") not in (None, source_ledger_id):
+                    raise ValueError("import source ledger identity mismatch")
                 source_sequence = incoming.get("sequence")
                 if source_sequence is not None:
                     if isinstance(source_sequence, bool) or not isinstance(source_sequence, int) or source_sequence <= previous_source_sequence:
