@@ -2,7 +2,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from sqlalchemy import delete, update\nfrom sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import delete, update
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from ensemble.ledger import SqliteLedgerStore, envelope_for, ledger_entries
 
