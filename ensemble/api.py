@@ -46,7 +46,8 @@ from .thompson_store import ThompsonStore, SqliteThompsonStore, InMemoryThompson
 from .learning_store import LearningStore, SqliteLearningStore, InMemoryLearningStore
 from .reclamation import ReclamationStore, SqliteReclamationStore, InMemoryReclamationStore
 from .rebuild import IndexGenerationBuilder
-from .config import settings_from_env, resolve_database_url
+from .config import settings_from_env, resolve_database_url, persistence_root_from_env
+from .ledger_store import JsonlAppendOnlyLedger, LedgerImportError
 from .partitioning import partition_scope_middleware
 
 
@@ -178,6 +179,7 @@ def create_app(
     thompson_store: ThompsonStore | None = None,
     learning_store: LearningStore | None = None,
     transcript_store: TranscriptCheckpointStore | None = None,
+    ledger_store: JsonlAppendOnlyLedger | None = None,
 ) -> FastAPI:
     database_url = resolve_database_url(database_url)
     document_store = store or SqlDocumentStore(database_url)
@@ -221,6 +223,9 @@ def create_app(
     active_transcript_store = transcript_store or (
         InMemoryTranscriptCheckpointStore() if isinstance(document_store, InMemoryDocumentStore)
         else SqliteTranscriptCheckpointStore(database_url)
+    )
+    active_ledger_store = ledger_store or JsonlAppendOnlyLedger(
+        persistence_root_from_env() / "ledger" / "events.jsonl"
     )
 
     active_reclamation_store = (
@@ -2314,6 +2319,83 @@ def create_app(
             "vector_indexed": False, "lexical_indexed": False,
             "index_error": None,
         }
+
+    @app.post("/api/v1/ledger/entries", tags=["ledger"])
+    async def ledger_append(payload: dict[str, Any]):
+        try:
+            result = active_ledger_store.append(payload.get("entry", payload))
+        except ValueError as exc:
+            raise HTTPException(status_code=409 if "already exists" in str(exc) else 400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, **result}
+
+    @app.get("/api/v1/ledger/entries", tags=["ledger"])
+    async def ledger_pull(
+        after_sequence: int = 0, through_sequence: int | None = None, limit: int = 100,
+        event_id: str | None = None, event_type: str | None = None,
+        source: str | None = None, correlation_id: str | None = None,
+        since: str | None = None, until: str | None = None,
+    ):
+        try:
+            result = active_ledger_store.pull(
+                after_sequence=after_sequence, through_sequence=through_sequence, limit=limit,
+                event_id=event_id, event_type=event_type, source=source,
+                correlation_id=correlation_id, since=since, until=until,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {"ok": True, **result}
+
+    @app.get("/api/v1/ledger/entries/{event_id}", tags=["ledger"])
+    async def ledger_get(event_id: str):
+        try:
+            result = active_ledger_store.get(event_id)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if result is None:
+            raise HTTPException(status_code=404, detail="ledger event not found")
+        return {"ok": True, "entry": result}
+
+    @app.get("/api/v1/ledger/status", tags=["ledger"])
+    async def ledger_status():
+        try:
+            return {"ok": True, **active_ledger_store.status()}
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/v1/ledger/verify", tags=["ledger"])
+    async def ledger_verify(payload: dict[str, Any]):
+        try:
+            result = active_ledger_store.verify(
+                from_sequence=payload.get("from_sequence", 1),
+                through_sequence=payload.get("through_sequence"),
+                checkpoint=payload.get("checkpoint"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {"ok": True, **result}
+
+    @app.post("/api/v1/ledger/import", tags=["ledger"])
+    async def ledger_import(payload: dict[str, Any]):
+        try:
+            result = active_ledger_store.import_batch(
+                payload.get("source_ledger_id"), payload.get("entries")
+            )
+        except LedgerImportError as exc:
+            raise HTTPException(status_code=503, detail={
+                "message": str(exc), "committed_prefix": exc.committed_prefix,
+                "retry_after_source_sequence": exc.retry_after_source_sequence,
+            }) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409 if "conflict" in str(exc) or "different content" in str(exc) else 400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, **result}
 
     @app.get("/api/v1/graph/health", tags=["graph"])
     async def graph_health():
