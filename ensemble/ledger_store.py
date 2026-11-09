@@ -150,7 +150,7 @@ class JsonlAppendOnlyLedger:
         with self.path.open("rb") as handle:
             sequence = 0
             for line_number, raw in enumerate(handle, 1):
-                if raw and not raw.endswith(b"\\n"):
+                if raw and not raw.endswith(b"\n"):
                     raise RuntimeError(f"session ledger unterminated final record at line {line_number}")
                 if not raw.strip():
                     continue
