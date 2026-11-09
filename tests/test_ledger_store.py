@@ -196,7 +196,7 @@ def test_import_io_failure_reports_committed_prefix_and_retry_is_safe(tmp_path, 
     source = JsonlAppendOnlyLedger(tmp_path / "source.jsonl")
     destination = JsonlAppendOnlyLedger(tmp_path / "destination.jsonl")
     batch = [source.append(event("io-1"))["entry"], source.append(event("io-2"))["entry"]]
-    import append_only_ledger
+    import ensemble.ledger_store as append_only_ledger
     real_fsync = append_only_ledger.os.fsync
     calls = 0
     def fail_second_fsync(fd):
