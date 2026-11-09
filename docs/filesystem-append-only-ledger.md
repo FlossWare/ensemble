@@ -15,7 +15,7 @@ The POC JSONL ledger is the behavioral and storage reference. Ensemble must impl
 Use a dedicated ledger directory beneath the configured Ensemble persistence root:
 
 - `<persistence-root>/ledger/events.jsonl`: authoritative append-only records.
-- `<persistence-root>/ledger/ledger-meta.json`: stable ledger identity and format metadata; not an event store.
+- `<persistence-root>/ledger/events.jsonl.ledger-meta.json`: stable ledger identity and format metadata; not an event store.
 - `<persistence-root>/ledger/events.jsonl.lock`: cross-process coordination lock.
 - Optional derived indexes/checkpoints may be added for performance, but must be rebuildable from the authoritative log and must never determine event truth.
 
