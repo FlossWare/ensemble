@@ -110,7 +110,7 @@ def validate_event(value: dict[str, Any]) -> dict[str, Any]:
 
 
 class JsonlAppendOnlyLedger:
-    """Non-destructive sequence ledger layered on the existing POC session-events JSONL."""
+    """Filesystem-backed, non-destructive append-only sequence ledger."""
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.meta_path = self.path.with_suffix(self.path.suffix + ".ledger-meta.json")
@@ -150,6 +150,8 @@ class JsonlAppendOnlyLedger:
         with self.path.open("rb") as handle:
             sequence = 0
             for line_number, raw in enumerate(handle, 1):
+                if raw and not raw.endswith(b"\\n"):
+                    raise RuntimeError(f"session ledger unterminated final record at line {line_number}")
                 if not raw.strip():
                     continue
                 sequence += 1
