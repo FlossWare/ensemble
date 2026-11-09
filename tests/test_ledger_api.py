@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from ensemble.api import create_app
+from ensemble.store import InMemoryDocumentStore
 from ensemble.ledger_store import JsonlAppendOnlyLedger
 
 
@@ -17,7 +18,7 @@ def event(event_id, payload=None):
 
 def test_ledger_rest_append_pull_lookup_verify_and_import(tmp_path):
     ledger = JsonlAppendOnlyLedger(tmp_path / "ledger" / "events.jsonl")
-    app = create_app(database_url="sqlite+aiosqlite:///:memory:", ledger_store=ledger)
+    app = create_app(store=InMemoryDocumentStore(), ledger_store=ledger)
     with TestClient(app) as client:
         first = client.post("/api/v1/ledger/entries", json={"entry": event("one")})
         assert first.status_code == 200
