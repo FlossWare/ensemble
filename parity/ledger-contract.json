@@ -1,0 +1,70 @@
+{
+  "contract_version": 1,
+  "canonicalization": "UTF-8 JSON; object keys sorted; compact separators; NaN and Infinity forbidden",
+  "events": [
+    {
+      "event_id": "contract-001",
+      "event_type": "session.started",
+      "source": "claude-code",
+      "timestamp": "2026-11-07T12:00:00Z",
+      "correlation_id": "contract-run-1",
+      "payload": {
+        "session_id": "s-1",
+        "cwd": "/workspace/a"
+      }
+    },
+    {
+      "event_id": "contract-002",
+      "event_type": "prompt.submitted",
+      "source": "claude-code",
+      "timestamp": "2026-11-07T12:00:01Z",
+      "correlation_id": "contract-run-1",
+      "payload": {
+        "prompt_id": "p-1",
+        "text": "first"
+      }
+    },
+    {
+      "event_id": "contract-003",
+      "event_type": "tool.completed",
+      "source": "claude-code",
+      "timestamp": "2026-11-07T12:00:02Z",
+      "correlation_id": "contract-run-1",
+      "payload": {
+        "tool": "Read",
+        "exit_code": 0
+      }
+    },
+    {
+      "event_id": "contract-004",
+      "event_type": "session.ended",
+      "source": "claude-code",
+      "timestamp": "2026-11-07T12:00:03Z",
+      "correlation_id": "contract-run-1",
+      "payload": {
+        "session_id": "s-1",
+        "status": "success"
+      }
+    }
+  ],
+  "expectations": {
+    "sequences": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "event_ids": [
+      "contract-001",
+      "contract-002",
+      "contract-003",
+      "contract-004"
+    ],
+    "filter_event_type": "tool.completed",
+    "filtered_event_ids": [
+      "contract-003"
+    ],
+    "max_page_size": 2,
+    "filter_scan_limit": 4
+  }
+}
